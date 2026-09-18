@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+}
+
+@media print {
+  #root, body, html {
+    height: auto !important;
+    background: #fff !important;
+  }
+}
