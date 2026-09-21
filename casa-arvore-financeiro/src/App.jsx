@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar
+  Calendar, Bell, LogOut, Sparkles
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -95,6 +95,20 @@ const daysUntil = (iso) => {
 
 const monthIndex = (iso) => (iso ? parseInt(iso.slice(5, 7), 10) - 1 : -1);
 const yearOf = (iso) => (iso ? parseInt(iso.slice(0, 4), 10) : null);
+
+const timeAgo = (iso) => {
+  if (!iso) return "";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(diffMs / 60000);
+  if (min < 1) return "agora";
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `há ${h}h`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `há ${d}d`;
+  const mo = Math.floor(d / 30);
+  return `há ${mo} ${mo > 1 ? "meses" : "mês"}`;
+};
 
 /* ---------------------------------------------------------------------- */
 /*  Persistence                                                           */
@@ -253,6 +267,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
+  const [navQuery, setNavQuery] = useState("");
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -443,6 +459,29 @@ function FinanceiroApp({ userEmail, onLogout }) {
     [receivablesF]
   );
 
+  const ACTIVITY_META = {
+    payable: { icon: ArrowUpCircle, bg: COLORS.redSoft, fg: COLORS.red, label: "Conta a pagar" },
+    receivable: { icon: ArrowDownCircle, bg: COLORS.greenSoft, fg: COLORS.green, label: "Conta a receber" },
+    bank: { icon: Wallet, bg: COLORS.goldSoft, fg: COLORS.gold, label: "Lançamento bancário" },
+    transfer: { icon: ArrowLeftRight, bg: "#EEEDE7", fg: COLORS.inkSoft, label: "Transferência" },
+  };
+
+  const empresaNome = useCallback(
+    (id) => empresas.find((e) => e.id === id)?.nome || "",
+    [empresas]
+  );
+
+  const recentActivity = useMemo(() => {
+    const items = [
+      ...payablesF.map((p) => ({ id: `p-${p.id}`, tipo: "payable", label: p.descricao || "Conta a pagar", sub: empresaNome(p.empresaId), valor: p.valor, data: p.created_at })),
+      ...receivablesF.map((r) => ({ id: `r-${r.id}`, tipo: "receivable", label: r.descricao || "Conta a receber", sub: empresaNome(r.empresaId), valor: r.valor, data: r.created_at })),
+      ...bankEntriesF.map((b) => ({ id: `b-${b.id}`, tipo: "bank", label: b.descricao || "Lançamento bancário", sub: empresaNome(b.empresaId), valor: b.valor, data: b.created_at })),
+      ...transfersF.map((t) => ({ id: `t-${t.id}`, tipo: "transfer", label: t.descricao || "Transferência", sub: empresaNome(t.empresaId), valor: t.valor, data: t.created_at })),
+    ].filter((i) => i.data);
+    items.sort((a, b) => (b.data || "").localeCompare(a.data || ""));
+    return items.slice(0, 8);
+  }, [payablesF, receivablesF, bankEntriesF, transfersF, empresaNome]);
+
   if (!ready) {
     return (
       <div className="w-full h-full flex items-center justify-center" style={{ background: COLORS.bg, minHeight: 480 }}>
@@ -466,29 +505,81 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "reconciliation", label: "Conciliação Bancária", icon: CheckCircle2 },
     { id: "reports", label: "Relatórios", icon: FileText },
   ];
+  const navById = Object.fromEntries(nav.map((n) => [n.id, n]));
+
+  const RAIL_SECTIONS = [
+    { id: "visao", label: "Visão Geral", icon: LayoutDashboard, items: ["gestor", "dashboard", "resumo"] },
+    { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas", "accounts"] },
+    { id: "lancamentos", label: "Lançamentos", icon: Wallet, items: ["payables", "receivables", "bank", "transfers"] },
+    { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
+    { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "reports"] },
+  ].map((s) => ({ ...s, items: s.items.map((id) => navById[id]).filter(Boolean) }));
+
+  const activeSection = RAIL_SECTIONS.find((s) => s.items.some((n) => n.id === view)) || RAIL_SECTIONS[0];
+  const searching = navQuery.trim().length > 0;
+  const panelItems = searching
+    ? nav.filter((n) => n.label.toLowerCase().includes(navQuery.trim().toLowerCase()))
+    : activeSection.items;
+
+  const initials = (userEmail || "?").slice(0, 2).toUpperCase();
+  const dueSoonCount = [...upcomingPayables, ...upcomingReceivables].filter((i) => daysUntil(i.vencimento) <= 3).length;
 
   return (
     <div className="w-full flex" style={{ background: COLORS.bg, minHeight: 640, fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
-      {/* Sidebar */}
-      <aside className="w-56 shrink-0 flex flex-col py-5 px-3 gap-1 print:hidden" style={{ background: COLORS.primary }}>
-        <div className="px-2 pb-4">
-          <p className="text-white font-semibold text-[15px] leading-tight">Grupo Casa da Árvore</p>
-          <p className="text-[13px]" style={{ color: "#B9CBC3" }}>Financeiro</p>
+      {/* Trilha de ícones */}
+      <aside className="w-16 shrink-0 flex flex-col items-center py-5 gap-1 print:hidden" style={{ background: COLORS.panel, borderRight: `1px solid ${COLORS.border}` }}>
+        <div
+          className="w-9 h-9 rounded-xl flex items-center justify-center mb-4 shrink-0"
+          style={{ background: COLORS.primary }}
+          title="Casa da Árvore"
+        >
+          <Sparkles size={17} color="#fff" />
+        </div>
+        {RAIL_SECTIONS.map((s) => {
+          const Icon = s.icon;
+          const first = s.items[0];
+          const active = !searching && activeSection.id === s.id;
+          if (!first) return null;
+          return (
+            <button
+              key={s.id}
+              onClick={() => { setNavQuery(""); setView(first.id); }}
+              title={s.label}
+              className="w-10 h-10 rounded-xl flex items-center justify-center transition-colors"
+              style={{ background: active ? COLORS.greenSoft : "transparent", color: active ? COLORS.primary : COLORS.inkSoft }}
+            >
+              <Icon size={18} />
+            </button>
+          );
+        })}
+      </aside>
+
+      {/* Painel de navegação */}
+      <aside className="w-60 shrink-0 flex flex-col py-5 px-3 gap-1 print:hidden" style={{ background: COLORS.panel, borderRight: `1px solid ${COLORS.border}` }}>
+        <div className="px-2 pb-3">
+          <p className="font-semibold text-[15px] leading-tight" style={{ color: COLORS.ink }}>Grupo Casa da Árvore</p>
+          <p className="text-[13px]" style={{ color: COLORS.inkSoft }}>Financeiro</p>
         </div>
         <div className="px-2 pb-3">
           <select
             value={selectedEmpresa}
             onChange={(e) => changeEmpresa(e.target.value)}
             className="w-full text-sm rounded-lg px-2.5 py-2 outline-none"
-            style={{ background: "rgba(255,255,255,0.1)", color: "#fff", border: "1px solid rgba(255,255,255,0.18)" }}
+            style={{ background: COLORS.bg, color: COLORS.ink, border: `1px solid ${COLORS.border}` }}
           >
-            <option value="all" style={{ color: "#000" }}>Todas as empresas</option>
+            <option value="all">Todas as empresas</option>
             {empresas.map((e) => (
-              <option key={e.id} value={e.id} style={{ color: "#000" }}>{e.nome}</option>
+              <option key={e.id} value={e.id}>{e.nome}</option>
             ))}
           </select>
         </div>
-        {nav.map((n) => {
+        <p className="px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>
+          {searching ? "Resultados" : activeSection.label}
+        </p>
+        {panelItems.length === 0 && (
+          <p className="px-2.5 text-sm" style={{ color: COLORS.inkSoft }}>Nada encontrado.</p>
+        )}
+        {panelItems.map((n) => {
           const Icon = n.icon;
           const active = view === n.id;
           return (
@@ -497,8 +588,9 @@ function FinanceiroApp({ userEmail, onLogout }) {
               onClick={() => setView(n.id)}
               className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left transition-colors"
               style={{
-                background: active ? "rgba(255,255,255,0.12)" : "transparent",
-                color: active ? "#fff" : "#C4D3CC",
+                background: active ? COLORS.greenSoft : "transparent",
+                color: active ? COLORS.primary : COLORS.inkSoft,
+                fontWeight: active ? 600 : 500,
               }}
             >
               <Icon size={16} />
@@ -506,27 +598,83 @@ function FinanceiroApp({ userEmail, onLogout }) {
             </button>
           );
         })}
-        <div className="mt-auto px-2 pt-4 space-y-2">
-          <p className="text-[11px] truncate" style={{ color: "#82988E" }}>{userEmail}</p>
-          <button
-            onClick={onLogout}
-            className="text-[11px] font-medium underline"
-            style={{ color: "#C4D3CC" }}
-          >
-            Sair
-          </button>
-        </div>
       </aside>
 
-      {/* Main */}
-      <main className="flex-1 min-w-0 p-6 space-y-5">
-        {saveError && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
-            <AlertTriangle size={15} /> {saveError}
+      {/* Coluna principal: topo + conteúdo + atividade recente */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        <header
+          className="flex items-center gap-4 px-6 py-3 shrink-0 print:hidden"
+          style={{ background: COLORS.panel, borderBottom: `1px solid ${COLORS.border}` }}
+        >
+          <div className="relative flex-1 max-w-sm">
+            <Search size={15} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: COLORS.inkSoft }} />
+            <input
+              value={navQuery}
+              onChange={(e) => setNavQuery(e.target.value)}
+              placeholder="Buscar no menu…"
+              className="w-full text-sm rounded-lg pl-8 pr-3 py-2 outline-none"
+              style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}`, color: COLORS.ink }}
+            />
           </div>
-        )}
+          <div className="flex-1" />
+          <button
+            onClick={() => setView("resumo")}
+            className="relative w-9 h-9 rounded-lg flex items-center justify-center"
+            style={{ background: COLORS.bg }}
+            title="Próximos vencimentos"
+          >
+            <Bell size={16} color={COLORS.inkSoft} />
+            {dueSoonCount > 0 && (
+              <span
+                className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-semibold text-white"
+                style={{ background: COLORS.red }}
+              >
+                {dueSoonCount > 9 ? "9+" : dueSoonCount}
+              </span>
+            )}
+          </button>
+          <div className="relative">
+            <button onClick={() => setUserMenuOpen((v) => !v)} className="flex items-center gap-2">
+              <span
+                className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold text-white shrink-0"
+                style={{ background: COLORS.primary }}
+              >
+                {initials}
+              </span>
+              <ChevronDown size={14} color={COLORS.inkSoft} />
+            </button>
+            {userMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setUserMenuOpen(false)} />
+                <div
+                  className="absolute right-0 top-11 z-20 w-56 rounded-xl overflow-hidden"
+                  style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, boxShadow: "0 8px 24px rgba(20,24,22,0.12)" }}
+                >
+                  <p className="px-3.5 py-3 text-[13px] truncate" style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                    {userEmail}
+                  </p>
+                  <button
+                    onClick={onLogout}
+                    className="w-full flex items-center gap-2 px-3.5 py-2.5 text-sm text-left"
+                    style={{ color: COLORS.red }}
+                  >
+                    <LogOut size={15} /> Sair
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </header>
 
-        {empresas.length === 0 && view !== "empresas" ? (
+        <div className="flex-1 min-w-0 flex">
+          <main className="flex-1 min-w-0 p-6 space-y-5">
+            {saveError && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+                <AlertTriangle size={15} /> {saveError}
+              </div>
+            )}
+
+            {empresas.length === 0 && view !== "empresas" ? (
           <Card className="p-8">
             <EmptyState
               icon={Building2}
@@ -686,7 +834,45 @@ function FinanceiroApp({ userEmail, onLogout }) {
             )}
           </>
         )}
-      </main>
+          </main>
+
+          {/* Atividade recente */}
+          <aside
+            className="w-72 shrink-0 p-5 space-y-4 print:hidden hidden xl:flex xl:flex-col overflow-y-auto"
+            style={{ background: COLORS.panel, borderLeft: `1px solid ${COLORS.border}` }}
+          >
+            <div>
+              <p className="font-semibold text-sm" style={{ color: COLORS.ink }}>Atividade recente</p>
+              <p className="text-xs" style={{ color: COLORS.inkSoft }}>Últimos lançamentos registrados</p>
+            </div>
+            {recentActivity.length === 0 ? (
+              <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma atividade ainda.</p>
+            ) : (
+              <div className="space-y-3">
+                {recentActivity.map((item) => {
+                  const meta = ACTIVITY_META[item.tipo];
+                  const Icon = meta.icon;
+                  return (
+                    <div key={item.id} className="flex items-start gap-2.5">
+                      <span
+                        className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+                        style={{ background: meta.bg, color: meta.fg }}
+                      >
+                        <Icon size={14} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium truncate" style={{ color: COLORS.ink }}>{item.label}</p>
+                        <p className="text-xs truncate" style={{ color: COLORS.inkSoft }}>{item.sub || meta.label} · {fmtBRL(item.valor)}</p>
+                        <p className="text-[11px]" style={{ color: COLORS.inkSoft }}>{timeAgo(item.data)}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </aside>
+        </div>
+      </div>
     </div>
   );
 }
