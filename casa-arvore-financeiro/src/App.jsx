@@ -1521,6 +1521,47 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
   const [status, setStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [aiNote, setAiNote] = useState("");
+
+  const handleImportDocument = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setImportError("");
+    setImporting(true);
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("Erro lendo o arquivo."));
+        reader.readAsDataURL(file);
+      });
+      const fileBase64 = dataUrl.split(",")[1] || "";
+      const { data, error } = await supabase.functions.invoke("extract-document", {
+        body: { fileBase64, mediaType: file.type },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error || "Não consegui ler o documento.");
+      const ex = data.extracted || {};
+      const categoriaMatch = categories.find((c) => c.nome === ex.categoria_sugerida)?.nome;
+      setAiNote("Dados extraídos automaticamente do documento — confira antes de salvar.");
+      setModal({
+        empresaId: selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id,
+        fornecedor: ex.fornecedor || "",
+        valor: ex.valor != null ? String(ex.valor) : "",
+        vencimento: ex.vencimento || todayISO(),
+        dataLanc: todayISO(),
+        descricao: ex.descricao || "",
+        ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
+      });
+    } catch (err) {
+      setImportError(err?.message || "Erro ao importar o documento.");
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const withDerived = payables
     .filter((p) => selectedEmpresa === "all" || p.empresaId === selectedEmpresa)
@@ -1567,13 +1608,25 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
   return (
     <div className="space-y-4">
       <Header title="Contas a Pagar" subtitle={`${filtered.length} lançamento(s) · ${fmtBRL(total)}`}>
+        <label
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
+          style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
+        >
+          <Upload size={15} /> {importing ? "Lendo documento…" : "Importar documento"}
+          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing} />
+        </label>
         <Button variant="ghost" onClick={() => setScheduleModal(true)}>
           <CalendarClock size={15} /> Agendar pagamentos
         </Button>
-        <Button onClick={() => setModal({ empresaId: selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id })}>
+        <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id }); }}>
           <Plus size={15} /> Novo lançamento
         </Button>
       </Header>
+      {importError && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+          <AlertTriangle size={15} /> {importError}
+        </div>
+      )}
       <StatusSummary items={withDerived} statuses={[
         { key: "A Pagar", label: "A pagar", tone: "neutral" },
         { key: "Próximo", label: "Próximo (10 dias)", tone: "amber" },
@@ -1621,7 +1674,7 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
                       {p.status !== "Pago" && (
                         <Button variant="subtle" onClick={() => setPayModal(p)}><Check size={13} /> Dar baixa</Button>
                       )}
-                      <button onClick={() => setModal(p)} className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                      <button onClick={() => { setAiNote(""); setModal(p); }} className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
                       <button onClick={() => remove(p.id)} className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
                     </div>
                   </td>
@@ -1633,7 +1686,7 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
       </Card>
 
       {modal && (
-        <PayableModal initial={modal} categories={categories} empresas={empresas} onClose={() => setModal(null)} onSubmit={submit} />
+        <PayableModal initial={modal} categories={categories} empresas={empresas} aiNote={aiNote} onClose={() => { setModal(null); setAiNote(""); }} onSubmit={submit} />
       )}
       {payModal && (
         <SettleModal
@@ -1728,7 +1781,7 @@ function StatusBadge({ status }) {
   return <Badge tone="neutral">{status}</Badge>;
 }
 
-function PayableModal({ initial, categories, empresas, onClose, onSubmit }) {
+function PayableModal({ initial, categories, empresas, aiNote, onClose, onSubmit }) {
   const [form, setForm] = useState({
     dataLanc: todayISO(), vencimento: todayISO(), fornecedor: "", categoria: categories[0]?.nome || "",
     descricao: "", valor: "", formaPgto: "PIX", status: "A Pagar", empresaId: empresas[0]?.id || "", ...initial,
@@ -1736,6 +1789,11 @@ function PayableModal({ initial, categories, empresas, onClose, onSubmit }) {
   const valid = form.fornecedor.trim() && Number(form.valor) > 0 && form.empresaId;
   return (
     <Modal title={initial.id ? "Editar conta a pagar" : "Nova conta a pagar"} onClose={onClose} wide>
+      {aiNote && (
+        <p className="text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: COLORS.greenSoft, color: COLORS.green }}>
+          {aiNote}
+        </p>
+      )}
       <div className="grid md:grid-cols-2 gap-3">
         {empresas.length > 1 && (
           <Field label="Empresa">
