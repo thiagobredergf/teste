@@ -1,7 +1,8 @@
-# Casa da Árvore · Financeiro
+# ESEK
 
 Sistema de gestão financeira multiempresa (modelo BPO), com login e dados
-compartilhados em tempo real via Supabase.
+compartilhados em tempo real via Supabase. Cada cliente do BPO é cadastrado
+como uma empresa dentro do sistema.
 
 ## Como rodar localmente
 

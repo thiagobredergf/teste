@@ -531,7 +531,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
         <div
           className="w-9 h-9 rounded-xl flex items-center justify-center mb-4 shrink-0"
           style={{ background: COLORS.primary }}
-          title="Casa da Árvore"
+          title="ESEK"
         >
           <Sparkles size={17} color="#fff" />
         </div>
@@ -557,8 +557,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
       {/* Painel de navegação */}
       <aside className="w-60 shrink-0 flex flex-col py-5 px-3 gap-1 print:hidden" style={{ background: COLORS.panel, borderRight: `1px solid ${COLORS.border}` }}>
         <div className="px-2 pb-3">
-          <p className="font-semibold text-[15px] leading-tight" style={{ color: COLORS.ink }}>Grupo Casa da Árvore</p>
-          <p className="text-[13px]" style={{ color: COLORS.inkSoft }}>Financeiro</p>
+          <p className="font-semibold text-[15px] leading-tight" style={{ color: COLORS.ink }}>ESEK</p>
+          <p className="text-[13px]" style={{ color: COLORS.inkSoft }}>Gestão Financeira</p>
         </div>
         <div className="px-2 pb-3">
           <select
@@ -2569,7 +2569,7 @@ function ReportsView(props) {
         <div className="mb-3 hidden print:flex items-center gap-3">
           {empresaLogo && <img src={empresaLogo} alt="" className="w-10 h-10 rounded object-contain" />}
           <div>
-            <h2 className="text-lg font-semibold" style={{ color: COLORS.ink }}>{selectedEmpresa === "all" ? "Grupo Casa da Árvore" : empresaLabel} · {activeReport.label}</h2>
+            <h2 className="text-lg font-semibold" style={{ color: COLORS.ink }}>{selectedEmpresa === "all" ? "Todas as empresas" : empresaLabel} · {activeReport.label}</h2>
             <p className="text-xs" style={{ color: COLORS.inkSoft }}>{empresaLabel} · Ano {year} · Emitido em {printDate}</p>
           </div>
         </div>
@@ -2589,7 +2589,7 @@ function ReportsView(props) {
               <div className="mb-3 flex items-center gap-3">
                 {empresaLogo && <img src={empresaLogo} alt="" className="w-10 h-10 rounded object-contain" />}
                 <div>
-                  <h2 className="text-lg font-semibold" style={{ color: COLORS.ink }}>{selectedEmpresa === "all" ? "Grupo Casa da Árvore" : empresaLabel} · {label}</h2>
+                  <h2 className="text-lg font-semibold" style={{ color: COLORS.ink }}>{selectedEmpresa === "all" ? "Todas as empresas" : empresaLabel} · {label}</h2>
                   <p className="text-xs" style={{ color: COLORS.inkSoft }}>{empresaLabel} · Ano {year} · Emitido em {printDate}</p>
                 </div>
               </div>
@@ -3702,11 +3702,11 @@ function Login() {
   return (
     <div className="w-full min-h-screen flex items-center justify-center p-4" style={{ background: COLORS.bg, fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
       <Card className="w-full max-w-sm p-6">
-        <p className="font-semibold text-base mb-0.5" style={{ color: COLORS.ink }}>Grupo Casa da Árvore</p>
-        <p className="text-sm mb-5" style={{ color: COLORS.inkSoft }}>Entrar no Financeiro</p>
+        <p className="font-semibold text-base mb-0.5" style={{ color: COLORS.ink }}>ESEK</p>
+        <p className="text-sm mb-5" style={{ color: COLORS.inkSoft }}>Entrar no ESEK</p>
         <form onSubmit={submit} className="grid gap-3">
           <Field label="E-mail">
-            <TextInput type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="voce@casadaarvorefestas.com.br" />
+            <TextInput type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="voce@suaempresa.com.br" />
           </Field>
           <Field label="Senha">
             <TextInput type="password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
