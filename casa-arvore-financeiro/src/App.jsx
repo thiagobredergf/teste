@@ -808,6 +808,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 receivables={receivables}
                 bankEntries={bankEntries}
                 transfers={transfers}
+                categories={allCategoryNames}
                 onSavePayables={(v) => persist("payables", v, setPayables)}
                 onSaveReceivables={(v) => persist("receivables", v, setReceivables)}
                 onSaveBankEntries={(v) => persist("bankEntries", v, setBankEntries)}
@@ -2119,7 +2120,7 @@ function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categor
   );
 }
 
-function BankEntryModal({ initial, accounts, categories, onClose, onSubmit }) {
+function BankEntryModal({ initial, accounts, categories, suggestion, onClose, onSubmit }) {
   const [form, setForm] = useState({
     data: todayISO(), contaId: accounts[0]?.id || "", tipo: "Saída", categoria: categories[0] || "",
     descricao: "", valor: "", ...initial,
@@ -2149,6 +2150,11 @@ function BankEntryModal({ initial, accounts, categories, onClose, onSubmit }) {
             {categories.map((c) => <option key={c} value={c}>{c}</option>)}
           </Select>
         </Field>
+        {suggestion && form.categoria === suggestion.categoria && (
+          <p className="text-xs -mt-2" style={{ color: COLORS.green }}>
+            Categoria sugerida automaticamente, com base em lançamento parecido: “{suggestion.exemplo}”. Confira antes de salvar.
+          </p>
+        )}
         <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} /></Field>
         <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} /></Field>
         <div className="flex justify-end gap-2 pt-2">
@@ -3144,6 +3150,50 @@ function buildAccountMovements(contaId, payables, receivables, bankEntries, tran
   return movs;
 }
 
+// Sugestão automática de categoria: compara a descrição do extrato com a de
+// lançamentos bancários já categorizados (mesma empresa) e sugere a
+// categoria do mais parecido, por sobreposição de palavras — sem chamada
+// externa, sem regra manual pra cadastrar. Só sugere, nunca decide sozinho:
+// o operador sempre confirma no modal antes de salvar.
+const STOPWORDS_DESCRICAO = new Set([
+  "de", "da", "do", "das", "dos", "para", "com", "sem", "ltda", "me", "eireli", "sa", "a", "o", "e", "em", "no", "na",
+]);
+
+function normalizeWords(text) {
+  return (text || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !STOPWORDS_DESCRICAO.has(w));
+}
+
+function suggestCategoria(descricao, empresaId, bankEntries) {
+  const words = new Set(normalizeWords(descricao));
+  if (words.size === 0) return null;
+  let best = null;
+  let bestScore = 0;
+  bankEntries
+    .filter((b) => b.categoria && b.categoria !== "A classificar" && (!empresaId || b.empresaId === empresaId))
+    .forEach((b) => {
+      const bWords = new Set(normalizeWords(b.descricao));
+      if (bWords.size === 0) return;
+      let overlap = 0;
+      words.forEach((w) => { if (bWords.has(w)) overlap += 1; });
+      const score = overlap / Math.max(words.size, bWords.size);
+      if (score > bestScore) {
+        bestScore = score;
+        best = b;
+      }
+    });
+  // limiar empírico: exige pelo menos ~1/3 das palavras em comum pra sugerir
+  // — abaixo disso o palpite vira ruído em vez de ajuda.
+  if (best && bestScore >= 0.34) {
+    return { categoria: best.categoria, exemplo: best.descricao };
+  }
+  return null;
+}
+
 function matchStatement(systemMovs, statementLines, toleranceDays = 3) {
   const usedSys = new Set();
   const usedStmt = new Set();
@@ -3173,8 +3223,9 @@ function matchStatement(systemMovs, statementLines, toleranceDays = 3) {
   return { matches, sysOnly, stmtOnly, alreadyOk };
 }
 
-function ReconciliationView({ accounts, payables, receivables, bankEntries, transfers, onSavePayables, onSaveReceivables, onSaveBankEntries, onSaveTransfers }) {
+function ReconciliationView({ accounts, payables, receivables, bankEntries, transfers, categories, onSavePayables, onSaveReceivables, onSaveBankEntries, onSaveTransfers }) {
   const [contaId, setContaId] = useState(accounts[0]?.id || "");
+  const [draftModal, setDraftModal] = useState(null); // { line, idx, suggestion }
   useEffect(() => {
     if (!accounts.find((a) => a.id === contaId)) setContaId(accounts[0]?.id || "");
   }, [accounts]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -3236,21 +3287,18 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
     setStatementLines((prev) => prev.filter((l) => l !== stmt));
   };
 
-  const addStatementLineAsBankEntry = (line, idx) => {
+  const openDraftModal = (line, idx) => {
     const acc = accounts.find((a) => a.id === contaId);
-    const novo = {
-      id: uid(),
-      data: line.data,
-      contaId,
-      tipo: line.tipo,
-      categoria: "A classificar",
-      descricao: line.descricao || "Importado do extrato",
-      valor: line.valor,
-      empresaId: acc?.empresaId,
-      conciliado: true,
-    };
+    const suggestion = suggestCategoria(line.descricao, acc?.empresaId, bankEntries);
+    setDraftModal({ line, idx, suggestion });
+  };
+
+  const submitDraft = (form) => {
+    const acc = accounts.find((a) => a.id === contaId);
+    const novo = { ...form, id: uid(), empresaId: acc?.empresaId, conciliado: true };
     onSaveBankEntries([...bankEntries, novo]);
-    setStatementLines((prev) => prev.filter((_, i) => i !== idx));
+    setStatementLines((prev) => prev.filter((_, i) => i !== draftModal.idx));
+    setDraftModal(null);
   };
 
   if (accounts.length === 0) {
@@ -3398,15 +3446,24 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
                 <tbody>
                   {statementLines.map((line, idx) => {
                     if (!result.stmtOnly.includes(line)) return null;
+                    const acc = accounts.find((a) => a.id === contaId);
+                    const suggestion = suggestCategoria(line.descricao, acc?.empresaId, bankEntries);
                     return (
                       <tr key={idx} style={{ borderTop: `1px solid ${COLORS.border}` }}>
                         <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{fmtDate(line.data)}</td>
-                        <td className="px-2 py-1.5" style={{ color: COLORS.inkSoft }}>{line.descricao}</td>
+                        <td className="px-2 py-1.5" style={{ color: COLORS.inkSoft }}>
+                          {line.descricao}
+                          {suggestion && (
+                            <span className="block text-[11px] mt-0.5" style={{ color: COLORS.green }}>
+                              Sugestão: {suggestion.categoria}
+                            </span>
+                          )}
+                        </td>
                         <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: line.tipo === "Entrada" ? COLORS.green : COLORS.red }}>
                           {line.tipo === "Entrada" ? "+" : "−"}{fmtBRL(line.valor)}
                         </td>
                         <td className="px-2 py-1.5 text-right">
-                          <button onClick={() => addStatementLineAsBankEntry(line, idx)} className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
+                          <button onClick={() => openDraftModal(line, idx)} className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
                             <Plus size={12} /> Lançar e conciliar
                           </button>
                         </td>
@@ -3418,6 +3475,24 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
             )}
           </ReportCard>
         </>
+      )}
+
+      {draftModal && (
+        <BankEntryModal
+          initial={{
+            data: draftModal.line.data,
+            contaId,
+            tipo: draftModal.line.tipo,
+            categoria: draftModal.suggestion?.categoria || categories[0] || "A classificar",
+            descricao: draftModal.line.descricao || "Importado do extrato",
+            valor: draftModal.line.valor,
+          }}
+          accounts={accounts}
+          categories={categories}
+          suggestion={draftModal.suggestion}
+          onClose={() => setDraftModal(null)}
+          onSubmit={submitDraft}
+        />
       )}
     </div>
   );
