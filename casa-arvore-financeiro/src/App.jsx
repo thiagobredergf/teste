@@ -1542,7 +1542,22 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
       const { data, error } = await supabase.functions.invoke("extract-document", {
         body: { fileBase64, mediaType: file.type },
       });
-      if (error) throw error;
+      if (error) {
+        // O supabase-js só põe uma mensagem genérica em error.message pra
+        // respostas de erro — o motivo de verdade que a função devolveu
+        // (ex: "ANTHROPIC_API_KEY não configurada") fica no corpo da
+        // resposta, acessível via error.context (um Response cru).
+        let detail = error.message;
+        if (error.context && typeof error.context.json === "function") {
+          try {
+            const body = await error.context.clone().json();
+            if (body?.error) detail = body.error;
+          } catch {
+            // corpo não era JSON — mantém a mensagem genérica
+          }
+        }
+        throw new Error(detail);
+      }
       if (!data?.ok) throw new Error(data?.error || "Não consegui ler o documento.");
       const ex = data.extracted || {};
       const categoriaMatch = categories.find((c) => c.nome === ex.categoria_sugerida)?.nome;

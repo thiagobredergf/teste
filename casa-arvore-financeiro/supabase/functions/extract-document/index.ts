@@ -118,7 +118,15 @@ Deno.serve(async (req) => {
       ],
     });
   } catch (err) {
-    const message = err instanceof Anthropic.APIError ? err.message : "Falha ao chamar a IA.";
+    // Loga o erro completo (aparece nos logs da função no Supabase) —
+    // a resposta pro navegador só leva uma versão resumida, mas isso
+    // aqui é o que a gente consulta pra diagnosticar de verdade.
+    console.error("Falha ao chamar a Anthropic API:", err instanceof Error ? err.stack ?? err.message : err);
+    const message = err instanceof Anthropic.APIError
+      ? `Erro da IA (${err.status}): ${err.message}`
+      : err instanceof Error
+        ? `Falha ao chamar a IA: ${err.message}`
+        : "Falha ao chamar a IA.";
     const status = err instanceof Anthropic.APIError ? err.status ?? 502 : 502;
     return new Response(JSON.stringify({ error: message }), {
       status,
@@ -126,7 +134,7 @@ Deno.serve(async (req) => {
     });
   }
 
-  const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
+  const textBlock = (response.content ?? []).find((b): b is Anthropic.TextBlock => b.type === "text");
   if (!textBlock) {
     return new Response(JSON.stringify({ error: "A IA não retornou texto." }), {
       status: 502,
