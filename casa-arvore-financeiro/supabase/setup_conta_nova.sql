@@ -23,6 +23,7 @@ create table if not exists public.empresas (
   cnpj text,
   "razaoSocial" text,
   endereco text,
+  ativa boolean not null default true,
   created_at timestamptz not null default now()
 );
 
@@ -54,6 +55,7 @@ create table if not exists public.payables (
   "valorPago" numeric,
   "contaPgtoId" text,
   conciliado boolean not null default false,
+  "deletedAt" timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -73,6 +75,7 @@ create table if not exists public.receivables (
   "contaRecebId" text,
   conciliado boolean not null default false,
   telefone text,
+  "deletedAt" timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -86,6 +89,7 @@ create table if not exists public."bankEntries" (
   descricao text,
   valor numeric,
   conciliado boolean not null default false,
+  "deletedAt" timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -98,6 +102,7 @@ create table if not exists public.transfers (
   valor numeric,
   descricao text,
   conciliado boolean not null default false,
+  "deletedAt" timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -118,6 +123,7 @@ create table if not exists public."fiscalObligations" (
   status text not null default 'Pendente',
   "dataPagamento" date,
   "contaId" text,
+  "deletedAt" timestamptz,
   created_at timestamptz not null default now()
 );
 

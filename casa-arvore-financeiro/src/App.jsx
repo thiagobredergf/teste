@@ -70,6 +70,7 @@ const EMPRESA_CORES = ["#1F3A34", "#B8912F", "#2F6E8C", "#8C4A2F", "#5B4B8C", "#
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const todayISO = () => new Date().toISOString().slice(0, 10);
+const confirmDelete = (msg) => window.confirm(msg);
 
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -316,9 +317,10 @@ function FinanceiroApp({ userEmail, onLogout }) {
   );
 
   const inScope = useCallback(
-    (item) => selectedEmpresa === "all" || item.empresaId === selectedEmpresa,
+    (item) => !item.deletedAt && (selectedEmpresa === "all" || item.empresaId === selectedEmpresa),
     [selectedEmpresa]
   );
+  const empresasAtivas = useMemo(() => empresas.filter((e) => e.ativa !== false), [empresas]);
   const accountsF = useMemo(() => accounts.filter(inScope), [accounts, inScope]);
   const payablesF = useMemo(() => payables.filter(inScope), [payables, inScope]);
   const receivablesF = useMemo(() => receivables.filter(inScope), [receivables, inScope]);
@@ -332,22 +334,22 @@ function FinanceiroApp({ userEmail, onLogout }) {
       const acc = accounts.find((a) => a.id === accId);
       if (!acc) return 0;
       const recIn = receivables
-        .filter((r) => r.status === "Recebido" && r.contaRecebId === accId)
+        .filter((r) => !r.deletedAt && r.status === "Recebido" && r.contaRecebId === accId)
         .reduce((s, r) => s + Number(r.valorRecebido || r.valor || 0), 0);
       const bankIn = bankEntries
-        .filter((b) => b.tipo === "Entrada" && b.contaId === accId)
+        .filter((b) => !b.deletedAt && b.tipo === "Entrada" && b.contaId === accId)
         .reduce((s, b) => s + Number(b.valor || 0), 0);
       const transfIn = transfers
-        .filter((t) => t.contaDestinoId === accId)
+        .filter((t) => !t.deletedAt && t.contaDestinoId === accId)
         .reduce((s, t) => s + Number(t.valor || 0), 0);
       const payOut = payables
-        .filter((p) => p.status === "Pago" && p.contaPgtoId === accId)
+        .filter((p) => !p.deletedAt && p.status === "Pago" && p.contaPgtoId === accId)
         .reduce((s, p) => s + Number(p.valorPago || p.valor || 0), 0);
       const bankOut = bankEntries
-        .filter((b) => b.tipo === "Saída" && b.contaId === accId)
+        .filter((b) => !b.deletedAt && b.tipo === "Saída" && b.contaId === accId)
         .reduce((s, b) => s + Number(b.valor || 0), 0);
       const transfOut = transfers
-        .filter((t) => t.contaOrigemId === accId)
+        .filter((t) => !t.deletedAt && t.contaOrigemId === accId)
         .reduce((s, t) => s + Number(t.valor || 0), 0);
       return (
         Number(acc.saldoInicial || 0) + recIn + bankIn + transfIn - payOut - bankOut - transfOut
@@ -390,11 +392,11 @@ function FinanceiroApp({ userEmail, onLogout }) {
   );
 
   const empresaBreakdown = useMemo(() => {
-    if (empresas.length === 0) return [];
-    return empresas.map((emp) => {
-      const recE = receivables.filter((r) => r.empresaId === emp.id);
-      const payE = payables.filter((p) => p.empresaId === emp.id);
-      const bankE = bankEntries.filter((b) => b.empresaId === emp.id);
+    if (empresasAtivas.length === 0) return [];
+    return empresasAtivas.map((emp) => {
+      const recE = receivables.filter((r) => !r.deletedAt && r.empresaId === emp.id);
+      const payE = payables.filter((p) => !p.deletedAt && p.empresaId === emp.id);
+      const bankE = bankEntries.filter((b) => !b.deletedAt && b.empresaId === emp.id);
       const accE = accounts.filter((a) => a.empresaId === emp.id);
       const flow = buildMonthlyFlow(recE, payE, bankE, year);
       const entradas = flow.entradas.reduce((a, b) => a + b, 0);
@@ -402,7 +404,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       const saldoContas = accE.reduce((s, a) => s + accountBalance(a.id), 0);
       return { empresa: emp, entradas, saidas, saldo: entradas - saidas, saldoContas };
     });
-  }, [empresas, receivables, payables, bankEntries, accounts, year, buildMonthlyFlow, accountBalance]);
+  }, [empresasAtivas, receivables, payables, bankEntries, accounts, year, buildMonthlyFlow, accountBalance]);
 
   const totals = useMemo(() => {
     const totalEntradas = monthlyFlow.entradas.reduce((a, b) => a + b, 0);
@@ -504,6 +506,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "categories", label: "Plano de Contas", icon: ListTree },
     { id: "reconciliation", label: "Conciliação Bancária", icon: CheckCircle2 },
     { id: "reports", label: "Relatórios", icon: FileText },
+    { id: "lixeira", label: "Lixeira", icon: Trash2 },
   ];
   const navById = Object.fromEntries(nav.map((n) => [n.id, n]));
 
@@ -512,7 +515,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas", "accounts"] },
     { id: "lancamentos", label: "Lançamentos", icon: Wallet, items: ["payables", "receivables", "bank", "transfers"] },
     { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
-    { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "reports"] },
+    { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "reports", "lixeira"] },
   ].map((s) => ({ ...s, items: s.items.map((id) => navById[id]).filter(Boolean) }));
 
   const activeSection = RAIL_SECTIONS.find((s) => s.items.some((n) => n.id === view)) || RAIL_SECTIONS[0];
@@ -568,7 +571,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
             style={{ background: COLORS.bg, color: COLORS.ink, border: `1px solid ${COLORS.border}` }}
           >
             <option value="all">Todas as empresas</option>
-            {empresas.map((e) => (
+            {empresasAtivas.map((e) => (
               <option key={e.id} value={e.id}>{e.nome}</option>
             ))}
           </select>
@@ -693,7 +696,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
           <>
             {view === "gestor" && (
               <GestorDashboard
-                empresas={empresas}
+                empresas={empresasAtivas}
                 empresaBreakdown={empresaBreakdown}
                 year={year}
                 onOpenEmpresa={(id) => { changeEmpresa(id); setView("resumo"); }}
@@ -831,6 +834,22 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 empresaBreakdown={empresaBreakdown}
                 accountBalance={accountBalance}
                 totals={totals}
+              />
+            )}
+
+            {view === "lixeira" && (
+              <LixeiraView
+                empresas={empresas}
+                payables={payables}
+                receivables={receivables}
+                bankEntries={bankEntries}
+                transfers={transfers}
+                fiscalObligations={fiscalObligations}
+                onRestorePayables={(v) => persist("payables", v, setPayables)}
+                onRestoreReceivables={(v) => persist("receivables", v, setReceivables)}
+                onRestoreBankEntries={(v) => persist("bankEntries", v, setBankEntries)}
+                onRestoreTransfers={(v) => persist("transfers", v, setTransfers)}
+                onRestoreFiscal={(v) => persist("fiscalObligations", v, setFiscalObligations)}
               />
             )}
           </>
@@ -1110,7 +1129,17 @@ function EmpresasView({ empresas, role, onSave }) {
     else onSave([...empresas, { ...form, id: uid() }]);
     setModal(null);
   };
-  const remove = (id) => onSave(empresas.filter((e) => e.id !== id));
+  // Empresa nunca é excluída pelo app — só inativada. Mantém o histórico
+  // (contas, lançamentos) intacto pra auditoria, e permite reativar se a
+  // empresa voltar a ser cliente no futuro.
+  const toggleAtiva = (e) => {
+    const ativa = e.ativa === false; // reativando se já estava inativa
+    const msg = ativa
+      ? `Reativar "${e.nome}"? Ela volta a aparecer no seletor de empresas.`
+      : `Inativar "${e.nome}"? Ela some do seletor do dia a dia, mas os dados continuam guardados e você pode reativar quando quiser.`;
+    if (!confirmDelete(msg)) return;
+    onSave(empresas.map((x) => (x.id === e.id ? { ...x, ativa } : x)));
+  };
 
   return (
     <div className="space-y-4">
@@ -1123,7 +1152,7 @@ function EmpresasView({ empresas, role, onSave }) {
       ) : (
         <div className="grid md:grid-cols-2 gap-3">
           {empresas.map((e) => (
-            <Card key={e.id} className="p-4">
+            <Card key={e.id} className="p-4" style={e.ativa === false ? { opacity: 0.6 } : {}}>
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-2.5">
                   {e.logoUrl ? (
@@ -1132,14 +1161,22 @@ function EmpresasView({ empresas, role, onSave }) {
                     <span className="w-3 h-3 rounded-full shrink-0" style={{ background: e.cor }} />
                   )}
                   <div>
-                    <p className="font-semibold text-sm" style={{ color: COLORS.ink }}>{e.nome}</p>
+                    <p className="font-semibold text-sm flex items-center gap-1.5" style={{ color: COLORS.ink }}>
+                      {e.nome} {e.ativa === false && <Badge tone="neutral">Inativa</Badge>}
+                    </p>
                     {e.cnpj && <p className="text-xs" style={{ color: COLORS.inkSoft }}>{e.cnpj}</p>}
                   </div>
                 </div>
                 <div className="flex gap-1">
                   <button onClick={() => setModal(e)} className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
                   {isGestor && (
-                    <button onClick={() => remove(e.id)} className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                    <button
+                      onClick={() => toggleAtiva(e)}
+                      title={e.ativa === false ? "Reativar empresa" : "Inativar empresa"}
+                      className="p-1.5 rounded-md hover:bg-black/5"
+                    >
+                      {e.ativa === false ? <Check size={14} color={COLORS.green} /> : <Trash2 size={14} color={COLORS.red} />}
+                    </button>
                   )}
                 </div>
               </div>
@@ -1356,7 +1393,10 @@ function AccountsView({ accounts, empresas, selectedEmpresa, accountBalance, onS
     setModal(null);
   };
 
-  const remove = (id) => onSave(accounts.filter((a) => a.id !== id));
+  const remove = (id) => {
+    if (!confirmDelete("Excluir esta conta? Isso não pode ser desfeito.")) return;
+    onSave(accounts.filter((a) => a.id !== id));
+  };
 
   return (
     <div className="space-y-4">
@@ -1602,7 +1642,7 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
   };
 
   const withDerived = payables
-    .filter((p) => selectedEmpresa === "all" || p.empresaId === selectedEmpresa)
+    .filter((p) => !p.deletedAt && (selectedEmpresa === "all" || p.empresaId === selectedEmpresa))
     .map((p) => {
       let statusDisplay = p.status;
       if (p.status !== "Pago" && p.vencimento < todayISO()) statusDisplay = "Atrasado";
@@ -1628,7 +1668,10 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
     setModal(null);
   };
 
-  const remove = (id) => onSave(payables.filter((p) => p.id !== id));
+  const remove = (id) => {
+    if (!confirmDelete("Mover esta conta a pagar pra lixeira? Você pode restaurar depois, em Lixeira.")) return;
+    onSave(payables.map((p) => (p.id === id ? { ...p, deletedAt: new Date().toISOString() } : p)));
+  };
 
   const confirmPayment = (id, dataPgto, valorPago, contaPgtoId) => {
     onSave(payables.map((p) => (p.id === id ? { ...p, status: "Pago", dataPgto, valorPago, contaPgtoId } : p)));
@@ -2094,7 +2137,7 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
   const [dateTo, setDateTo] = useState("");
 
   const withDerived = receivables
-    .filter((r) => selectedEmpresa === "all" || r.empresaId === selectedEmpresa)
+    .filter((r) => !r.deletedAt && (selectedEmpresa === "all" || r.empresaId === selectedEmpresa))
     .map((r) => {
       let statusDisplay = r.status;
       if (r.status !== "Recebido" && r.vencimento < todayISO()) statusDisplay = "Inadimplente";
@@ -2119,7 +2162,10 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
     }
     setModal(null);
   };
-  const remove = (id) => onSave(receivables.filter((r) => r.id !== id));
+  const remove = (id) => {
+    if (!confirmDelete("Mover esta conta a receber pra lixeira? Você pode restaurar depois, em Lixeira.")) return;
+    onSave(receivables.map((r) => (r.id === id ? { ...r, deletedAt: new Date().toISOString() } : r)));
+  };
   const confirmReceipt = (id, dataReceb, valorRecebido, contaRecebId) => {
     onSave(receivables.map((r) => (r.id === id ? { ...r, status: "Recebido", dataReceb, valorRecebido, contaRecebId } : r)));
     setRecModal(null);
@@ -2261,9 +2307,12 @@ function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categor
     else onSave([...entries, { ...form, id: uid() }]);
     setModal(null);
   };
-  const remove = (id) => onSave(entries.filter((e) => e.id !== id));
+  const remove = (id) => {
+    if (!confirmDelete("Mover este lançamento pra lixeira? Você pode restaurar depois, em Lixeira.")) return;
+    onSave(entries.map((e) => (e.id === id ? { ...e, deletedAt: new Date().toISOString() } : e)));
+  };
   const sorted = [...entries]
-    .filter((e) => selectedEmpresa === "all" || e.empresaId === selectedEmpresa)
+    .filter((e) => !e.deletedAt && (selectedEmpresa === "all" || e.empresaId === selectedEmpresa))
     .sort((a, b) => (b.data || "").localeCompare(a.data || ""));
 
   return (
@@ -2380,9 +2429,12 @@ function TransfersView({ transfers, accounts, empresas, selectedEmpresa, onSave 
     else onSave([...transfers, { ...form, id: uid() }]);
     setModal(null);
   };
-  const remove = (id) => onSave(transfers.filter((t) => t.id !== id));
+  const remove = (id) => {
+    if (!confirmDelete("Mover esta transferência pra lixeira? Você pode restaurar depois, em Lixeira.")) return;
+    onSave(transfers.map((t) => (t.id === id ? { ...t, deletedAt: new Date().toISOString() } : t)));
+  };
   const sorted = [...transfers]
-    .filter((t) => selectedEmpresa === "all" || t.empresaId === selectedEmpresa)
+    .filter((t) => !t.deletedAt && (selectedEmpresa === "all" || t.empresaId === selectedEmpresa))
     .sort((a, b) => (b.data || "").localeCompare(a.data || ""));
 
   return (
@@ -2493,7 +2545,7 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }
   const [status, setStatus] = useState("");
 
   const withDerived = obligations
-    .filter((o) => selectedEmpresa === "all" || o.empresaId === selectedEmpresa)
+    .filter((o) => !o.deletedAt && (selectedEmpresa === "all" || o.empresaId === selectedEmpresa))
     .map((o) => {
       let statusDisplay = o.status;
       if (o.status !== "Pago" && (o.vencimento || "") < todayISO()) statusDisplay = "Atrasado";
@@ -2512,7 +2564,10 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }
     else onSave([...obligations, { ...form, id: uid() }]);
     setModal(null);
   };
-  const remove = (id) => onSave(obligations.filter((o) => o.id !== id));
+  const remove = (id) => {
+    if (!confirmDelete("Mover esta obrigação fiscal pra lixeira? Você pode restaurar depois, em Lixeira.")) return;
+    onSave(obligations.map((o) => (o.id === id ? { ...o, deletedAt: new Date().toISOString() } : o)));
+  };
   const confirmPayment = (id, dataPagamento, valor, contaId) => {
     onSave(obligations.map((o) => (o.id === id ? { ...o, status: "Pago", dataPagamento, valor, contaId } : o)));
     setPayModal(null);
@@ -3335,19 +3390,19 @@ function parseStatementFile(filename, text) {
 
 function buildAccountMovements(contaId, payables, receivables, bankEntries, transfers) {
   const movs = [];
-  bankEntries.filter((b) => b.contaId === contaId).forEach((b) => {
+  bankEntries.filter((b) => !b.deletedAt && b.contaId === contaId).forEach((b) => {
     movs.push({ key: `bank-${b.id}`, source: "bank", id: b.id, data: b.data, tipo: b.tipo, valor: Number(b.valor || 0), descricao: `${b.categoria} — ${b.descricao || ""}`, conciliado: !!b.conciliado });
   });
-  payables.filter((p) => p.status === "Pago" && p.contaPgtoId === contaId).forEach((p) => {
+  payables.filter((p) => !p.deletedAt && p.status === "Pago" && p.contaPgtoId === contaId).forEach((p) => {
     movs.push({ key: `pay-${p.id}`, source: "payable", id: p.id, data: p.dataPgto, tipo: "Saída", valor: Number(p.valorPago || p.valor || 0), descricao: `Pagamento — ${p.fornecedor}`, conciliado: !!p.conciliado });
   });
-  receivables.filter((r) => r.status === "Recebido" && r.contaRecebId === contaId).forEach((r) => {
+  receivables.filter((r) => !r.deletedAt && r.status === "Recebido" && r.contaRecebId === contaId).forEach((r) => {
     movs.push({ key: `rec-${r.id}`, source: "receivable", id: r.id, data: r.dataReceb, tipo: "Entrada", valor: Number(r.valorRecebido || r.valor || 0), descricao: `Recebimento — ${r.cliente}`, conciliado: !!r.conciliado });
   });
-  transfers.filter((t) => t.contaOrigemId === contaId).forEach((t) => {
+  transfers.filter((t) => !t.deletedAt && t.contaOrigemId === contaId).forEach((t) => {
     movs.push({ key: `trfo-${t.id}`, source: "transfer", id: t.id, data: t.data, tipo: "Saída", valor: Number(t.valor || 0), descricao: `Transferência enviada — ${t.descricao || ""}`, conciliado: !!t.conciliado });
   });
-  transfers.filter((t) => t.contaDestinoId === contaId).forEach((t) => {
+  transfers.filter((t) => !t.deletedAt && t.contaDestinoId === contaId).forEach((t) => {
     movs.push({ key: `trfd-${t.id}`, source: "transfer", id: t.id, data: t.data, tipo: "Entrada", valor: Number(t.valor || 0), descricao: `Transferência recebida — ${t.descricao || ""}`, conciliado: !!t.conciliado });
   });
   return movs;
@@ -3697,6 +3752,101 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
           onSubmit={submitDraft}
         />
       )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Lixeira — itens excluídos de qualquer módulo, com opção de restaurar  */
+/* ---------------------------------------------------------------------- */
+function LixeiraView({
+  empresas, payables, receivables, bankEntries, transfers, fiscalObligations,
+  onRestorePayables, onRestoreReceivables, onRestoreBankEntries, onRestoreTransfers, onRestoreFiscal,
+}) {
+  const empresaNome = (id) => empresas.find((e) => e.id === id)?.nome || "—";
+
+  const items = [
+    ...payables.filter((p) => p.deletedAt).map((p) => ({
+      id: p.id, tipo: "Conta a pagar", icon: ArrowUpCircle, tone: "red",
+      titulo: p.fornecedor || p.descricao || "—", valor: p.valor, data: p.vencimento,
+      empresaId: p.empresaId, deletedAt: p.deletedAt,
+      restore: () => onRestorePayables(payables.map((x) => (x.id === p.id ? { ...x, deletedAt: null } : x))),
+    })),
+    ...receivables.filter((r) => r.deletedAt).map((r) => ({
+      id: r.id, tipo: "Conta a receber", icon: ArrowDownCircle, tone: "green",
+      titulo: r.cliente || r.descricao || "—", valor: r.valor, data: r.vencimento,
+      empresaId: r.empresaId, deletedAt: r.deletedAt,
+      restore: () => onRestoreReceivables(receivables.map((x) => (x.id === r.id ? { ...x, deletedAt: null } : x))),
+    })),
+    ...bankEntries.filter((b) => b.deletedAt).map((b) => ({
+      id: b.id, tipo: "Lançamento bancário", icon: Wallet, tone: "gold",
+      titulo: b.descricao || b.categoria || "—", valor: b.valor, data: b.data,
+      empresaId: b.empresaId, deletedAt: b.deletedAt,
+      restore: () => onRestoreBankEntries(bankEntries.map((x) => (x.id === b.id ? { ...x, deletedAt: null } : x))),
+    })),
+    ...transfers.filter((t) => t.deletedAt).map((t) => ({
+      id: t.id, tipo: "Transferência", icon: ArrowLeftRight, tone: "neutral",
+      titulo: t.descricao || "—", valor: t.valor, data: t.data,
+      empresaId: t.empresaId, deletedAt: t.deletedAt,
+      restore: () => onRestoreTransfers(transfers.map((x) => (x.id === t.id ? { ...x, deletedAt: null } : x))),
+    })),
+    ...fiscalObligations.filter((o) => o.deletedAt).map((o) => ({
+      id: o.id, tipo: "Obrigação fiscal", icon: Calendar, tone: "amber",
+      titulo: o.tributo || o.descricao || "—", valor: o.valor, data: o.vencimento,
+      empresaId: o.empresaId, deletedAt: o.deletedAt,
+      restore: () => onRestoreFiscal(fiscalObligations.map((x) => (x.id === o.id ? { ...x, deletedAt: null } : x))),
+    })),
+  ].sort((a, b) => (b.deletedAt || "").localeCompare(a.deletedAt || ""));
+
+  return (
+    <div className="space-y-4">
+      <Header title="Lixeira" subtitle="Itens excluídos de qualquer módulo. Nada aqui é apagado de vez — restaure quando quiser." />
+      <Card className="overflow-x-auto">
+        {items.length === 0 ? (
+          <EmptyState icon={Trash2} title="Lixeira vazia" subtitle="Itens excluídos de Contas a Pagar, a Receber, Lançamentos Bancários, Transferências e Calendário Fiscal aparecem aqui." />
+        ) : (
+          <table className="w-full text-sm min-w-[720px]">
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-4 py-2.5">Tipo</th>
+                <th className="text-left font-medium px-4 py-2.5">Descrição</th>
+                <th className="text-left font-medium px-4 py-2.5">Empresa</th>
+                <th className="text-right font-medium px-4 py-2.5">Valor</th>
+                <th className="text-left font-medium px-4 py-2.5">Excluído em</th>
+                <th className="text-right font-medium px-4 py-2.5">Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item) => {
+                const Icon = item.icon;
+                const iconColor = { red: COLORS.red, green: COLORS.green, gold: COLORS.gold, amber: COLORS.amber, neutral: COLORS.inkSoft }[item.tone] || COLORS.inkSoft;
+                return (
+                  <tr key={`${item.tipo}-${item.id}`} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <td className="px-4 py-2.5">
+                      <span className="inline-flex items-center gap-1.5" style={{ color: iconColor }}>
+                        <Icon size={14} /> {item.tipo}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{item.titulo}</td>
+                    <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{empresaNome(item.empresaId)}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(item.valor)}</td>
+                    <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{fmtDate(item.deletedAt?.slice(0, 10))}</td>
+                    <td className="px-4 py-2.5 text-right">
+                      <button
+                        onClick={item.restore}
+                        className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full"
+                        style={{ background: COLORS.greenSoft, color: COLORS.green }}
+                      >
+                        <Check size={12} /> Restaurar
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Card>
     </div>
   );
 }
