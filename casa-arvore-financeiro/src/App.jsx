@@ -1524,6 +1524,7 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState("");
   const [aiNote, setAiNote] = useState("");
+  const [installmentsReview, setInstallmentsReview] = useState(null);
 
   const handleImportDocument = async (e) => {
     const file = e.target.files?.[0];
@@ -1561,16 +1562,38 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
       if (!data?.ok) throw new Error(data?.error || "Não consegui ler o documento.");
       const ex = data.extracted || {};
       const categoriaMatch = categories.find((c) => c.nome === ex.categoria_sugerida)?.nome;
-      setAiNote("Dados extraídos automaticamente do documento — confira antes de salvar.");
-      setModal({
-        empresaId: selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id,
-        fornecedor: ex.fornecedor || "",
-        valor: ex.valor != null ? String(ex.valor) : "",
-        vencimento: ex.vencimento || todayISO(),
-        dataLanc: todayISO(),
-        descricao: ex.descricao || "",
-        ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
-      });
+      const parcelas = Array.isArray(ex.parcelas) && ex.parcelas.length > 0 ? ex.parcelas : [ex];
+      const empresaId = selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id;
+
+      if (parcelas.length > 1) {
+        // Parcelas com valor/vencimento próprios (ex: carnê de IPTU) — nunca
+        // passa pelo "Recorrente"/"Parcelas" do formulário, que repete valor
+        // e soma meses a partir de uma data-base. Aqui cada linha guarda o
+        // que a IA leu, pro operador conferir uma a uma antes de criar todas.
+        setInstallmentsReview({
+          fornecedor: ex.fornecedor || "",
+          categoria: categoriaMatch || categories[0]?.nome || "",
+          empresaId,
+          rows: parcelas.map((p, i) => ({
+            numero: p.numero ?? i + 1,
+            valor: p.valor != null ? String(p.valor) : "",
+            vencimento: p.vencimento || "",
+            descricao: p.descricao || `Parcela ${p.numero ?? i + 1}/${parcelas.length}`,
+          })),
+        });
+      } else {
+        const p = parcelas[0] || {};
+        setAiNote("Dados extraídos automaticamente do documento — confira antes de salvar.");
+        setModal({
+          empresaId,
+          fornecedor: ex.fornecedor || "",
+          valor: p.valor != null ? String(p.valor) : "",
+          vencimento: p.vencimento || todayISO(),
+          dataLanc: todayISO(),
+          descricao: p.descricao || "",
+          ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
+        });
+      }
     } catch (err) {
       setImportError(err?.message || "Erro ao importar o documento.");
     } finally {
@@ -1702,6 +1725,31 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
 
       {modal && (
         <PayableModal initial={modal} categories={categories} empresas={empresas} aiNote={aiNote} onClose={() => { setModal(null); setAiNote(""); }} onSubmit={submit} />
+      )}
+      {installmentsReview && (
+        <InstallmentsReviewModal
+          review={installmentsReview}
+          categories={categories}
+          empresas={empresas}
+          onClose={() => setInstallmentsReview(null)}
+          onConfirm={(rows, fornecedor, categoria, empresaId) => {
+            const novos = rows.map((r) => ({
+              id: uid(),
+              empresaId,
+              dataLanc: todayISO(),
+              vencimento: r.vencimento,
+              fornecedor,
+              categoria,
+              descricao: r.descricao,
+              valor: Number(r.valor),
+              formaPgto: "Boleto",
+              status: "A Pagar",
+              conciliado: false,
+            }));
+            onSave([...payables, ...novos]);
+            setInstallmentsReview(null);
+          }}
+        />
       )}
       {payModal && (
         <SettleModal
@@ -1838,6 +1886,88 @@ function PayableModal({ initial, categories, empresas, aiNote, onClose, onSubmit
       <div className="flex justify-end gap-2 pt-4">
         <Button variant="ghost" onClick={onClose}>Cancelar</Button>
         <Button onClick={() => valid && onSubmit(initial.id ? stripInstallmentMeta(form) : expandEntries(form))} disabled={!valid}>Salvar</Button>
+      </div>
+    </Modal>
+  );
+}
+
+// Revisão de parcelas extraídas de um documento (ex: carnê de IPTU) — cada
+// parcela guarda o valor/vencimento que a IA leu no documento, não um
+// cálculo de divisão igual nem uma data somada mês a mês (isso é o que o
+// "Parcelas"/"Recorrente" do PayableModal fazem, e não serve aqui: parcelas
+// reais de um carnê costumam ter valores diferentes entre si).
+function InstallmentsReviewModal({ review, categories, empresas, onClose, onConfirm }) {
+  const [fornecedor, setFornecedor] = useState(review.fornecedor);
+  const [categoria, setCategoria] = useState(review.categoria);
+  const [empresaId, setEmpresaId] = useState(review.empresaId);
+  const [rows, setRows] = useState(review.rows);
+
+  const updateRow = (i, patch) => setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  const removeRow = (i) => setRows((prev) => prev.filter((_, idx) => idx !== i));
+
+  const valid = fornecedor.trim() && empresaId && rows.length > 0 && rows.every((r) => Number(r.valor) > 0 && r.vencimento);
+  const total = rows.reduce((s, r) => s + (Number(r.valor) || 0), 0);
+
+  return (
+    <Modal title={`Revisar ${review.rows.length} parcela(s) extraída(s)`} onClose={onClose} wide>
+      <p className="text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: COLORS.greenSoft, color: COLORS.green }}>
+        Cada parcela veio com o valor e vencimento lidos direto do documento — confira e ajuste antes de criar os lançamentos. A data de lançamento de todas será hoje.
+      </p>
+      <div className="grid md:grid-cols-3 gap-3 mb-4">
+        {empresas.length > 1 && (
+          <Field label="Empresa">
+            <Select value={empresaId} onChange={(e) => setEmpresaId(e.target.value)}>
+              {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
+            </Select>
+          </Field>
+        )}
+        <Field label="Fornecedor"><TextInput value={fornecedor} onChange={(e) => setFornecedor(e.target.value)} /></Field>
+        <Field label="Categoria">
+          <Select value={categoria} onChange={(e) => setCategoria(e.target.value)}>
+            {categories.map((c) => <option key={c.codigo} value={c.nome}>{c.nome}</option>)}
+          </Select>
+        </Field>
+      </div>
+      <div className="max-h-[45vh] overflow-y-auto -mx-1 px-1">
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+              <th className="text-left font-medium px-2 py-1.5">Parcela</th>
+              <th className="text-left font-medium px-2 py-1.5">Vencimento</th>
+              <th className="text-right font-medium px-2 py-1.5">Valor (R$)</th>
+              <th className="text-left font-medium px-2 py-1.5">Descrição</th>
+              <th className="px-2 py-1.5"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{r.numero}</td>
+                <td className="px-2 py-1.5">
+                  <TextInput type="date" value={r.vencimento} onChange={(e) => updateRow(i, { vencimento: e.target.value })} className="w-36" />
+                </td>
+                <td className="px-2 py-1.5">
+                  <TextInput type="number" step="0.01" value={r.valor} onChange={(e) => updateRow(i, { valor: e.target.value })} className="w-28 text-right" />
+                </td>
+                <td className="px-2 py-1.5">
+                  <TextInput value={r.descricao} onChange={(e) => updateRow(i, { descricao: e.target.value })} />
+                </td>
+                <td className="px-2 py-1.5">
+                  <button onClick={() => removeRow(i)} className="p-1 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex items-center justify-between pt-4">
+        <p className="text-sm font-medium" style={{ color: COLORS.ink }}>Total: {fmtBRL(total)}</p>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => valid && onConfirm(rows, fornecedor, categoria, empresaId)} disabled={!valid}>
+            Criar {rows.length} lançamento(s)
+          </Button>
+        </div>
       </div>
     </Modal>
   );

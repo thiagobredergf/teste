@@ -28,25 +28,28 @@ const ALLOWED_MEDIA_TYPES = new Set([
 // evita payload absurdo indo pro modelo por engano.
 const MAX_BASE64_LENGTH = 15_000_000;
 
-const EXTRACTION_SYSTEM_PROMPT = `Você lê documentos financeiros brasileiros (boleto bancário ou nota fiscal) e extrai dados pra um lançamento de conta a pagar.
+const EXTRACTION_SYSTEM_PROMPT = `Você lê documentos financeiros brasileiros (boleto, nota fiscal ou carnê/parcelamento como IPTU) e extrai dados pra lançamentos de conta a pagar.
 
 Responda APENAS com um objeto JSON, sem markdown, sem explicação, no formato exato:
 {
   "fornecedor": string ou null,
-  "valor": number ou null,
-  "vencimento": string "AAAA-MM-DD" ou null,
-  "descricao": string ou null,
   "categoria_sugerida": string ou null,
-  "tipo_documento": "boleto" ou "nota_fiscal" ou "outro"
+  "tipo_documento": "boleto" ou "nota_fiscal" ou "carne_parcelado" ou "outro",
+  "parcelas": [
+    { "numero": number ou null, "valor": number ou null, "vencimento": "AAAA-MM-DD" ou null, "descricao": string ou null }
+  ]
 }
 
 Regras:
-- "fornecedor": nome do beneficiário/cedente (boleto) ou emitente (NF).
-- "valor": valor total a pagar, em reais, número decimal (ex: 1234.56), sem "R$" nem separador de milhar.
-- "vencimento": data de vencimento no formato AAAA-MM-DD.
-- "descricao": breve, ex: "Boleto - <fornecedor>" ou o serviço/produto da NF.
-- "categoria_sugerida": um palpite de categoria financeira (ex: "Aluguel", "Energia Elétrica"), só se o documento deixar claro; senão null.
-- Se não tiver certeza de um campo, retorne null nesse campo — nunca invente ou estime um valor que não está escrito no documento.`;
+- "fornecedor": nome do beneficiário/cedente (boleto) ou emitente (NF), comum a todas as parcelas.
+- "categoria_sugerida": um palpite de categoria financeira (ex: "Aluguel", "Impostos e Taxas"), só se o documento deixar claro; senão null.
+- "parcelas": UMA ENTRADA PRA CADA PARCELA IMPRESSA NO DOCUMENTO, com o valor e vencimento EXATOS de cada uma, lidos diretamente do documento.
+  - Documentos de pagamento único (boleto normal, NF): "parcelas" tem só 1 item.
+  - Documentos parcelados (ex: carnê de IPTU com várias cotas): liste TODAS as parcelas visíveis, cada uma com seu próprio valor e vencimento — os valores costumam ser DIFERENTES entre parcelas (ex: 1ª parcela com desconto, demais com juros), e os vencimentos são datas específicas, não um intervalo fixo de dias.
+  - NUNCA calcule um valor dividindo o total pela quantidade de parcelas, e NUNCA calcule um vencimento somando dias/meses a partir de outro — use apenas o que está escrito.
+  - Se o documento mostrar só uma parcela (as demais "consulte o site"), retorne só essa parcela — não invente as que faltam.
+- "descricao" de cada parcela: breve, ex: "IPTU 2026 - Parcela 3/11" ou "Boleto - <fornecedor>".
+- Se não tiver certeza de um campo, retorne null — nunca invente ou estime.`;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -108,7 +111,7 @@ Deno.serve(async (req) => {
   try {
     response = await client.messages.create({
       model: "claude-haiku-4-5",
-      max_tokens: 1024,
+      max_tokens: 2048,
       system: EXTRACTION_SYSTEM_PROMPT,
       messages: [
         {
