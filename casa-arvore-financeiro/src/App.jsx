@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles
+  Calendar, Bell, LogOut, Sparkles, Contact
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -122,6 +122,7 @@ const STORE_KEYS = {
   bankEntries: "bankEntries",
   transfers: "transfers",
   fiscalObligations: "fiscalObligations",
+  contacts: "contacts",
   categories: "categories",
   selectedEmpresa: "selectedEmpresa",
 };
@@ -265,6 +266,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [bankEntries, setBankEntries] = useState([]);
   const [transfers, setTransfers] = useState([]);
   const [fiscalObligations, setFiscalObligations] = useState([]);
+  const [contacts, setContacts] = useState([]);
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
@@ -290,6 +292,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setBankEntries(data.bankEntries || []);
       setTransfers(data.transfers || []);
       setFiscalObligations(data.fiscalObligations || []);
+      setContacts(data.contacts || []);
       setCategories(data.categories || DEFAULT_CATEGORIES);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da(s) empresa(s) dele. Gestor pousa na Visão Geral.
@@ -498,6 +501,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "resumo", label: "Resumo", icon: CalendarClock },
     { id: "empresas", label: "Empresas", icon: Building2 },
     { id: "accounts", label: "Contas", icon: Landmark },
+    { id: "contacts", label: "Contatos", icon: Contact },
     { id: "payables", label: "Contas a Pagar", icon: ArrowUpCircle },
     { id: "receivables", label: "Contas a Receber", icon: ArrowDownCircle },
     { id: "bank", label: "Lançamentos Bancários", icon: Wallet },
@@ -512,7 +516,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
 
   const RAIL_SECTIONS = [
     { id: "visao", label: "Visão Geral", icon: LayoutDashboard, items: ["gestor", "dashboard", "resumo"] },
-    { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas", "accounts"] },
+    { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas", "accounts", "contacts"] },
     { id: "lancamentos", label: "Lançamentos", icon: Wallet, items: ["payables", "receivables", "bank", "transfers"] },
     { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
     { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "reports", "lixeira"] },
@@ -747,6 +751,15 @@ function FinanceiroApp({ userEmail, onLogout }) {
               />
             )}
 
+            {view === "contacts" && (
+              <ContactsView
+                contacts={contacts}
+                empresas={empresas}
+                selectedEmpresa={selectedEmpresa}
+                onSave={(v) => persist("contacts", v, setContacts)}
+              />
+            )}
+
             {view === "payables" && (
               <PayablesView
                 payables={payables}
@@ -754,6 +767,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
                 categories={categories.despesas}
+                contacts={contacts}
+                onSaveContacts={(v) => persist("contacts", v, setContacts)}
                 onSave={(v) => persist("payables", v, setPayables)}
               />
             )}
@@ -765,6 +780,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
                 categories={categories.receitas}
+                contacts={contacts}
+                onSaveContacts={(v) => persist("contacts", v, setContacts)}
                 onSave={(v) => persist("receivables", v, setReceivables)}
               />
             )}
@@ -845,11 +862,13 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 bankEntries={bankEntries}
                 transfers={transfers}
                 fiscalObligations={fiscalObligations}
+                contacts={contacts}
                 onRestorePayables={(v) => persist("payables", v, setPayables)}
                 onRestoreReceivables={(v) => persist("receivables", v, setReceivables)}
                 onRestoreBankEntries={(v) => persist("bankEntries", v, setBankEntries)}
                 onRestoreTransfers={(v) => persist("transfers", v, setTransfers)}
                 onRestoreFiscal={(v) => persist("fiscalObligations", v, setFiscalObligations)}
+                onRestoreContacts={(v) => persist("contacts", v, setContacts)}
               />
             )}
           </>
@@ -1490,6 +1509,125 @@ function AccountModal({ initial, empresas, onClose, onSubmit }) {
 }
 
 /* ---------------------------------------------------------------------- */
+/*  Contatos (fornecedores/clientes) — cadastro único, usado tanto em      */
+/*  Contas a Pagar quanto em Contas a Receber, pra futura cobrança.        */
+/* ---------------------------------------------------------------------- */
+function ContactsView({ contacts, empresas, selectedEmpresa, onSave }) {
+  const [modal, setModal] = useState(null);
+  const visible = contacts
+    .filter((c) => !c.deletedAt && (selectedEmpresa === "all" || c.empresaId === selectedEmpresa))
+    .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
+
+  const submit = (form) => {
+    if (form.id) onSave(contacts.map((c) => (c.id === form.id ? form : c)));
+    else onSave([...contacts, { ...form, id: uid() }]);
+    setModal(null);
+  };
+  const remove = (id) => {
+    if (!confirmDelete("Mover este contato pra lixeira? Você pode restaurar depois, em Lixeira.")) return;
+    onSave(contacts.map((c) => (c.id === id ? { ...c, deletedAt: new Date().toISOString() } : c)));
+  };
+
+  return (
+    <div className="space-y-4">
+      <Header title="Contatos" subtitle="Fornecedores e clientes cadastrados — usados em Contas a Pagar/Receber e reaproveitados pra cobrança.">
+        <Button onClick={() => setModal({ empresaId: selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id })}>
+          <Plus size={15} /> Novo contato
+        </Button>
+      </Header>
+      <Card className="overflow-x-auto">
+        {visible.length === 0 ? (
+          <EmptyState icon={Contact} title="Nenhum contato cadastrado" subtitle="Cadastre aqui, ou deixe o sistema cadastrar sozinho ao lançar uma conta a pagar/receber com um nome novo." />
+        ) : (
+          <table className="w-full text-sm min-w-[680px]">
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-4 py-2.5">Nome</th>
+                <th className="text-left font-medium px-4 py-2.5">CPF/CNPJ</th>
+                <th className="text-left font-medium px-4 py-2.5">Contato</th>
+                {selectedEmpresa === "all" && <th className="text-left font-medium px-4 py-2.5">Empresa</th>}
+                <th className="text-right font-medium px-4 py-2.5">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((c) => (
+                <tr key={c.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>
+                    <p className="font-medium">{c.nome}</p>
+                    {c.email && <p className="text-xs" style={{ color: COLORS.inkSoft }}>{c.email}</p>}
+                  </td>
+                  <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{c.documento || "—"}</td>
+                  <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{c.contato || "—"}</td>
+                  {selectedEmpresa === "all" && <td className="px-4 py-2.5"><EmpresaTag empresas={empresas} empresaId={c.empresaId} /></td>}
+                  <td className="px-4 py-2.5">
+                    <div className="flex justify-end gap-1">
+                      <button onClick={() => setModal(c)} className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                      <button onClick={() => remove(c.id)} className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+      {modal && <ContactModal initial={modal} empresas={empresas} onClose={() => setModal(null)} onSubmit={submit} />}
+    </div>
+  );
+}
+
+function ContactModal({ initial, empresas, onClose, onSubmit }) {
+  const [form, setForm] = useState({
+    nome: "", documento: "", contato: "", email: "", empresaId: empresas[0]?.id || "", ...initial,
+  });
+  const valid = form.nome.trim() && form.empresaId;
+  return (
+    <Modal title={initial.id ? "Editar contato" : "Novo contato"} onClose={onClose}>
+      <div className="grid gap-3">
+        <Field label="Empresa">
+          <Select value={form.empresaId} onChange={(e) => setForm({ ...form, empresaId: e.target.value })}>
+            {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
+          </Select>
+        </Field>
+        <Field label="Nome"><TextInput value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} /></Field>
+        <Field label="CPF/CNPJ"><TextInput value={form.documento} onChange={(e) => setForm({ ...form, documento: e.target.value })} placeholder="000.000.000-00 ou 00.000.000/0000-00" /></Field>
+        <Field label="Contato (telefone/WhatsApp)"><TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} /></Field>
+        <Field label="E-mail"><TextInput type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => valid && onSubmit(form)} disabled={!valid}>Salvar</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Acha ou cria (na hora, sem round-trip) um contato pelo nome dentro da
+// empresa — usado pelos formulários de Contas a Pagar/Receber pra manter o
+// cadastro único de terceiros alimentado sem exigir que o operador saia do
+// fluxo de lançamento. Se o contato já existe e o operador preencheu
+// documento/contato novos, atualiza os campos que estavam vazios.
+function resolveContact(contacts, { nome, documento, contato, empresaId }) {
+  const nomeTrim = (nome || "").trim();
+  if (!nomeTrim || !empresaId) return { contacts, contact: null };
+  const idx = contacts.findIndex(
+    (c) => !c.deletedAt && c.empresaId === empresaId && c.nome.trim().toLowerCase() === nomeTrim.toLowerCase()
+  );
+  if (idx >= 0) {
+    const existing = contacts[idx];
+    const merged = {
+      ...existing,
+      documento: existing.documento || documento || "",
+      contato: existing.contato || contato || "",
+    };
+    const next = contacts.map((c, i) => (i === idx ? merged : c));
+    return { contacts: next, contact: merged };
+  }
+  const created = { id: uid(), empresaId, nome: nomeTrim, documento: documento || "", contato: contato || "", email: "" };
+  return { contacts: [...contacts, created], contact: created };
+}
+
+/* ---------------------------------------------------------------------- */
 /*  Shared list header                                                     */
 /* ---------------------------------------------------------------------- */
 function Header({ title, subtitle, children }) {
@@ -1553,7 +1691,7 @@ function StatusSummary({ items, statuses }) {
 /* ---------------------------------------------------------------------- */
 /*  Contas a Pagar                                                         */
 /* ---------------------------------------------------------------------- */
-function PayablesView({ payables, accounts, empresas, selectedEmpresa, categories, onSave }) {
+function PayablesView({ payables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave }) {
   const [modal, setModal] = useState(null);
   const [payModal, setPayModal] = useState(null);
   const [scheduleModal, setScheduleModal] = useState(false);
@@ -1581,7 +1719,7 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
       });
       const fileBase64 = dataUrl.split(",")[1] || "";
       const { data, error } = await supabase.functions.invoke("extract-document", {
-        body: { fileBase64, mediaType: file.type },
+        body: { fileBase64, mediaType: file.type, context: "payable" },
       });
       if (error) {
         // O supabase-js só põe uma mensagem genérica em error.message pra
@@ -1611,7 +1749,7 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
         // e soma meses a partir de uma data-base. Aqui cada linha guarda o
         // que a IA leu, pro operador conferir uma a uma antes de criar todas.
         setInstallmentsReview({
-          fornecedor: ex.fornecedor || "",
+          party: ex.contraparte || "",
           categoria: categoriaMatch || categories[0]?.nome || "",
           empresaId,
           rows: parcelas.map((p, i) => ({
@@ -1626,7 +1764,7 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
         setAiNote("Dados extraídos automaticamente do documento — confira antes de salvar.");
         setModal({
           empresaId,
-          fornecedor: ex.fornecedor || "",
+          fornecedor: ex.contraparte || "",
           valor: p.valor != null ? String(p.valor) : "",
           vencimento: p.vencimento || todayISO(),
           dataLanc: todayISO(),
@@ -1658,12 +1796,22 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
     return true;
   }).sort((a, b) => (b.dataLanc || "").localeCompare(a.dataLanc || ""));
 
-  const submit = (formOrList) => {
+  const submit = (formOrList, contactInfo) => {
     const list = Array.isArray(formOrList) ? formOrList : [formOrList];
-    if (list.length === 1 && list[0].id) {
-      onSave(payables.map((p) => (p.id === list[0].id ? list[0] : p)));
+    let withContact = list;
+    if (contactInfo && list[0]?.fornecedor && list[0]?.empresaId) {
+      const { contacts: nextContacts, contact } = resolveContact(contacts, {
+        nome: list[0].fornecedor, documento: contactInfo.documento, contato: contactInfo.contato, empresaId: list[0].empresaId,
+      });
+      if (contact) {
+        onSaveContacts(nextContacts);
+        withContact = list.map((f) => ({ ...f, contactId: contact.id }));
+      }
+    }
+    if (withContact.length === 1 && withContact[0].id) {
+      onSave(payables.map((p) => (p.id === withContact[0].id ? withContact[0] : p)));
     } else {
-      onSave([...payables, ...list.map((f) => ({ ...f, id: uid() }))]);
+      onSave([...payables, ...withContact.map((f) => ({ ...f, id: uid() }))]);
     }
     setModal(null);
   };
@@ -1767,21 +1915,25 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
       </Card>
 
       {modal && (
-        <PayableModal initial={modal} categories={categories} empresas={empresas} aiNote={aiNote} onClose={() => { setModal(null); setAiNote(""); }} onSubmit={submit} />
+        <PayableModal initial={modal} categories={categories} empresas={empresas} contacts={contacts} aiNote={aiNote} onClose={() => { setModal(null); setAiNote(""); }} onSubmit={submit} />
       )}
       {installmentsReview && (
         <InstallmentsReviewModal
           review={installmentsReview}
           categories={categories}
           empresas={empresas}
+          partyLabel="Fornecedor"
           onClose={() => setInstallmentsReview(null)}
-          onConfirm={(rows, fornecedor, categoria, empresaId) => {
+          onConfirm={(rows, party, categoria, empresaId) => {
+            const { contacts: nextContacts, contact } = resolveContact(contacts, { nome: party, empresaId });
+            if (contact) onSaveContacts(nextContacts);
             const novos = rows.map((r) => ({
               id: uid(),
               empresaId,
               dataLanc: todayISO(),
               vencimento: r.vencimento,
-              fornecedor,
+              fornecedor: party,
+              contactId: contact?.id,
               categoria,
               descricao: r.descricao,
               valor: Number(r.valor),
@@ -1821,8 +1973,10 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
   );
 }
 
+// documento/contato só existem no formulário pra alimentar o cadastro de
+// Contatos (ver resolveContact) — nunca são colunas de payables/receivables.
 const stripInstallmentMeta = (f) => {
-  const { parcelas, recorrente, repetirMeses, ...rest } = f;
+  const { parcelas, recorrente, repetirMeses, documento, contato, ...rest } = f;
   return rest;
 };
 
@@ -1887,12 +2041,24 @@ function StatusBadge({ status }) {
   return <Badge tone="neutral">{status}</Badge>;
 }
 
-function PayableModal({ initial, categories, empresas, aiNote, onClose, onSubmit }) {
+function PayableModal({ initial, categories, empresas, contacts = [], aiNote, onClose, onSubmit }) {
+  const linkedContact = contacts.find((c) => c.id === initial.contactId);
   const [form, setForm] = useState({
     dataLanc: todayISO(), vencimento: todayISO(), fornecedor: "", categoria: categories[0]?.nome || "",
-    descricao: "", valor: "", formaPgto: "PIX", status: "A Pagar", empresaId: empresas[0]?.id || "", ...initial,
+    descricao: "", valor: "", formaPgto: "PIX", status: "A Pagar", empresaId: empresas[0]?.id || "",
+    documento: linkedContact?.documento || "", contato: linkedContact?.contato || "", ...initial,
   });
   const valid = form.fornecedor.trim() && Number(form.valor) > 0 && form.empresaId;
+  const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId);
+  const handleFornecedor = (nome) => {
+    const match = contactOptions.find((c) => c.nome.toLowerCase() === nome.trim().toLowerCase());
+    setForm((f) => ({
+      ...f,
+      fornecedor: nome,
+      documento: match ? match.documento || f.documento : f.documento,
+      contato: match ? match.contato || f.contato : f.contato,
+    }));
+  };
   return (
     <Modal title={initial.id ? "Editar conta a pagar" : "Nova conta a pagar"} onClose={onClose} wide>
       {aiNote && (
@@ -1908,7 +2074,12 @@ function PayableModal({ initial, categories, empresas, aiNote, onClose, onSubmit
             </Select>
           </Field>
         )}
-        <Field label="Fornecedor"><TextInput value={form.fornecedor} onChange={(e) => setForm({ ...form, fornecedor: e.target.value })} /></Field>
+        <Field label="Fornecedor">
+          <TextInput list="contatos-fornecedor" value={form.fornecedor} onChange={(e) => handleFornecedor(e.target.value)} />
+          <datalist id="contatos-fornecedor">
+            {contactOptions.map((c) => <option key={c.id} value={c.nome} />)}
+          </datalist>
+        </Field>
         <Field label="Categoria">
           <Select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
             {categories.map((c) => <option key={c.codigo} value={c.nome}>{c.nome}</option>)}
@@ -1924,11 +2095,22 @@ function PayableModal({ initial, categories, empresas, aiNote, onClose, onSubmit
             <option>Cartão</option><option>Débito Automático</option>
           </Select>
         </Field>
+        <Field label="CPF/CNPJ do fornecedor">
+          <TextInput value={form.documento} onChange={(e) => setForm({ ...form, documento: e.target.value })} placeholder="Opcional — usado pra cobrança futura" />
+        </Field>
+        <Field label="Contato do fornecedor">
+          <TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone/WhatsApp" />
+        </Field>
         {!initial.id && <InstallmentFields form={form} setForm={setForm} />}
       </div>
       <div className="flex justify-end gap-2 pt-4">
         <Button variant="ghost" onClick={onClose}>Cancelar</Button>
-        <Button onClick={() => valid && onSubmit(initial.id ? stripInstallmentMeta(form) : expandEntries(form))} disabled={!valid}>Salvar</Button>
+        <Button
+          onClick={() => valid && onSubmit(initial.id ? stripInstallmentMeta(form) : expandEntries(form), { documento: form.documento, contato: form.contato })}
+          disabled={!valid}
+        >
+          Salvar
+        </Button>
       </div>
     </Modal>
   );
@@ -1939,8 +2121,8 @@ function PayableModal({ initial, categories, empresas, aiNote, onClose, onSubmit
 // cálculo de divisão igual nem uma data somada mês a mês (isso é o que o
 // "Parcelas"/"Recorrente" do PayableModal fazem, e não serve aqui: parcelas
 // reais de um carnê costumam ter valores diferentes entre si).
-function InstallmentsReviewModal({ review, categories, empresas, onClose, onConfirm }) {
-  const [fornecedor, setFornecedor] = useState(review.fornecedor);
+function InstallmentsReviewModal({ review, categories, empresas, partyLabel = "Fornecedor", onClose, onConfirm }) {
+  const [party, setParty] = useState(review.party);
   const [categoria, setCategoria] = useState(review.categoria);
   const [empresaId, setEmpresaId] = useState(review.empresaId);
   const [rows, setRows] = useState(review.rows);
@@ -1948,7 +2130,7 @@ function InstallmentsReviewModal({ review, categories, empresas, onClose, onConf
   const updateRow = (i, patch) => setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   const removeRow = (i) => setRows((prev) => prev.filter((_, idx) => idx !== i));
 
-  const valid = fornecedor.trim() && empresaId && rows.length > 0 && rows.every((r) => Number(r.valor) > 0 && r.vencimento);
+  const valid = party.trim() && empresaId && rows.length > 0 && rows.every((r) => Number(r.valor) > 0 && r.vencimento);
   const total = rows.reduce((s, r) => s + (Number(r.valor) || 0), 0);
 
   return (
@@ -1964,7 +2146,7 @@ function InstallmentsReviewModal({ review, categories, empresas, onClose, onConf
             </Select>
           </Field>
         )}
-        <Field label="Fornecedor"><TextInput value={fornecedor} onChange={(e) => setFornecedor(e.target.value)} /></Field>
+        <Field label={partyLabel}><TextInput value={party} onChange={(e) => setParty(e.target.value)} /></Field>
         <Field label="Categoria">
           <Select value={categoria} onChange={(e) => setCategoria(e.target.value)}>
             {categories.map((c) => <option key={c.codigo} value={c.nome}>{c.nome}</option>)}
@@ -2007,7 +2189,7 @@ function InstallmentsReviewModal({ review, categories, empresas, onClose, onConf
         <p className="text-sm font-medium" style={{ color: COLORS.ink }}>Total: {fmtBRL(total)}</p>
         <div className="flex gap-2">
           <Button variant="ghost" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => valid && onConfirm(rows, fornecedor, categoria, empresaId)} disabled={!valid}>
+          <Button onClick={() => valid && onConfirm(rows, party, categoria, empresaId)} disabled={!valid}>
             Criar {rows.length} lançamento(s)
           </Button>
         </div>
@@ -2128,13 +2310,84 @@ function ScheduleModal({ title, items, nameField, accounts, empresas, onClose, o
 /* ---------------------------------------------------------------------- */
 /*  Contas a Receber                                                       */
 /* ---------------------------------------------------------------------- */
-function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, categories, onSave }) {
+function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave }) {
   const [modal, setModal] = useState(null);
   const [recModal, setRecModal] = useState(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [aiNote, setAiNote] = useState("");
+  const [installmentsReview, setInstallmentsReview] = useState(null);
+
+  const handleImportDocument = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setImportError("");
+    setImporting(true);
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("Erro lendo o arquivo."));
+        reader.readAsDataURL(file);
+      });
+      const fileBase64 = dataUrl.split(",")[1] || "";
+      const { data, error } = await supabase.functions.invoke("extract-document", {
+        body: { fileBase64, mediaType: file.type, context: "receivable" },
+      });
+      if (error) {
+        let detail = error.message;
+        if (error.context && typeof error.context.json === "function") {
+          try {
+            const body = await error.context.clone().json();
+            if (body?.error) detail = body.error;
+          } catch {
+            // corpo não era JSON — mantém a mensagem genérica
+          }
+        }
+        throw new Error(detail);
+      }
+      if (!data?.ok) throw new Error(data?.error || "Não consegui ler o documento.");
+      const ex = data.extracted || {};
+      const categoriaMatch = categories.find((c) => c.nome === ex.categoria_sugerida)?.nome;
+      const parcelas = Array.isArray(ex.parcelas) && ex.parcelas.length > 0 ? ex.parcelas : [ex];
+      const empresaId = selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id;
+
+      if (parcelas.length > 1) {
+        setInstallmentsReview({
+          party: ex.contraparte || "",
+          categoria: categoriaMatch || categories[0]?.nome || "",
+          empresaId,
+          rows: parcelas.map((p, i) => ({
+            numero: p.numero ?? i + 1,
+            valor: p.valor != null ? String(p.valor) : "",
+            vencimento: p.vencimento || "",
+            descricao: p.descricao || `Parcela ${p.numero ?? i + 1}/${parcelas.length}`,
+          })),
+        });
+      } else {
+        const p = parcelas[0] || {};
+        setAiNote("Dados extraídos automaticamente do documento — confira antes de salvar.");
+        setModal({
+          empresaId,
+          cliente: ex.contraparte || "",
+          valor: p.valor != null ? String(p.valor) : "",
+          vencimento: p.vencimento || todayISO(),
+          dataLanc: todayISO(),
+          descricao: p.descricao || "",
+          ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
+        });
+      }
+    } catch (err) {
+      setImportError(err?.message || "Erro ao importar o documento.");
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const withDerived = receivables
     .filter((r) => !r.deletedAt && (selectedEmpresa === "all" || r.empresaId === selectedEmpresa))
@@ -2153,12 +2406,22 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
     return true;
   }).sort((a, b) => (b.dataLanc || "").localeCompare(a.dataLanc || ""));
 
-  const submit = (formOrList) => {
+  const submit = (formOrList, contactInfo) => {
     const list = Array.isArray(formOrList) ? formOrList : [formOrList];
-    if (list.length === 1 && list[0].id) {
-      onSave(receivables.map((r) => (r.id === list[0].id ? list[0] : r)));
+    let withContact = list;
+    if (contactInfo && list[0]?.cliente && list[0]?.empresaId) {
+      const { contacts: nextContacts, contact } = resolveContact(contacts, {
+        nome: list[0].cliente, documento: contactInfo.documento, contato: contactInfo.contato, empresaId: list[0].empresaId,
+      });
+      if (contact) {
+        onSaveContacts(nextContacts);
+        withContact = list.map((f) => ({ ...f, contactId: contact.id }));
+      }
+    }
+    if (withContact.length === 1 && withContact[0].id) {
+      onSave(receivables.map((r) => (r.id === withContact[0].id ? withContact[0] : r)));
     } else {
-      onSave([...receivables, ...list.map((f) => ({ ...f, id: uid() }))]);
+      onSave([...receivables, ...withContact.map((f) => ({ ...f, id: uid() }))]);
     }
     setModal(null);
   };
@@ -2176,10 +2439,22 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
   return (
     <div className="space-y-4">
       <Header title="Contas a Receber" subtitle={`${filtered.length} lançamento(s) · ${fmtBRL(total)}`}>
-        <Button onClick={() => setModal({ empresaId: selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id })}>
+        <label
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
+          style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
+        >
+          <Upload size={15} /> {importing ? "Lendo documento…" : "Importar documento"}
+          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing} />
+        </label>
+        <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id }); }}>
           <Plus size={15} /> Novo lançamento
         </Button>
       </Header>
+      {importError && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+          <AlertTriangle size={15} /> {importError}
+        </div>
+      )}
       <StatusSummary items={withDerived} statuses={[
         { key: "A Receber", label: "A receber", tone: "neutral" },
         { key: "Próximo", label: "Próximo (10 dias)", tone: "amber" },
@@ -2237,7 +2512,36 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
       </Card>
 
       {modal && (
-        <ReceivableModal initial={modal} categories={categories} empresas={empresas} onClose={() => setModal(null)} onSubmit={submit} />
+        <ReceivableModal initial={modal} categories={categories} empresas={empresas} contacts={contacts} aiNote={aiNote} onClose={() => { setModal(null); setAiNote(""); }} onSubmit={submit} />
+      )}
+      {installmentsReview && (
+        <InstallmentsReviewModal
+          review={installmentsReview}
+          categories={categories}
+          empresas={empresas}
+          partyLabel="Cliente"
+          onClose={() => setInstallmentsReview(null)}
+          onConfirm={(rows, party, categoria, empresaId) => {
+            const { contacts: nextContacts, contact } = resolveContact(contacts, { nome: party, empresaId });
+            if (contact) onSaveContacts(nextContacts);
+            const novos = rows.map((r) => ({
+              id: uid(),
+              empresaId,
+              dataLanc: todayISO(),
+              vencimento: r.vencimento,
+              cliente: party,
+              contactId: contact?.id,
+              categoria,
+              descricao: r.descricao,
+              valor: Number(r.valor),
+              formaReceb: "PIX",
+              status: "A Receber",
+              conciliado: false,
+            }));
+            onSave([...receivables, ...novos]);
+            setInstallmentsReview(null);
+          }}
+        />
       )}
       {recModal && (
         <SettleModal
@@ -2255,14 +2559,31 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
   );
 }
 
-function ReceivableModal({ initial, categories, empresas, onClose, onSubmit }) {
+function ReceivableModal({ initial, categories, empresas, contacts = [], aiNote, onClose, onSubmit }) {
+  const linkedContact = contacts.find((c) => c.id === initial.contactId);
   const [form, setForm] = useState({
     dataLanc: todayISO(), vencimento: todayISO(), cliente: "", categoria: categories[0]?.nome || "",
-    descricao: "", valor: "", formaReceb: "PIX", status: "A Receber", empresaId: empresas[0]?.id || "", ...initial,
+    descricao: "", valor: "", formaReceb: "PIX", status: "A Receber", empresaId: empresas[0]?.id || "",
+    documento: linkedContact?.documento || "", contato: linkedContact?.contato || "", ...initial,
   });
   const valid = form.cliente.trim() && Number(form.valor) > 0 && form.empresaId;
+  const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId);
+  const handleCliente = (nome) => {
+    const match = contactOptions.find((c) => c.nome.toLowerCase() === nome.trim().toLowerCase());
+    setForm((f) => ({
+      ...f,
+      cliente: nome,
+      documento: match ? match.documento || f.documento : f.documento,
+      contato: match ? match.contato || f.contato : f.contato,
+    }));
+  };
   return (
     <Modal title={initial.id ? "Editar conta a receber" : "Nova conta a receber"} onClose={onClose} wide>
+      {aiNote && (
+        <p className="text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: COLORS.greenSoft, color: COLORS.green }}>
+          {aiNote}
+        </p>
+      )}
       <div className="grid md:grid-cols-2 gap-3">
         {empresas.length > 1 && (
           <Field label="Empresa">
@@ -2271,7 +2592,12 @@ function ReceivableModal({ initial, categories, empresas, onClose, onSubmit }) {
             </Select>
           </Field>
         )}
-        <Field label="Cliente"><TextInput value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} /></Field>
+        <Field label="Cliente">
+          <TextInput list="contatos-cliente" value={form.cliente} onChange={(e) => handleCliente(e.target.value)} />
+          <datalist id="contatos-cliente">
+            {contactOptions.map((c) => <option key={c.id} value={c.nome} />)}
+          </datalist>
+        </Field>
         <Field label="Categoria">
           <Select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
             {categories.map((c) => <option key={c.codigo} value={c.nome}>{c.nome}</option>)}
@@ -2286,11 +2612,22 @@ function ReceivableModal({ initial, categories, empresas, onClose, onSubmit }) {
             <option>PIX</option><option>Boleto</option><option>TED</option><option>Dinheiro</option><option>Cartão</option>
           </Select>
         </Field>
+        <Field label="CPF/CNPJ do cliente">
+          <TextInput value={form.documento} onChange={(e) => setForm({ ...form, documento: e.target.value })} placeholder="Opcional — usado pra cobrança futura" />
+        </Field>
+        <Field label="Contato do cliente">
+          <TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone/WhatsApp" />
+        </Field>
         {!initial.id && <InstallmentFields form={form} setForm={setForm} />}
       </div>
       <div className="flex justify-end gap-2 pt-4">
         <Button variant="ghost" onClick={onClose}>Cancelar</Button>
-        <Button onClick={() => valid && onSubmit(initial.id ? stripInstallmentMeta(form) : expandEntries(form))} disabled={!valid}>Salvar</Button>
+        <Button
+          onClick={() => valid && onSubmit(initial.id ? stripInstallmentMeta(form) : expandEntries(form), { documento: form.documento, contato: form.contato })}
+          disabled={!valid}
+        >
+          Salvar
+        </Button>
       </div>
     </Modal>
   );
@@ -2301,6 +2638,9 @@ function ReceivableModal({ initial, categories, empresas, onClose, onSubmit }) {
 /* ---------------------------------------------------------------------- */
 function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categories, onSave }) {
   const [modal, setModal] = useState(null);
+  const [aiNote, setAiNote] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
   const scopedAccounts = accounts.filter((a) => selectedEmpresa === "all" || a.empresaId === selectedEmpresa);
   const submit = (form) => {
     if (form.id) onSave(entries.map((e) => (e.id === form.id ? form : e)));
@@ -2315,13 +2655,74 @@ function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categor
     .filter((e) => !e.deletedAt && (selectedEmpresa === "all" || e.empresaId === selectedEmpresa))
     .sort((a, b) => (b.data || "").localeCompare(a.data || ""));
 
+  const handleImportDocument = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setImportError("");
+    setImporting(true);
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("Erro lendo o arquivo."));
+        reader.readAsDataURL(file);
+      });
+      const fileBase64 = dataUrl.split(",")[1] || "";
+      const { data, error } = await supabase.functions.invoke("extract-document", {
+        body: { fileBase64, mediaType: file.type, context: "bankEntry" },
+      });
+      if (error) {
+        let detail = error.message;
+        if (error.context && typeof error.context.json === "function") {
+          try {
+            const body = await error.context.clone().json();
+            if (body?.error) detail = body.error;
+          } catch {
+            // corpo não era JSON — mantém a mensagem genérica
+          }
+        }
+        throw new Error(detail);
+      }
+      if (!data?.ok) throw new Error(data?.error || "Não consegui ler o documento.");
+      const ex = data.extracted || {};
+      const p = (Array.isArray(ex.parcelas) && ex.parcelas[0]) || ex;
+      const categoriaMatch = categories.find((c) => c === ex.categoria_sugerida);
+      setAiNote("Dados extraídos automaticamente do comprovante — confira antes de salvar.");
+      setModal({
+        contaId: scopedAccounts[0]?.id || "",
+        tipo: ex.tipo_lancamento === "Entrada" ? "Entrada" : "Saída",
+        data: p.vencimento || todayISO(),
+        valor: p.valor != null ? String(p.valor) : "",
+        descricao: p.descricao || (ex.contraparte ? `${ex.tipo_lancamento === "Entrada" ? "Recebido de" : "Enviado para"} ${ex.contraparte}` : ""),
+        ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
+      });
+    } catch (err) {
+      setImportError(err?.message || "Erro ao importar o documento.");
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <Header title="Lançamentos Bancários" subtitle="Entradas e saídas avulsas direto do banco: juros, tarifas, IOF, rendimentos.">
-        <Button onClick={() => setModal({})} disabled={scopedAccounts.length === 0}><Plus size={15} /> Novo lançamento</Button>
+        <label
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
+          style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
+        >
+          <Upload size={15} /> {importing ? "Lendo comprovante…" : "Importar documento"}
+          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing || scopedAccounts.length === 0} />
+        </label>
+        <Button onClick={() => { setAiNote(""); setModal({}); }} disabled={scopedAccounts.length === 0}><Plus size={15} /> Novo lançamento</Button>
       </Header>
       {scopedAccounts.length === 0 && (
         <p className="text-sm px-1" style={{ color: COLORS.inkSoft }}>Cadastre uma conta antes de lançar movimentos bancários.</p>
+      )}
+      {importError && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+          <AlertTriangle size={15} /> {importError}
+        </div>
       )}
       <Card className="overflow-x-auto">
         {sorted.length === 0 ? (
@@ -2367,12 +2768,12 @@ function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categor
           </table>
         )}
       </Card>
-      {modal && <BankEntryModal initial={modal} accounts={scopedAccounts} categories={categories} onClose={() => setModal(null)} onSubmit={submit} />}
+      {modal && <BankEntryModal initial={modal} accounts={scopedAccounts} categories={categories} aiNote={aiNote} onClose={() => { setModal(null); setAiNote(""); }} onSubmit={submit} />}
     </div>
   );
 }
 
-function BankEntryModal({ initial, accounts, categories, suggestion, onClose, onSubmit }) {
+function BankEntryModal({ initial, accounts, categories, suggestion, aiNote, onClose, onSubmit }) {
   const [form, setForm] = useState({
     data: todayISO(), contaId: accounts[0]?.id || "", tipo: "Saída", categoria: categories[0] || "",
     descricao: "", valor: "", ...initial,
@@ -2384,6 +2785,11 @@ function BankEntryModal({ initial, accounts, categories, suggestion, onClose, on
   };
   return (
     <Modal title={initial.id ? "Editar lançamento" : "Novo lançamento bancário"} onClose={onClose}>
+      {aiNote && (
+        <p className="text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: COLORS.greenSoft, color: COLORS.green }}>
+          {aiNote}
+        </p>
+      )}
       <div className="grid gap-3">
         <Field label="Data"><TextInput type="date" value={form.data} onChange={(e) => setForm({ ...form, data: e.target.value })} /></Field>
         <Field label="Conta">
@@ -3481,9 +3887,66 @@ function matchStatement(systemMovs, statementLines, toleranceDays = 3) {
   return { matches, sysOnly, stmtOnly, alreadyOk };
 }
 
+// Detecta se uma linha do extrato que sobrou ("só no extrato") é, na
+// verdade, uma transferência pra outra conta já cadastrada da MESMA
+// empresa — pra sugerir o preenchimento automático de uma Transferência em
+// vez do operador lançá-la como um Lançamento Bancário avulso. Usa três
+// indícios, do mais pro menos direto (para no primeiro que bater):
+//   1. Número de conta/agência de outra conta cadastrada aparece no texto
+//      da descrição do extrato (o parser de OFX/CSV só extrai texto livre,
+//      não um campo estruturado de conta de destino).
+//   2. Palavra-chave de transferência (TED/DOC/PIX) + banco ou nome da
+//      outra conta aparecem na descrição.
+//   3. Já existe, na outra conta, um lançamento não conciliado de mesmo
+//      valor e tipo oposto em data próxima (ela já foi importada/lançada
+//      antes, só falta ligar as duas pontas).
+// Nunca decide por conta própria — só sugere; o operador confirma no modal
+// antes de qualquer transferência ser criada.
+function detectTransferSuggestion(line, contaId, accounts, payables, receivables, bankEntries, transfers) {
+  const acc = accounts.find((a) => a.id === contaId);
+  if (!acc) return null;
+  const others = accounts.filter((a) => a.id !== contaId && a.empresaId === acc.empresaId);
+  if (others.length === 0) return null;
+
+  const descUpper = (line.descricao || "").toUpperCase();
+  const digitsOnly = descUpper.replace(/\D/g, "");
+
+  for (const other of others) {
+    const contaDigits = (other.contaNum || "").replace(/\D/g, "");
+    if (contaDigits && contaDigits.length >= 4 && digitsOnly.includes(contaDigits)) {
+      return { otherAccountId: other.id, confianca: "alta", motivo: `O número da conta "${other.nome}" (${other.contaNum}) aparece na descrição do extrato.` };
+    }
+  }
+
+  const hasKeyword = /\b(TED|DOC|PIX|TRANSFEREN)/i.test(line.descricao || "");
+  if (hasKeyword) {
+    for (const other of others) {
+      const bancoUpper = (other.banco || "").toUpperCase();
+      const nomeUpper = (other.nome || "").toUpperCase();
+      if ((bancoUpper && descUpper.includes(bancoUpper)) || (nomeUpper && descUpper.includes(nomeUpper))) {
+        return { otherAccountId: other.id, confianca: "média", motivo: `A descrição menciona transferência e cita o banco/nome de "${other.nome}".` };
+      }
+    }
+  }
+
+  const oppositeTipo = line.tipo === "Entrada" ? "Saída" : "Entrada";
+  for (const other of others) {
+    const otherMovs = buildAccountMovements(other.id, payables, receivables, bankEntries, transfers);
+    const candidate = otherMovs.find(
+      (m) => !m.conciliado && m.tipo === oppositeTipo && Math.abs(m.valor - line.valor) < 0.01 && Math.abs(daysBetween(m.data, line.data)) <= 3
+    );
+    if (candidate) {
+      return { otherAccountId: other.id, confianca: "média", motivo: `Já existe um lançamento de ${fmtBRL(candidate.valor)} em "${other.nome}" com data próxima e tipo oposto, ainda não conciliado.` };
+    }
+  }
+
+  return null;
+}
+
 function ReconciliationView({ accounts, payables, receivables, bankEntries, transfers, categories, onSavePayables, onSaveReceivables, onSaveBankEntries, onSaveTransfers }) {
   const [contaId, setContaId] = useState(accounts[0]?.id || "");
   const [draftModal, setDraftModal] = useState(null); // { line, idx, suggestion }
+  const [transferDraft, setTransferDraft] = useState(null); // { line, idx, suggestion }
   useEffect(() => {
     if (!accounts.find((a) => a.id === contaId)) setContaId(accounts[0]?.id || "");
   }, [accounts]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -3557,6 +4020,16 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
     onSaveBankEntries([...bankEntries, novo]);
     setStatementLines((prev) => prev.filter((_, i) => i !== draftModal.idx));
     setDraftModal(null);
+  };
+
+  const openTransferDraft = (line, idx, suggestion) => setTransferDraft({ line, idx, suggestion });
+
+  const submitTransferDraft = (form) => {
+    const acc = accounts.find((a) => a.id === contaId);
+    const novo = { ...form, id: uid(), empresaId: acc?.empresaId, conciliado: true };
+    onSaveTransfers([...transfers, novo]);
+    setStatementLines((prev) => prev.filter((_, i) => i !== transferDraft.idx));
+    setTransferDraft(null);
   };
 
   if (accounts.length === 0) {
@@ -3706,6 +4179,8 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
                     if (!result.stmtOnly.includes(line)) return null;
                     const acc = accounts.find((a) => a.id === contaId);
                     const suggestion = suggestCategoria(line.descricao, acc?.empresaId, bankEntries);
+                    const transferSuggestion = detectTransferSuggestion(line, contaId, accounts, payables, receivables, bankEntries, transfers);
+                    const otherAcc = transferSuggestion && accounts.find((a) => a.id === transferSuggestion.otherAccountId);
                     return (
                       <tr key={idx} style={{ borderTop: `1px solid ${COLORS.border}` }}>
                         <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{fmtDate(line.data)}</td>
@@ -3716,14 +4191,30 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
                               Sugestão: {suggestion.categoria}
                             </span>
                           )}
+                          {transferSuggestion && otherAcc && (
+                            <span className="block text-[11px] mt-0.5" style={{ color: COLORS.gold }}>
+                              Parece transferência com "{otherAcc.nome}" ({transferSuggestion.motivo})
+                            </span>
+                          )}
                         </td>
                         <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: line.tipo === "Entrada" ? COLORS.green : COLORS.red }}>
                           {line.tipo === "Entrada" ? "+" : "−"}{fmtBRL(line.valor)}
                         </td>
                         <td className="px-2 py-1.5 text-right">
-                          <button onClick={() => openDraftModal(line, idx)} className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
-                            <Plus size={12} /> Lançar e conciliar
-                          </button>
+                          <div className="flex justify-end gap-1.5">
+                            {transferSuggestion && otherAcc && (
+                              <button
+                                onClick={() => openTransferDraft(line, idx, transferSuggestion)}
+                                className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full"
+                                style={{ background: COLORS.goldSoft, color: COLORS.gold }}
+                              >
+                                <ArrowLeftRight size={12} /> Confirmar transferência
+                              </button>
+                            )}
+                            <button onClick={() => openDraftModal(line, idx)} className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
+                              <Plus size={12} /> Lançar e conciliar
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -3752,6 +4243,26 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
           onSubmit={submitDraft}
         />
       )}
+      {transferDraft && (() => {
+        const acc = accounts.find((a) => a.id === contaId);
+        const sameEmpresaAccounts = accounts.filter((a) => a.empresaId === acc?.empresaId);
+        const isSaida = transferDraft.line.tipo === "Saída";
+        return (
+          <TransferModal
+            initial={{
+              data: transferDraft.line.data,
+              contaOrigemId: isSaida ? contaId : transferDraft.suggestion.otherAccountId,
+              contaDestinoId: isSaida ? transferDraft.suggestion.otherAccountId : contaId,
+              valor: transferDraft.line.valor,
+              descricao: transferDraft.line.descricao || "Transferência identificada no extrato",
+              empresaId: acc?.empresaId,
+            }}
+            accounts={sameEmpresaAccounts}
+            onClose={() => setTransferDraft(null)}
+            onSubmit={submitTransferDraft}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -3760,8 +4271,8 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
 /*  Lixeira — itens excluídos de qualquer módulo, com opção de restaurar  */
 /* ---------------------------------------------------------------------- */
 function LixeiraView({
-  empresas, payables, receivables, bankEntries, transfers, fiscalObligations,
-  onRestorePayables, onRestoreReceivables, onRestoreBankEntries, onRestoreTransfers, onRestoreFiscal,
+  empresas, payables, receivables, bankEntries, transfers, fiscalObligations, contacts,
+  onRestorePayables, onRestoreReceivables, onRestoreBankEntries, onRestoreTransfers, onRestoreFiscal, onRestoreContacts,
 }) {
   const empresaNome = (id) => empresas.find((e) => e.id === id)?.nome || "—";
 
@@ -3796,6 +4307,12 @@ function LixeiraView({
       empresaId: o.empresaId, deletedAt: o.deletedAt,
       restore: () => onRestoreFiscal(fiscalObligations.map((x) => (x.id === o.id ? { ...x, deletedAt: null } : x))),
     })),
+    ...contacts.filter((c) => c.deletedAt).map((c) => ({
+      id: c.id, tipo: "Contato", icon: Contact, tone: "neutral",
+      titulo: c.nome || "—", valor: null, data: null,
+      empresaId: c.empresaId, deletedAt: c.deletedAt,
+      restore: () => onRestoreContacts(contacts.map((x) => (x.id === c.id ? { ...x, deletedAt: null } : x))),
+    })),
   ].sort((a, b) => (b.deletedAt || "").localeCompare(a.deletedAt || ""));
 
   return (
@@ -3803,7 +4320,7 @@ function LixeiraView({
       <Header title="Lixeira" subtitle="Itens excluídos de qualquer módulo. Nada aqui é apagado de vez — restaure quando quiser." />
       <Card className="overflow-x-auto">
         {items.length === 0 ? (
-          <EmptyState icon={Trash2} title="Lixeira vazia" subtitle="Itens excluídos de Contas a Pagar, a Receber, Lançamentos Bancários, Transferências e Calendário Fiscal aparecem aqui." />
+          <EmptyState icon={Trash2} title="Lixeira vazia" subtitle="Itens excluídos de Contas a Pagar, a Receber, Lançamentos Bancários, Transferências, Calendário Fiscal e Contatos aparecem aqui." />
         ) : (
           <table className="w-full text-sm min-w-[720px]">
             <thead>
@@ -3829,7 +4346,7 @@ function LixeiraView({
                     </td>
                     <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{item.titulo}</td>
                     <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{empresaNome(item.empresaId)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(item.valor)}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{item.valor != null ? fmtBRL(item.valor) : "—"}</td>
                     <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{fmtDate(item.deletedAt?.slice(0, 10))}</td>
                     <td className="px-4 py-2.5 text-right">
                       <button

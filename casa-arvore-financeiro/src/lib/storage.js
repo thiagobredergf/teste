@@ -19,6 +19,7 @@ const TABLE_NAMES = {
   bankEntries: "bankEntries",
   transfers: "transfers",
   fiscalObligations: "fiscalObligations",
+  contacts: "contacts",
 };
 
 // selectedEmpresa é só preferência de navegação de quem está olhando a

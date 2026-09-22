@@ -46,6 +46,7 @@ create table if not exists public.payables (
   "dataLanc" date,
   vencimento date,
   fornecedor text,
+  "contactId" text,
   categoria text,
   descricao text,
   valor numeric,
@@ -65,6 +66,7 @@ create table if not exists public.receivables (
   "dataLanc" date,
   vencimento date,
   cliente text,
+  "contactId" text,
   categoria text,
   descricao text,
   valor numeric,
@@ -75,6 +77,23 @@ create table if not exists public.receivables (
   "contaRecebId" text,
   conciliado boolean not null default false,
   telefone text,
+  "deletedAt" timestamptz,
+  created_at timestamptz not null default now()
+);
+
+-- Cadastro único de terceiros (fornecedores e clientes juntos): a mesma
+-- pessoa/empresa pode aparecer pagando (fornecedor de uma conta a pagar) e
+-- recebendo (cliente de uma conta a receber) — não faz sentido duplicar.
+-- Alimentado automaticamente pelo formulário de Contas a Pagar/Receber (ao
+-- digitar um fornecedor/cliente novo, ou reconhecer um já cadastrado pelo
+-- nome) e também editável direto na tela de Contatos.
+create table if not exists public.contacts (
+  id text primary key,
+  "empresaId" text not null references public.empresas(id) on delete cascade,
+  nome text not null,
+  documento text,
+  contato text,
+  email text,
   "deletedAt" timestamptz,
   created_at timestamptz not null default now()
 );
@@ -204,6 +223,7 @@ alter table public.payables enable row level security;
 alter table public.receivables enable row level security;
 alter table public."bankEntries" enable row level security;
 alter table public.transfers enable row level security;
+alter table public.contacts enable row level security;
 alter table public.categories enable row level security;
 alter table public."fiscalObligations" enable row level security;
 alter table public.profiles enable row level security;
@@ -246,6 +266,11 @@ create policy "bank_entries_access" on public."bankEntries" for all to authentic
 
 drop policy if exists "transfers_access" on public.transfers;
 create policy "transfers_access" on public.transfers for all to authenticated
+  using (public.has_empresa_access(auth.uid(), "empresaId"))
+  with check (public.has_empresa_access(auth.uid(), "empresaId"));
+
+drop policy if exists "contacts_access" on public.contacts;
+create policy "contacts_access" on public.contacts for all to authenticated
   using (public.has_empresa_access(auth.uid(), "empresaId"))
   with check (public.has_empresa_access(auth.uid(), "empresaId"));
 
@@ -304,6 +329,48 @@ select * from (values
 ) as defaults(codigo, nome, natureza)
 where not exists (select 1 from public.categories)
 on conflict (codigo) do nothing;
+
+-- ---------------------------------------------------------------------------
+-- 6. Backfill de contatos (cadastro único fornecedores/clientes)
+-- ---------------------------------------------------------------------------
+-- Num projeto novo isso não encontra nada pra fazer (payables/receivables
+-- ainda vazios) — existe aqui só pra manter este script em dia com a
+-- migração que já rodou no projeto ao vivo: cria um contato pra cada
+-- fornecedor/cliente distinto já lançado (por empresa) e vincula os
+-- lançamentos existentes a ele via "contactId". Idempotente: só cria
+-- contato pra nome sem correspondente ainda, e só atualiza linhas com
+-- "contactId" nulo.
+insert into public.contacts (id, "empresaId", nome, documento, contato, email)
+select
+  'ct-' || md5(random()::text || clock_timestamp()::text),
+  src."empresaId",
+  src.nome,
+  '', '', ''
+from (
+  select distinct "empresaId", trim(fornecedor) as nome from public.payables where fornecedor is not null and trim(fornecedor) <> ''
+  union
+  select distinct "empresaId", trim(cliente) as nome from public.receivables where cliente is not null and trim(cliente) <> ''
+) src
+where not exists (
+  select 1 from public.contacts c
+  where c."empresaId" = src."empresaId" and lower(trim(c.nome)) = lower(src.nome)
+);
+
+update public.payables p
+set "contactId" = c.id
+from public.contacts c
+where p."contactId" is null
+  and p.fornecedor is not null and trim(p.fornecedor) <> ''
+  and c."empresaId" = p."empresaId"
+  and lower(trim(c.nome)) = lower(trim(p.fornecedor));
+
+update public.receivables r
+set "contactId" = c.id
+from public.contacts c
+where r."contactId" is null
+  and r.cliente is not null and trim(r.cliente) <> ''
+  and c."empresaId" = r."empresaId"
+  and lower(trim(c.nome)) = lower(trim(r.cliente));
 
 -- ---------------------------------------------------------------------------
 -- Pronto. Confira o resultado:
