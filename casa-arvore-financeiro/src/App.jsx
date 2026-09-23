@@ -1382,7 +1382,17 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
       setCnpjStatus("");
     } catch (err) {
       setCnpjStatus("error");
-      setCnpjError(err.message || "Falha ao consultar o CNPJ.");
+      // "Failed to fetch" é o erro genérico que o navegador dá quando a
+      // chamada nem chega a completar (ex: o serviço de consulta de CNPJ,
+      // gratuito, respondeu 429 "muitas requisições" sem cabeçalho de CORS,
+      // e o navegador bloqueia sem expor o motivo real pro JS) — troca por
+      // uma explicação que a pessoa realmente consiga agir.
+      const generic = !err.message || /failed to fetch/i.test(err.message);
+      setCnpjError(
+        generic
+          ? "Não consegui buscar agora — o serviço de consulta de CNPJ pode estar temporariamente sobrecarregado. Tente de novo em alguns instantes, ou preencha os campos manualmente."
+          : err.message
+      );
     }
   };
 
