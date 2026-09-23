@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   LayoutDashboard, Wallet, ArrowDownCircle, ArrowUpCircle, Landmark,
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
@@ -110,6 +110,41 @@ const BANCOS_BRASIL = [
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const confirmDelete = (msg) => window.confirm(msg);
+
+const fileToBase64 = (file) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(new Error("Erro lendo o arquivo."));
+    reader.readAsDataURL(file);
+  });
+
+// Chama a Edge Function de extração por IA — usada tanto quando o operador
+// sobe um arquivo direto na tela (Contas a Pagar/Receber/Bancários) quanto
+// quando processa um documento já recebido pelo link de upload sem login
+// (tela Documentos Recebidos), sem duplicar a lógica de erro nas duas.
+async function callExtractDocument(fileBase64, mediaType, context) {
+  const { data, error } = await supabase.functions.invoke("extract-document", {
+    body: { fileBase64, mediaType, context },
+  });
+  if (error) {
+    // O supabase-js só põe uma mensagem genérica em error.message pra
+    // respostas de erro — o motivo de verdade que a função devolveu fica
+    // no corpo da resposta, acessível via error.context (um Response cru).
+    let detail = error.message;
+    if (error.context && typeof error.context.json === "function") {
+      try {
+        const body = await error.context.clone().json();
+        if (body?.error) detail = body.error;
+      } catch {
+        // corpo não era JSON — mantém a mensagem genérica
+      }
+    }
+    throw new Error(detail);
+  }
+  if (!data?.ok) throw new Error(data?.error || "Não consegui ler o documento.");
+  return data.extracted || {};
+}
 
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -313,6 +348,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [saveError, setSaveError] = useState(null);
   const [navQuery, setNavQuery] = useState("");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [pendingImport, setPendingImport] = useState(null); // { id, context, fileBase64, mediaType }
+  const [inboxError, setInboxError] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -355,6 +392,32 @@ function FinanceiroApp({ userEmail, onLogout }) {
     setSelectedEmpresa(id);
     saveKey("selectedEmpresa", id);
   }, []);
+
+  // Processa um documento já recebido pelo link de upload sem login: baixa
+  // o arquivo do Storage, navega pra tela de destino e entrega o base64 já
+  // pronto pra ela extrair com IA — o mesmo caminho que "Importar
+  // documento" usa quando o arquivo vem direto do computador do operador.
+  const processInboxDocument = async (upload, context) => {
+    setInboxError("");
+    try {
+      const { data, error } = await supabase.storage.from("documentos-recebidos").createSignedUrl(upload.storagePath, 120);
+      if (error) throw new Error(error.message);
+      const res = await fetch(data.signedUrl);
+      if (!res.ok) throw new Error("Não consegui baixar o arquivo.");
+      const blob = await res.blob();
+      const fileBase64 = await fileToBase64(blob);
+      const viewFor = { payable: "payables", receivable: "receivables", bankEntry: "bank" }[context];
+      setPendingImport({ id: upload.id, context, fileBase64, mediaType: upload.mediaType });
+      setView(viewFor);
+    } catch (err) {
+      setInboxError(err?.message || "Erro ao processar o documento.");
+    }
+  };
+
+  const handleImportProcessed = (uploadId) => {
+    setPendingImport(null);
+    persist("documentUploads", documentUploads.map((u) => (u.id === uploadId ? { ...u, status: "processado" } : u)), setDocumentUploads);
+  };
 
   const allCategoryNames = useMemo(
     () => [...categories.receitas.map((c) => c.nome), ...categories.despesas.map((c) => c.nome)],
@@ -822,6 +885,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 contacts={contacts}
                 onSaveContacts={(v) => persist("contacts", v, setContacts)}
                 onSave={(v) => persist("payables", v, setPayables)}
+                pendingImport={pendingImport?.context === "payable" ? pendingImport : null}
+                onImportProcessed={handleImportProcessed}
               />
             )}
 
@@ -835,6 +900,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 contacts={contacts}
                 onSaveContacts={(v) => persist("contacts", v, setContacts)}
                 onSave={(v) => persist("receivables", v, setReceivables)}
+                pendingImport={pendingImport?.context === "receivable" ? pendingImport : null}
+                onImportProcessed={handleImportProcessed}
               />
             )}
 
@@ -846,6 +913,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 selectedEmpresa={selectedEmpresa}
                 categories={allCategoryNames}
                 onSave={(v) => persist("bankEntries", v, setBankEntries)}
+                pendingImport={pendingImport?.context === "bankEntry" ? pendingImport : null}
+                onImportProcessed={handleImportProcessed}
               />
             )}
 
@@ -912,6 +981,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
                 onSave={(v) => persist("documentUploads", v, setDocumentUploads)}
+                onProcess={processInboxDocument}
+                processError={inboxError}
               />
             )}
 
@@ -1874,7 +1945,10 @@ function StatusSummary({ items, statuses }) {
 /* ---------------------------------------------------------------------- */
 /*  Contas a Pagar                                                         */
 /* ---------------------------------------------------------------------- */
-function PayablesView({ payables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave }) {
+function PayablesView({
+  payables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
+  pendingImport, onImportProcessed,
+}) {
   const [modal, setModal] = useState(null);
   const [payModal, setPayModal] = useState(null);
   const [scheduleModal, setScheduleModal] = useState(false);
@@ -1887,6 +1961,43 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
   const [aiNote, setAiNote] = useState("");
   const [installmentsReview, setInstallmentsReview] = useState(null);
 
+  const processExtractedDocument = async (fileBase64, mediaType) => {
+    const ex = await callExtractDocument(fileBase64, mediaType, "payable");
+    const categoriaMatch = categories.find((c) => c.nome === ex.categoria_sugerida)?.nome;
+    const parcelas = Array.isArray(ex.parcelas) && ex.parcelas.length > 0 ? ex.parcelas : [ex];
+    const empresaId = selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id;
+
+    if (parcelas.length > 1) {
+      // Parcelas com valor/vencimento próprios (ex: carnê de IPTU) — nunca
+      // passa pelo "Recorrente"/"Parcelas" do formulário, que repete valor
+      // e soma meses a partir de uma data-base. Aqui cada linha guarda o
+      // que a IA leu, pro operador conferir uma a uma antes de criar todas.
+      setInstallmentsReview({
+        party: ex.contraparte || "",
+        categoria: categoriaMatch || categories[0]?.nome || "",
+        empresaId,
+        rows: parcelas.map((p, i) => ({
+          numero: p.numero ?? i + 1,
+          valor: p.valor != null ? String(p.valor) : "",
+          vencimento: p.vencimento || "",
+          descricao: p.descricao || `Parcela ${p.numero ?? i + 1}/${parcelas.length}`,
+        })),
+      });
+    } else {
+      const p = parcelas[0] || {};
+      setAiNote("Dados extraídos automaticamente do documento — confira antes de salvar.");
+      setModal({
+        empresaId,
+        fornecedor: ex.contraparte || "",
+        valor: p.valor != null ? String(p.valor) : "",
+        vencimento: p.vencimento || todayISO(),
+        dataLanc: todayISO(),
+        descricao: p.descricao || "",
+        ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
+      });
+    }
+  };
+
   const handleImportDocument = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -1894,73 +2005,39 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
     setImportError("");
     setImporting(true);
     try {
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error("Erro lendo o arquivo."));
-        reader.readAsDataURL(file);
-      });
-      const fileBase64 = dataUrl.split(",")[1] || "";
-      const { data, error } = await supabase.functions.invoke("extract-document", {
-        body: { fileBase64, mediaType: file.type, context: "payable" },
-      });
-      if (error) {
-        // O supabase-js só põe uma mensagem genérica em error.message pra
-        // respostas de erro — o motivo de verdade que a função devolveu
-        // (ex: "ANTHROPIC_API_KEY não configurada") fica no corpo da
-        // resposta, acessível via error.context (um Response cru).
-        let detail = error.message;
-        if (error.context && typeof error.context.json === "function") {
-          try {
-            const body = await error.context.clone().json();
-            if (body?.error) detail = body.error;
-          } catch {
-            // corpo não era JSON — mantém a mensagem genérica
-          }
-        }
-        throw new Error(detail);
-      }
-      if (!data?.ok) throw new Error(data?.error || "Não consegui ler o documento.");
-      const ex = data.extracted || {};
-      const categoriaMatch = categories.find((c) => c.nome === ex.categoria_sugerida)?.nome;
-      const parcelas = Array.isArray(ex.parcelas) && ex.parcelas.length > 0 ? ex.parcelas : [ex];
-      const empresaId = selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id;
-
-      if (parcelas.length > 1) {
-        // Parcelas com valor/vencimento próprios (ex: carnê de IPTU) — nunca
-        // passa pelo "Recorrente"/"Parcelas" do formulário, que repete valor
-        // e soma meses a partir de uma data-base. Aqui cada linha guarda o
-        // que a IA leu, pro operador conferir uma a uma antes de criar todas.
-        setInstallmentsReview({
-          party: ex.contraparte || "",
-          categoria: categoriaMatch || categories[0]?.nome || "",
-          empresaId,
-          rows: parcelas.map((p, i) => ({
-            numero: p.numero ?? i + 1,
-            valor: p.valor != null ? String(p.valor) : "",
-            vencimento: p.vencimento || "",
-            descricao: p.descricao || `Parcela ${p.numero ?? i + 1}/${parcelas.length}`,
-          })),
-        });
-      } else {
-        const p = parcelas[0] || {};
-        setAiNote("Dados extraídos automaticamente do documento — confira antes de salvar.");
-        setModal({
-          empresaId,
-          fornecedor: ex.contraparte || "",
-          valor: p.valor != null ? String(p.valor) : "",
-          vencimento: p.vencimento || todayISO(),
-          dataLanc: todayISO(),
-          descricao: p.descricao || "",
-          ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
-        });
-      }
+      const fileBase64 = await fileToBase64(file);
+      await processExtractedDocument(fileBase64, file.type);
     } catch (err) {
       setImportError(err?.message || "Erro ao importar o documento.");
     } finally {
       setImporting(false);
     }
   };
+
+  // Documento processado direto da caixa de entrada (link de upload sem
+  // login) — o arquivo já vem baixado do Storage pelo FinanceiroApp. Só
+  // marca o item como "processado" quando o lançamento resultante for de
+  // fato salvo (ver submit/onConfirm mais abaixo) — nunca só por ter
+  // aberto o modal de confirmação, senão um cancelamento faria o sistema
+  // "esquecer" um boleto que nunca chegou a virar lançamento.
+  const processedImportIds = useRef(new Set());
+  const pendingUploadRef = useRef(null);
+  useEffect(() => {
+    if (!pendingImport || processedImportIds.current.has(pendingImport.id)) return;
+    processedImportIds.current.add(pendingImport.id);
+    (async () => {
+      setImportError("");
+      setImporting(true);
+      try {
+        await processExtractedDocument(pendingImport.fileBase64, pendingImport.mediaType);
+        pendingUploadRef.current = pendingImport.id;
+      } catch (err) {
+        setImportError(err?.message || "Erro ao importar o documento.");
+      } finally {
+        setImporting(false);
+      }
+    })();
+  }, [pendingImport]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const withDerived = payables
     .filter((p) => !p.deletedAt && (selectedEmpresa === "all" || p.empresaId === selectedEmpresa))
@@ -1997,6 +2074,10 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
       onSave([...payables, ...withContact.map((f) => ({ ...f, id: uid() }))]);
     }
     setModal(null);
+    if (pendingUploadRef.current) {
+      onImportProcessed?.(pendingUploadRef.current);
+      pendingUploadRef.current = null;
+    }
   };
 
   const remove = (id) => {
@@ -2098,7 +2179,11 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
       </Card>
 
       {modal && (
-        <PayableModal initial={modal} categories={categories} empresas={empresas} contacts={contacts} aiNote={aiNote} onClose={() => { setModal(null); setAiNote(""); }} onSubmit={submit} />
+        <PayableModal
+          initial={modal} categories={categories} empresas={empresas} contacts={contacts} aiNote={aiNote}
+          onClose={() => { setModal(null); setAiNote(""); pendingUploadRef.current = null; }}
+          onSubmit={submit}
+        />
       )}
       {installmentsReview && (
         <InstallmentsReviewModal
@@ -2106,7 +2191,7 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
           categories={categories}
           empresas={empresas}
           partyLabel="Fornecedor"
-          onClose={() => setInstallmentsReview(null)}
+          onClose={() => { setInstallmentsReview(null); pendingUploadRef.current = null; }}
           onConfirm={(rows, party, categoria, empresaId) => {
             const { contacts: nextContacts, contact } = resolveContact(contacts, { nome: party, empresaId });
             if (contact) onSaveContacts(nextContacts);
@@ -2126,6 +2211,10 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
             }));
             onSave([...payables, ...novos]);
             setInstallmentsReview(null);
+            if (pendingUploadRef.current) {
+              onImportProcessed?.(pendingUploadRef.current);
+              pendingUploadRef.current = null;
+            }
           }}
         />
       )}
@@ -2495,7 +2584,10 @@ function ScheduleModal({ title, items, nameField, accounts, empresas, onClose, o
 /* ---------------------------------------------------------------------- */
 /*  Contas a Receber                                                       */
 /* ---------------------------------------------------------------------- */
-function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave }) {
+function ReceivablesView({
+  receivables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
+  pendingImport, onImportProcessed,
+}) {
   const [modal, setModal] = useState(null);
   const [recModal, setRecModal] = useState(null);
   const [search, setSearch] = useState("");
@@ -2507,6 +2599,39 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
   const [aiNote, setAiNote] = useState("");
   const [installmentsReview, setInstallmentsReview] = useState(null);
 
+  const processExtractedDocument = async (fileBase64, mediaType) => {
+    const ex = await callExtractDocument(fileBase64, mediaType, "receivable");
+    const categoriaMatch = categories.find((c) => c.nome === ex.categoria_sugerida)?.nome;
+    const parcelas = Array.isArray(ex.parcelas) && ex.parcelas.length > 0 ? ex.parcelas : [ex];
+    const empresaId = selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id;
+
+    if (parcelas.length > 1) {
+      setInstallmentsReview({
+        party: ex.contraparte || "",
+        categoria: categoriaMatch || categories[0]?.nome || "",
+        empresaId,
+        rows: parcelas.map((p, i) => ({
+          numero: p.numero ?? i + 1,
+          valor: p.valor != null ? String(p.valor) : "",
+          vencimento: p.vencimento || "",
+          descricao: p.descricao || `Parcela ${p.numero ?? i + 1}/${parcelas.length}`,
+        })),
+      });
+    } else {
+      const p = parcelas[0] || {};
+      setAiNote("Dados extraídos automaticamente do documento — confira antes de salvar.");
+      setModal({
+        empresaId,
+        cliente: ex.contraparte || "",
+        valor: p.valor != null ? String(p.valor) : "",
+        vencimento: p.vencimento || todayISO(),
+        dataLanc: todayISO(),
+        descricao: p.descricao || "",
+        ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
+      });
+    }
+  };
+
   const handleImportDocument = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -2514,65 +2639,33 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
     setImportError("");
     setImporting(true);
     try {
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error("Erro lendo o arquivo."));
-        reader.readAsDataURL(file);
-      });
-      const fileBase64 = dataUrl.split(",")[1] || "";
-      const { data, error } = await supabase.functions.invoke("extract-document", {
-        body: { fileBase64, mediaType: file.type, context: "receivable" },
-      });
-      if (error) {
-        let detail = error.message;
-        if (error.context && typeof error.context.json === "function") {
-          try {
-            const body = await error.context.clone().json();
-            if (body?.error) detail = body.error;
-          } catch {
-            // corpo não era JSON — mantém a mensagem genérica
-          }
-        }
-        throw new Error(detail);
-      }
-      if (!data?.ok) throw new Error(data?.error || "Não consegui ler o documento.");
-      const ex = data.extracted || {};
-      const categoriaMatch = categories.find((c) => c.nome === ex.categoria_sugerida)?.nome;
-      const parcelas = Array.isArray(ex.parcelas) && ex.parcelas.length > 0 ? ex.parcelas : [ex];
-      const empresaId = selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id;
-
-      if (parcelas.length > 1) {
-        setInstallmentsReview({
-          party: ex.contraparte || "",
-          categoria: categoriaMatch || categories[0]?.nome || "",
-          empresaId,
-          rows: parcelas.map((p, i) => ({
-            numero: p.numero ?? i + 1,
-            valor: p.valor != null ? String(p.valor) : "",
-            vencimento: p.vencimento || "",
-            descricao: p.descricao || `Parcela ${p.numero ?? i + 1}/${parcelas.length}`,
-          })),
-        });
-      } else {
-        const p = parcelas[0] || {};
-        setAiNote("Dados extraídos automaticamente do documento — confira antes de salvar.");
-        setModal({
-          empresaId,
-          cliente: ex.contraparte || "",
-          valor: p.valor != null ? String(p.valor) : "",
-          vencimento: p.vencimento || todayISO(),
-          dataLanc: todayISO(),
-          descricao: p.descricao || "",
-          ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
-        });
-      }
+      const fileBase64 = await fileToBase64(file);
+      await processExtractedDocument(fileBase64, file.type);
     } catch (err) {
       setImportError(err?.message || "Erro ao importar o documento.");
     } finally {
       setImporting(false);
     }
   };
+
+  const processedImportIds = useRef(new Set());
+  const pendingUploadRef = useRef(null);
+  useEffect(() => {
+    if (!pendingImport || processedImportIds.current.has(pendingImport.id)) return;
+    processedImportIds.current.add(pendingImport.id);
+    (async () => {
+      setImportError("");
+      setImporting(true);
+      try {
+        await processExtractedDocument(pendingImport.fileBase64, pendingImport.mediaType);
+        pendingUploadRef.current = pendingImport.id;
+      } catch (err) {
+        setImportError(err?.message || "Erro ao importar o documento.");
+      } finally {
+        setImporting(false);
+      }
+    })();
+  }, [pendingImport]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const withDerived = receivables
     .filter((r) => !r.deletedAt && (selectedEmpresa === "all" || r.empresaId === selectedEmpresa))
@@ -2609,6 +2702,10 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
       onSave([...receivables, ...withContact.map((f) => ({ ...f, id: uid() }))]);
     }
     setModal(null);
+    if (pendingUploadRef.current) {
+      onImportProcessed?.(pendingUploadRef.current);
+      pendingUploadRef.current = null;
+    }
   };
   const remove = (id) => {
     if (!confirmDelete("Mover esta conta a receber pra lixeira? Você pode restaurar depois, em Lixeira.")) return;
@@ -2697,7 +2794,11 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
       </Card>
 
       {modal && (
-        <ReceivableModal initial={modal} categories={categories} empresas={empresas} contacts={contacts} aiNote={aiNote} onClose={() => { setModal(null); setAiNote(""); }} onSubmit={submit} />
+        <ReceivableModal
+          initial={modal} categories={categories} empresas={empresas} contacts={contacts} aiNote={aiNote}
+          onClose={() => { setModal(null); setAiNote(""); pendingUploadRef.current = null; }}
+          onSubmit={submit}
+        />
       )}
       {installmentsReview && (
         <InstallmentsReviewModal
@@ -2705,7 +2806,7 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
           categories={categories}
           empresas={empresas}
           partyLabel="Cliente"
-          onClose={() => setInstallmentsReview(null)}
+          onClose={() => { setInstallmentsReview(null); pendingUploadRef.current = null; }}
           onConfirm={(rows, party, categoria, empresaId) => {
             const { contacts: nextContacts, contact } = resolveContact(contacts, { nome: party, empresaId });
             if (contact) onSaveContacts(nextContacts);
@@ -2725,6 +2826,10 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
             }));
             onSave([...receivables, ...novos]);
             setInstallmentsReview(null);
+            if (pendingUploadRef.current) {
+              onImportProcessed?.(pendingUploadRef.current);
+              pendingUploadRef.current = null;
+            }
           }}
         />
       )}
@@ -2823,7 +2928,7 @@ function ReceivableModal({ initial, categories, empresas, contacts = [], aiNote,
 /* ---------------------------------------------------------------------- */
 /*  Lançamentos Bancários                                                  */
 /* ---------------------------------------------------------------------- */
-function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categories, onSave }) {
+function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categories, onSave, pendingImport, onImportProcessed }) {
   const [modal, setModal] = useState(null);
   const [aiNote, setAiNote] = useState("");
   const [importing, setImporting] = useState(false);
@@ -2833,6 +2938,10 @@ function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categor
     if (form.id) onSave(entries.map((e) => (e.id === form.id ? form : e)));
     else onSave([...entries, { ...form, id: uid() }]);
     setModal(null);
+    if (pendingUploadRef.current) {
+      onImportProcessed?.(pendingUploadRef.current);
+      pendingUploadRef.current = null;
+    }
   };
   const remove = (id) => {
     if (!confirmDelete("Mover este lançamento pra lixeira? Você pode restaurar depois, em Lixeira.")) return;
@@ -2842,6 +2951,21 @@ function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categor
     .filter((e) => !e.deletedAt && (selectedEmpresa === "all" || e.empresaId === selectedEmpresa))
     .sort((a, b) => (b.data || "").localeCompare(a.data || ""));
 
+  const processExtractedDocument = async (fileBase64, mediaType) => {
+    const ex = await callExtractDocument(fileBase64, mediaType, "bankEntry");
+    const p = (Array.isArray(ex.parcelas) && ex.parcelas[0]) || ex;
+    const categoriaMatch = categories.find((c) => c === ex.categoria_sugerida);
+    setAiNote("Dados extraídos automaticamente do comprovante — confira antes de salvar.");
+    setModal({
+      contaId: scopedAccounts[0]?.id || "",
+      tipo: ex.tipo_lancamento === "Entrada" ? "Entrada" : "Saída",
+      data: p.vencimento || todayISO(),
+      valor: p.valor != null ? String(p.valor) : "",
+      descricao: p.descricao || (ex.contraparte ? `${ex.tipo_lancamento === "Entrada" ? "Recebido de" : "Enviado para"} ${ex.contraparte}` : ""),
+      ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
+    });
+  };
+
   const handleImportDocument = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -2849,47 +2973,33 @@ function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categor
     setImportError("");
     setImporting(true);
     try {
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error("Erro lendo o arquivo."));
-        reader.readAsDataURL(file);
-      });
-      const fileBase64 = dataUrl.split(",")[1] || "";
-      const { data, error } = await supabase.functions.invoke("extract-document", {
-        body: { fileBase64, mediaType: file.type, context: "bankEntry" },
-      });
-      if (error) {
-        let detail = error.message;
-        if (error.context && typeof error.context.json === "function") {
-          try {
-            const body = await error.context.clone().json();
-            if (body?.error) detail = body.error;
-          } catch {
-            // corpo não era JSON — mantém a mensagem genérica
-          }
-        }
-        throw new Error(detail);
-      }
-      if (!data?.ok) throw new Error(data?.error || "Não consegui ler o documento.");
-      const ex = data.extracted || {};
-      const p = (Array.isArray(ex.parcelas) && ex.parcelas[0]) || ex;
-      const categoriaMatch = categories.find((c) => c === ex.categoria_sugerida);
-      setAiNote("Dados extraídos automaticamente do comprovante — confira antes de salvar.");
-      setModal({
-        contaId: scopedAccounts[0]?.id || "",
-        tipo: ex.tipo_lancamento === "Entrada" ? "Entrada" : "Saída",
-        data: p.vencimento || todayISO(),
-        valor: p.valor != null ? String(p.valor) : "",
-        descricao: p.descricao || (ex.contraparte ? `${ex.tipo_lancamento === "Entrada" ? "Recebido de" : "Enviado para"} ${ex.contraparte}` : ""),
-        ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
-      });
+      const fileBase64 = await fileToBase64(file);
+      await processExtractedDocument(fileBase64, file.type);
     } catch (err) {
       setImportError(err?.message || "Erro ao importar o documento.");
     } finally {
       setImporting(false);
     }
   };
+
+  const processedImportIds = useRef(new Set());
+  const pendingUploadRef = useRef(null);
+  useEffect(() => {
+    if (!pendingImport || processedImportIds.current.has(pendingImport.id)) return;
+    processedImportIds.current.add(pendingImport.id);
+    (async () => {
+      setImportError("");
+      setImporting(true);
+      try {
+        await processExtractedDocument(pendingImport.fileBase64, pendingImport.mediaType);
+        pendingUploadRef.current = pendingImport.id;
+      } catch (err) {
+        setImportError(err?.message || "Erro ao importar o documento.");
+      } finally {
+        setImporting(false);
+      }
+    })();
+  }, [pendingImport]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-4">
@@ -2955,7 +3065,13 @@ function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categor
           </table>
         )}
       </Card>
-      {modal && <BankEntryModal initial={modal} accounts={scopedAccounts} categories={categories} aiNote={aiNote} onClose={() => { setModal(null); setAiNote(""); }} onSubmit={submit} />}
+      {modal && (
+        <BankEntryModal
+          initial={modal} accounts={scopedAccounts} categories={categories} aiNote={aiNote}
+          onClose={() => { setModal(null); setAiNote(""); pendingUploadRef.current = null; }}
+          onSubmit={submit}
+        />
+      )}
     </div>
   );
 }
@@ -4457,7 +4573,11 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
 /* ---------------------------------------------------------------------- */
 /*  Documentos Recebidos — caixa de entrada do link de upload sem login   */
 /* ---------------------------------------------------------------------- */
-function DocumentUploadsView({ uploads, empresas, selectedEmpresa, onSave }) {
+function DocumentUploadsView({ uploads, empresas, selectedEmpresa, onSave, onProcess, processError }) {
+  const [preview, setPreview] = useState(null); // { item, url }
+  const [previewError, setPreviewError] = useState("");
+  const [processing, setProcessing] = useState(false);
+
   const visible = uploads
     .filter((u) => selectedEmpresa === "all" || u.empresaId === selectedEmpresa)
     .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
@@ -4467,18 +4587,33 @@ function DocumentUploadsView({ uploads, empresas, selectedEmpresa, onSave }) {
     if (!confirmDelete("Excluir este documento da caixa de entrada? O arquivo enviado não pode ser recuperado depois.")) return;
     onSave(uploads.filter((u) => u.id !== id));
   };
-  const handleView = async (item) => {
-    const { data, error } = await supabase.storage.from("documentos-recebidos").createSignedUrl(item.storagePath, 120);
+
+  const openPreview = async (item) => {
+    setPreviewError("");
+    setPreview({ item, url: null });
+    const { data, error } = await supabase.storage.from("documentos-recebidos").createSignedUrl(item.storagePath, 300);
     if (error) {
-      alert("Não consegui abrir o arquivo: " + error.message);
+      setPreviewError("Não consegui abrir o arquivo: " + error.message);
       return;
     }
-    window.open(data.signedUrl, "_blank");
+    setPreview({ item, url: data.signedUrl });
+  };
+
+  const handleProcess = async (context) => {
+    setProcessing(true);
+    await onProcess(preview.item, context);
+    setProcessing(false);
+    setPreview(null);
   };
 
   return (
     <div className="space-y-4">
       <Header title="Documentos Recebidos" subtitle="Arquivos que os clientes enviaram pelo link de upload, sem precisar logar no sistema." />
+      {processError && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+          <AlertTriangle size={15} /> {processError}
+        </div>
+      )}
       <Card className="overflow-x-auto">
         {visible.length === 0 ? (
           <EmptyState
@@ -4500,7 +4635,11 @@ function DocumentUploadsView({ uploads, empresas, selectedEmpresa, onSave }) {
             <tbody>
               {visible.map((u) => (
                 <tr key={u.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{u.fileName}</td>
+                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>
+                    <button onClick={() => openPreview(u)} className="hover:underline text-left" title="Visualizar documento e classificar">
+                      {u.fileName}
+                    </button>
+                  </td>
                   {selectedEmpresa === "all" && <td className="px-4 py-2.5"><EmpresaTag empresas={empresas} empresaId={u.empresaId} /></td>}
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{timeAgo(u.created_at)}</td>
                   <td className="px-4 py-2.5">
@@ -4508,7 +4647,7 @@ function DocumentUploadsView({ uploads, empresas, selectedEmpresa, onSave }) {
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
-                      <button onClick={() => handleView(u)} title="Ver/baixar arquivo" className="p-1.5 rounded-md hover:bg-black/5">
+                      <button onClick={() => openPreview(u)} title="Visualizar documento e classificar" className="p-1.5 rounded-md hover:bg-black/5">
                         <FileText size={14} color={COLORS.inkSoft} />
                       </button>
                       <button
@@ -4529,6 +4668,41 @@ function DocumentUploadsView({ uploads, empresas, selectedEmpresa, onSave }) {
           </table>
         )}
       </Card>
+
+      {preview && (
+        <Modal title={preview.item.fileName} onClose={() => setPreview(null)} wide>
+          {previewError && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm mb-3" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+              <AlertTriangle size={15} /> {previewError}
+            </div>
+          )}
+          <div className="rounded-lg overflow-hidden mb-4" style={{ border: `1px solid ${COLORS.border}`, background: "#FAFAF7", height: "60vh" }}>
+            {!preview.url ? (
+              <div className="w-full h-full flex items-center justify-center">
+                <p className="text-sm" style={{ color: COLORS.inkSoft }}>Carregando…</p>
+              </div>
+            ) : preview.item.mediaType === "application/pdf" ? (
+              <iframe src={preview.url} title={preview.item.fileName} className="w-full h-full" style={{ border: "none" }} />
+            ) : (
+              <img src={preview.url} alt={preview.item.fileName} className="w-full h-full object-contain" />
+            )}
+          </div>
+          <p className="text-sm mb-2 font-medium" style={{ color: COLORS.ink }}>Classificar como:</p>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => handleProcess("payable")} disabled={processing}>
+              <ArrowUpCircle size={15} /> Conta a Pagar
+            </Button>
+            <Button onClick={() => handleProcess("receivable")} disabled={processing}>
+              <ArrowDownCircle size={15} /> Conta a Receber
+            </Button>
+            <Button onClick={() => handleProcess("bankEntry")} disabled={processing}>
+              <Wallet size={15} /> Lançamento Bancário
+            </Button>
+            <Button variant="ghost" onClick={() => setPreview(null)} disabled={processing}>Cancelar</Button>
+          </div>
+          {processing && <p className="text-xs mt-2" style={{ color: COLORS.inkSoft }}>Lendo documento com IA…</p>}
+        </Modal>
+      )}
     </div>
   );
 }
