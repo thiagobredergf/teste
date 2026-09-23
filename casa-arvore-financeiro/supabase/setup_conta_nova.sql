@@ -27,6 +27,7 @@ create table if not exists public.empresas (
   proprietario text,
   "contatoEmail" text,
   "contatoCelular" text,
+  "regimeTributario" text,
   "uploadToken" text unique not null default gen_random_uuid()::text,
   ativa boolean not null default true,
   created_at timestamptz not null default now()

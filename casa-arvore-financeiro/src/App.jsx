@@ -91,6 +91,12 @@ const SEGMENTOS_EMPRESA = [
   "Outros",
 ];
 
+// Regime tributário da empresa — usado pra sugerir automaticamente as
+// obrigações fiscais que se aplicam a ela (ver FISCAL_RULES): Simples só
+// paga o DAS, já Lucro Presumido/Real também têm IRPJ/CSLL/PIS/COFINS/INSS
+// separados, por exemplo.
+const REGIMES_TRIBUTARIOS = ["Simples Nacional", "MEI", "Lucro Presumido", "Lucro Real"];
+
 // Principais bancos do Brasil (código + nome) — usados no cadastro de
 // Contas pra padronizar o nome do banco (ajuda, por exemplo, a detecção
 // automática de transferência entre contas na Conciliação Bancária).
@@ -971,7 +977,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
               <FiscalView
                 obligations={fiscalObligations}
                 accounts={accounts}
-                empresas={empresas}
+                empresas={empresasAtivas}
                 selectedEmpresa={selectedEmpresa}
                 onSave={(v) => persist("fiscalObligations", v, setFiscalObligations)}
               />
@@ -1546,6 +1552,12 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
           <Select value={form.segmento || ""} onChange={(e) => setForm({ ...form, segmento: e.target.value })}>
             <option value="">Selecione…</option>
             {SEGMENTOS_EMPRESA.map((s) => <option key={s} value={s}>{s}</option>)}
+          </Select>
+        </Field>
+        <Field label="Regime tributário (pra sugerir o Calendário Fiscal certo)">
+          <Select value={form.regimeTributario || ""} onChange={(e) => setForm({ ...form, regimeTributario: e.target.value })}>
+            <option value="">Selecione…</option>
+            {REGIMES_TRIBUTARIOS.map((r) => <option key={r} value={r}>{r}</option>)}
           </Select>
         </Field>
         <Field label="Proprietário">
@@ -3229,17 +3241,114 @@ const TRIBUTOS_COMUNS = ["DAS", "ISS", "INSS", "FGTS", "IRPJ", "CSLL", "PIS", "C
 function competenciaLabel(c) {
   if (!c) return "—";
   const [y, m] = c.split("-");
+  if (!m) return y; // competência anual (ex.: ECD/ECF), sem mês/trimestre
   return `${MONTHS[Number(m) - 1] || m}/${y}`;
 }
 
-function FiscalView({ obligations, accounts, selectedEmpresa, onSave }) {
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+function isoDate(y, m, d) {
+  return `${y}-${pad2(m)}-${pad2(d)}`;
+}
+// Soma "delta" meses ao mês m (1-12) do ano y, ajustando o ano quando passa
+// de dezembro/janeiro.
+function addMonths(y, m, delta) {
+  const total = m - 1 + delta;
+  return { y: y + Math.floor(total / 12), m: (((total % 12) + 12) % 12) + 1 };
+}
+// Aproximação de "último dia útil do mês" sem calendário de feriados —
+// só pula sábado/domingo, que é o que o analista mais frequentemente
+// precisa ajustar mesmo (feriado municipal/estadual ele corrige na mão).
+function lastBusinessDayISO(y, m) {
+  const d = new Date(y, m, 0); // dia 0 do mês seguinte = último dia de m
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+  return isoDate(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+
+// Calendário fiscal "de fábrica" — ponto de partida pra sugerir as
+// obrigações mais comuns, a partir do regime tributário da empresa.
+// Nunca é lançado direto: toda sugestão nasce com status "Sugerido" e só
+// passa a valer quando o analista confirma (Validar) ou ajusta e confirma
+// (Editar) — ISS e ICMS, por exemplo, variam por município/estado e o
+// vencimento sugerido aqui é só uma aproximação que precisa ser checada.
+const FISCAL_RULES = [
+  { tributo: "FGTS e eSocial", periodicidade: "mensal", diaVencimento: 20, mesesDepois: 1, regimes: null,
+    descricao: "Vencimento até o dia 20 do mês seguinte à competência." },
+  { tributo: "INSS (DCTFWeb)", periodicidade: "mensal", diaVencimento: 20, mesesDepois: 1, regimes: ["Lucro Presumido", "Lucro Real"],
+    descricao: "Vencimento até o dia 20 do mês seguinte à competência." },
+  { tributo: "Simples Nacional (DAS)", periodicidade: "mensal", diaVencimento: 20, mesesDepois: 1, regimes: ["Simples Nacional", "MEI"],
+    descricao: "Vencimento até o dia 20 do mês seguinte à competência." },
+  { tributo: "PIS e COFINS", periodicidade: "mensal", diaVencimento: 25, mesesDepois: 1, regimes: ["Lucro Presumido", "Lucro Real"],
+    descricao: "Vencimento geralmente até o dia 25 do mês seguinte à competência." },
+  { tributo: "ISS", periodicidade: "mensal", diaVencimento: null, mesesDepois: 1, regimes: null,
+    descricao: "Conforme o calendário do município — confira e informe a data antes de validar." },
+  { tributo: "ICMS", periodicidade: "mensal", diaVencimento: null, mesesDepois: 1, regimes: ["Lucro Presumido", "Lucro Real"],
+    descricao: "Conforme o calendário do estado — confira e informe a data antes de validar." },
+  { tributo: "IRPJ e CSLL", periodicidade: "trimestral", mesesDepois: 1, regimes: ["Lucro Presumido", "Lucro Real"],
+    descricao: "Pagamento até o último dia útil do mês seguinte ao trimestre encerrado." },
+  { tributo: "ECD (Escrituração Contábil Digital)", periodicidade: "anual", vencimentoFixo: "05-31", anoSeguinte: true, regimes: ["Lucro Presumido", "Lucro Real"],
+    descricao: "Prazo limite em 31/05 do ano seguinte ao ano-calendário." },
+  { tributo: "ECF (Escrituração Contábil Fiscal)", periodicidade: "anual", vencimentoFixo: "07-31", anoSeguinte: true, regimes: ["Lucro Presumido", "Lucro Real"],
+    descricao: "Prazo limite em 31/07 do ano seguinte ao ano-calendário." },
+  { tributo: "Opção pelo Simples Nacional", periodicidade: "anual", vencimentoFixo: "01-31", anoSeguinte: false, regimes: null,
+    descricao: "Prazo até o final de janeiro pra quem quiser mudar de regime tributário." },
+];
+
+// Gera as sugestões de obrigações fiscais de um ano pra uma empresa, a
+// partir do regime tributário dela — pulando o que já existe (mesmo
+// tributo + competência), pra poder chamar de novo sem duplicar.
+function buildFiscalSuggestions(empresa, existing, year) {
+  const regime = empresa?.regimeTributario || null;
+  const applies = (regimes) => !regimes || !regime || regimes.includes(regime);
+  const existingKeys = new Set(
+    existing.filter((o) => o.empresaId === empresa.id).map((o) => `${o.tributo}|${o.competencia}`)
+  );
+  const out = [];
+
+  for (const rule of FISCAL_RULES) {
+    if (!applies(rule.regimes)) continue;
+
+    if (rule.periodicidade === "mensal") {
+      for (let mes = 1; mes <= 12; mes++) {
+        const competencia = `${year}-${pad2(mes)}`;
+        if (existingKeys.has(`${rule.tributo}|${competencia}`)) continue;
+        const vencimento = rule.diaVencimento
+          ? (() => { const { y, m } = addMonths(year, mes, rule.mesesDepois || 0); return isoDate(y, m, rule.diaVencimento); })()
+          : null;
+        out.push({ empresaId: empresa.id, competencia, vencimento, tributo: rule.tributo, descricao: rule.descricao, valor: null, status: "Sugerido" });
+      }
+    } else if (rule.periodicidade === "trimestral") {
+      for (let q = 1; q <= 4; q++) {
+        const competencia = `${year}-Q${q}`;
+        if (existingKeys.has(`${rule.tributo}|${competencia}`)) continue;
+        const { y, m } = addMonths(year, q * 3, rule.mesesDepois || 1);
+        out.push({ empresaId: empresa.id, competencia, vencimento: lastBusinessDayISO(y, m), tributo: rule.tributo, descricao: rule.descricao, valor: null, status: "Sugerido" });
+      }
+    } else if (rule.periodicidade === "anual") {
+      const competencia = String(year);
+      if (existingKeys.has(`${rule.tributo}|${competencia}`)) continue;
+      const [mm, dd] = rule.vencimentoFixo.split("-").map(Number);
+      out.push({ empresaId: empresa.id, competencia, vencimento: isoDate(rule.anoSeguinte ? year + 1 : year, mm, dd), tributo: rule.tributo, descricao: rule.descricao, valor: null, status: "Sugerido" });
+    }
+  }
+  return out;
+}
+
+function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }) {
   const [modal, setModal] = useState(null);
   const [payModal, setPayModal] = useState(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
 
-  const withDerived = obligations
-    .filter((o) => !o.deletedAt && o.empresaId === selectedEmpresa)
+  const empresa = empresas.find((e) => e.id === selectedEmpresa) || null;
+  const scoped = obligations.filter((o) => !o.deletedAt && o.empresaId === selectedEmpresa);
+  const suggestions = scoped
+    .filter((o) => o.status === "Sugerido")
+    .sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""));
+
+  const withDerived = scoped
+    .filter((o) => o.status !== "Sugerido")
     .map((o) => {
       let statusDisplay = o.status;
       if (o.status !== "Pago" && (o.vencimento || "") < todayISO()) statusDisplay = "Atrasado";
@@ -3254,8 +3363,11 @@ function FiscalView({ obligations, accounts, selectedEmpresa, onSave }) {
   }).sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""));
 
   const submit = (form) => {
-    if (form.id) onSave(obligations.map((o) => (o.id === form.id ? form : o)));
-    else onSave([...obligations, { ...form, id: uid() }]);
+    // Editar uma sugestão e salvar já vale como revisão/confirmação dela —
+    // "Sugerido" só existe até alguém olhar pro dado, nunca fica pendurado.
+    const clean = form.status === "Sugerido" ? { ...form, status: "Pendente" } : form;
+    if (clean.id) onSave(obligations.map((o) => (o.id === clean.id ? clean : o)));
+    else onSave([...obligations, { ...clean, id: uid() }]);
     setModal(null);
   };
   const remove = (id) => {
@@ -3266,16 +3378,74 @@ function FiscalView({ obligations, accounts, selectedEmpresa, onSave }) {
     onSave(obligations.map((o) => (o.id === id ? { ...o, status: "Pago", dataPagamento, valor, contaId } : o)));
     setPayModal(null);
   };
+  const validateSuggestion = (id) => {
+    onSave(obligations.map((o) => (o.id === id ? { ...o, status: "Pendente" } : o)));
+  };
+  const discardSuggestion = (id) => {
+    onSave(obligations.map((o) => (o.id === id ? { ...o, deletedAt: new Date().toISOString() } : o)));
+  };
+  const generateSuggestions = () => {
+    const year = new Date().getFullYear();
+    const news = buildFiscalSuggestions(empresa, obligations, year);
+    if (news.length === 0) {
+      alert("Nenhuma obrigação nova pra sugerir — as obrigações desse ano já foram geradas ou já existem.");
+      return;
+    }
+    onSave([...obligations, ...news.map((n) => ({ ...n, id: uid() }))]);
+  };
 
   const total = filtered.reduce((s, o) => s + Number(o.valor || 0), 0);
 
   return (
     <div className="space-y-4">
       <Header title="Calendário Fiscal" subtitle={`${filtered.length} obrigação(ões) · ${fmtBRL(total)}`}>
+        <Button variant="ghost" onClick={generateSuggestions} title="Sugere as obrigações do ano a partir do regime tributário da empresa">
+          <Sparkles size={15} /> Gerar obrigações do ano
+        </Button>
         <Button onClick={() => setModal({ empresaId: selectedEmpresa })}>
           <Plus size={15} /> Nova obrigação
         </Button>
       </Header>
+
+      {!empresa?.regimeTributario && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
+          <AlertTriangle size={15} />
+          Defina o regime tributário desta empresa em Cadastros → Editar empresa, pra sugestões mais precisas (algumas obrigações valem só pra Simples Nacional, outras só pra Lucro Presumido/Real).
+        </div>
+      )}
+
+      {suggestions.length > 0 && (
+        <Card className="p-4" style={{ background: COLORS.goldSoft, border: `1px solid ${COLORS.gold}` }}>
+          <p className="text-sm font-semibold mb-1" style={{ color: COLORS.ink }}>
+            {suggestions.length} sugestão(ões) de obrigação fiscal pra revisar
+          </p>
+          <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+            Geradas a partir do regime tributário — confira os dados (principalmente ISS/ICMS, que variam por município/estado) e valide, edite ou descarte cada uma.
+          </p>
+          <div className="space-y-1.5">
+            {suggestions.map((o) => (
+              <div key={o.id} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2" style={{ background: "#fff" }}>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium" style={{ color: COLORS.ink }}>
+                    {o.tributo} <span style={{ color: COLORS.inkSoft, fontWeight: 400 }}>· {competenciaLabel(o.competencia)}</span>
+                  </p>
+                  <p className="text-xs" style={{ color: COLORS.inkSoft }}>
+                    {o.vencimento ? `Vence em ${fmtDate(o.vencimento)}` : "Defina a data de vencimento"} — {o.descricao}
+                  </p>
+                </div>
+                <div className="flex gap-1 shrink-0">
+                  <button onClick={() => setModal(o)} title="Editar antes de validar" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                  <Button variant="subtle" onClick={() => validateSuggestion(o.id)} disabled={!o.vencimento} title={o.vencimento ? "Confirmar esta obrigação" : "Defina a data de vencimento antes de validar"}>
+                    <Check size={13} /> Validar
+                  </Button>
+                  <button onClick={() => discardSuggestion(o.id)} title="Não se aplica a esta empresa" className="p-1.5 rounded-md hover:bg-black/5"><X size={14} color={COLORS.red} /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       <StatusSummary items={withDerived} statuses={[
         { key: "Pendente", label: "Pendente", tone: "neutral" },
         { key: "Próximo", label: "Próximo (10 dias)", tone: "amber" },
