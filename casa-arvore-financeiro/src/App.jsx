@@ -68,6 +68,45 @@ const DEFAULT_CATEGORIES = {
 
 const EMPRESA_CORES = ["#1F3A34", "#B8912F", "#2F6E8C", "#8C4A2F", "#5B4B8C", "#3E7A4C"];
 
+const SEGMENTOS_EMPRESA = [
+  "Restaurante / Bar",
+  "Clínica / Consultório",
+  "Salão de Beleza / Estética",
+  "Academia / Esportes",
+  "Bazar / Loja de Variedades",
+  "E-commerce",
+  "Farmácia",
+  "Petshop / Veterinária",
+  "Escritório de Advocacia",
+  "Contabilidade",
+  "Construção Civil",
+  "Imobiliária",
+  "Escola / Educação",
+  "Hotel / Pousada",
+  "Oficina Mecânica",
+  "Distribuidora / Atacado",
+  "Tecnologia / Software",
+  "Consultoria",
+  "Transportadora / Logística",
+  "Outros",
+];
+
+// Principais bancos do Brasil (código + nome) — usados no cadastro de
+// Contas pra padronizar o nome do banco (ajuda, por exemplo, a detecção
+// automática de transferência entre contas na Conciliação Bancária).
+const BANCOS_BRASIL = [
+  { codigo: "001", nome: "Banco do Brasil" },
+  { codigo: "033", nome: "Santander" },
+  { codigo: "104", nome: "Caixa Econômica Federal" },
+  { codigo: "237", nome: "Bradesco" },
+  { codigo: "341", nome: "Itaú Unibanco" },
+  { codigo: "260", nome: "Nubank" },
+  { codigo: "077", nome: "Banco Inter" },
+  { codigo: "336", nome: "C6 Bank" },
+  { codigo: "756", nome: "Sicoob" },
+  { codigo: "748", nome: "Sicredi" },
+];
+
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const confirmDelete = (msg) => window.confirm(msg);
@@ -183,7 +222,7 @@ function Card({ children, className = "", style = {} }) {
   );
 }
 
-function Button({ children, onClick, variant = "primary", type = "button", className = "", disabled }) {
+function Button({ children, onClick, variant = "primary", type = "button", className = "", disabled, title }) {
   const base = "inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
   const styles = {
     primary: { background: COLORS.primary, color: "#fff" },
@@ -192,7 +231,7 @@ function Button({ children, onClick, variant = "primary", type = "button", class
     subtle: { background: "#EFEEE8", color: COLORS.ink },
   };
   return (
-    <button type={type} disabled={disabled} onClick={onClick} className={`${base} ${className}`} style={styles[variant]}>
+    <button type={type} disabled={disabled} onClick={onClick} title={title} className={`${base} ${className}`} style={styles[variant]}>
       {children}
     </button>
   );
@@ -231,7 +270,7 @@ function Modal({ title, onClose, children, wide }) {
       >
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
           <h3 className="font-semibold text-base" style={{ color: COLORS.ink }}>{title}</h3>
-          <button onClick={onClose} className="p-1 rounded-md hover:bg-black/5">
+          <button onClick={onClose} title="Fechar" className="p-1 rounded-md hover:bg-black/5">
             <X size={18} color={COLORS.inkSoft} />
           </button>
         </div>
@@ -516,7 +555,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
 
   const RAIL_SECTIONS = [
     { id: "visao", label: "Visão Geral", icon: LayoutDashboard, items: ["gestor", "dashboard", "resumo"] },
-    { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas", "accounts", "contacts"] },
+    { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas", "contacts"] },
     { id: "lancamentos", label: "Lançamentos", icon: Wallet, items: ["payables", "receivables", "bank", "transfers"] },
     { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
     { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "reports", "lixeira"] },
@@ -567,19 +606,22 @@ function FinanceiroApp({ userEmail, onLogout }) {
           <p className="font-semibold text-[15px] leading-tight" style={{ color: COLORS.ink }}>ESEK</p>
           <p className="text-[13px]" style={{ color: COLORS.inkSoft }}>Gestão Financeira</p>
         </div>
-        <div className="px-2 pb-3">
-          <select
-            value={selectedEmpresa}
-            onChange={(e) => changeEmpresa(e.target.value)}
-            className="w-full text-sm rounded-lg px-2.5 py-2 outline-none"
-            style={{ background: COLORS.bg, color: COLORS.ink, border: `1px solid ${COLORS.border}` }}
-          >
-            <option value="all">Todas as empresas</option>
-            {empresasAtivas.map((e) => (
-              <option key={e.id} value={e.id}>{e.nome}</option>
-            ))}
-          </select>
-        </div>
+        {view !== "empresas" && (
+          <div className="px-2 pb-3">
+            <select
+              value={selectedEmpresa}
+              onChange={(e) => changeEmpresa(e.target.value)}
+              className="w-full text-sm rounded-lg px-2.5 py-2 outline-none"
+              style={{ background: COLORS.bg, color: COLORS.ink, border: `1px solid ${COLORS.border}` }}
+              title="Filtrar o sistema por uma empresa, ou ver todas"
+            >
+              <option value="all">Todas as empresas</option>
+              {empresasAtivas.map((e) => (
+                <option key={e.id} value={e.id}>{e.nome}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <p className="px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>
           {searching ? "Resultados" : activeSection.label}
         </p>
@@ -641,7 +683,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
             )}
           </button>
           <div className="relative">
-            <button onClick={() => setUserMenuOpen((v) => !v)} className="flex items-center gap-2">
+            <button onClick={() => setUserMenuOpen((v) => !v)} title="Menu do usuário" className="flex items-center gap-2">
               <span
                 className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold text-white shrink-0"
                 style={{ background: COLORS.primary }}
@@ -738,7 +780,12 @@ function FinanceiroApp({ userEmail, onLogout }) {
             )}
 
             {view === "empresas" && (
-              <EmpresasView empresas={empresas} role={role} onSave={(v) => persist("empresas", v, setEmpresas)} />
+              <EmpresasView
+                empresas={empresas}
+                role={role}
+                onSave={(v) => persist("empresas", v, setEmpresas)}
+                onOpenAccounts={(id) => { changeEmpresa(id); setView("accounts"); }}
+              />
             )}
 
             {view === "accounts" && (
@@ -1139,7 +1186,7 @@ function EmpresaTag({ empresas, empresaId }) {
   );
 }
 
-function EmpresasView({ empresas, role, onSave }) {
+function EmpresasView({ empresas, role, onSave, onOpenAccounts }) {
   const [modal, setModal] = useState(null);
   const isGestor = role === "gestor";
 
@@ -1187,7 +1234,12 @@ function EmpresasView({ empresas, role, onSave }) {
                   </div>
                 </div>
                 <div className="flex gap-1">
-                  <button onClick={() => setModal(e)} className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                  <button onClick={() => onOpenAccounts(e.id)} title="Ver contas bancárias desta empresa" className="p-1.5 rounded-md hover:bg-black/5">
+                    <Landmark size={14} color={COLORS.inkSoft} />
+                  </button>
+                  <button onClick={() => setModal(e)} title="Editar empresa" className="p-1.5 rounded-md hover:bg-black/5">
+                    <Pencil size={14} color={COLORS.inkSoft} />
+                  </button>
                   {isGestor && (
                     <button
                       onClick={() => toggleAtiva(e)}
@@ -1199,6 +1251,17 @@ function EmpresasView({ empresas, role, onSave }) {
                   )}
                 </div>
               </div>
+              {(e.segmento || e.proprietario || e.contatoEmail || e.contatoCelular) && (
+                <div className="pb-3 space-y-0.5">
+                  {e.segmento && <p className="text-xs"><Badge tone="neutral">{e.segmento}</Badge></p>}
+                  {e.proprietario && <p className="text-xs" style={{ color: COLORS.inkSoft }}>Proprietário: {e.proprietario}</p>}
+                  {(e.contatoEmail || e.contatoCelular) && (
+                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>
+                      {[e.contatoEmail, e.contatoCelular].filter(Boolean).join(" · ")}
+                    </p>
+                  )}
+                </div>
+              )}
               {isGestor && <EmpresaOwnersPanel empresa={e} />}
             </Card>
           ))}
@@ -1255,7 +1318,7 @@ function EmpresaOwnersPanel({ empresa }) {
           {owners.map((ownerEmail) => (
             <span key={ownerEmail} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs" style={{ background: "#EFEEE8", color: COLORS.ink }}>
               {ownerEmail}
-              <button onClick={() => removeOwner(ownerEmail)} className="hover:opacity-70"><X size={11} /></button>
+              <button onClick={() => removeOwner(ownerEmail)} title="Remover acesso" className="hover:opacity-70"><X size={11} /></button>
             </span>
           ))}
         </div>
@@ -1356,6 +1419,23 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
         <Field label="Nome da empresa">
           <TextInput value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} placeholder="Ex.: Casa Pôr do Sol" />
         </Field>
+        <Field label="Segmento de atuação">
+          <Select value={form.segmento || ""} onChange={(e) => setForm({ ...form, segmento: e.target.value })}>
+            <option value="">Selecione…</option>
+            {SEGMENTOS_EMPRESA.map((s) => <option key={s} value={s}>{s}</option>)}
+          </Select>
+        </Field>
+        <Field label="Proprietário">
+          <TextInput value={form.proprietario || ""} onChange={(e) => setForm({ ...form, proprietario: e.target.value })} placeholder="Nome do(a) proprietário(a)" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="E-mail de contato">
+            <TextInput type="email" value={form.contatoEmail || ""} onChange={(e) => setForm({ ...form, contatoEmail: e.target.value })} />
+          </Field>
+          <Field label="Celular de contato">
+            <TextInput value={form.contatoCelular || ""} onChange={(e) => setForm({ ...form, contatoCelular: e.target.value })} placeholder="(00) 00000-0000" />
+          </Field>
+        </div>
         <Field label="Cor de identificação">
           <div className="flex gap-2 pt-1">
             {EMPRESA_CORES.map((c) => (
@@ -1363,6 +1443,7 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
                 key={c}
                 type="button"
                 onClick={() => setForm({ ...form, cor: c })}
+                title={`Cor ${c}`}
                 className="w-7 h-7 rounded-full"
                 style={{ background: c, outline: form.cor === c ? `2px solid ${COLORS.ink}` : "none", outlineOffset: 2 }}
               />
@@ -1438,8 +1519,8 @@ function AccountsView({ accounts, empresas, selectedEmpresa, accountBalance, onS
                   {selectedEmpresa === "all" && <div className="pt-1"><EmpresaTag empresas={empresas} empresaId={a.empresaId} /></div>}
                 </div>
                 <div className="flex gap-1">
-                  <button onClick={() => setModal(a)} className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                  <button onClick={() => remove(a.id)} className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                  <button onClick={() => setModal(a)} title="Editar conta" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                  <button onClick={() => remove(a.id)} title="Excluir conta" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
                 </div>
               </div>
               <p className="text-xl font-semibold tabular-nums" style={{ color: accountBalance(a.id) >= 0 ? COLORS.green : COLORS.red }}>
@@ -1463,6 +1544,7 @@ function AccountModal({ initial, empresas, onClose, onSubmit }) {
     nome: "", tipo: "Conta Corrente", banco: "", agencia: "", contaNum: "",
     saldoInicial: 0, dataInicial: todayISO(), empresaId: empresas[0]?.id || "", ...initial,
   });
+  const [bancoOutro, setBancoOutro] = useState(() => !!form.banco && !BANCOS_BRASIL.some((b) => b.nome === form.banco));
   const valid = form.nome.trim() && form.empresaId;
   return (
     <Modal title={initial.id ? "Editar conta" : "Nova conta"} onClose={onClose}>
@@ -1487,7 +1569,27 @@ function AccountModal({ initial, empresas, onClose, onSubmit }) {
           </Select>
         </Field>
         <div className="grid grid-cols-3 gap-3">
-          <Field label="Banco"><TextInput value={form.banco} onChange={(e) => setForm({ ...form, banco: e.target.value })} /></Field>
+          <Field label="Banco">
+            <Select
+              value={bancoOutro ? "outro" : form.banco}
+              onChange={(e) => {
+                if (e.target.value === "outro") { setBancoOutro(true); setForm({ ...form, banco: "" }); }
+                else { setBancoOutro(false); setForm({ ...form, banco: e.target.value }); }
+              }}
+            >
+              <option value="">Selecione…</option>
+              {BANCOS_BRASIL.map((b) => <option key={b.codigo} value={b.nome}>{b.codigo} — {b.nome}</option>)}
+              <option value="outro">Outro banco</option>
+            </Select>
+            {bancoOutro && (
+              <TextInput
+                className="mt-1.5"
+                value={form.banco}
+                onChange={(e) => setForm({ ...form, banco: e.target.value })}
+                placeholder="Nome do banco"
+              />
+            )}
+          </Field>
           <Field label="Agência"><TextInput value={form.agencia} onChange={(e) => setForm({ ...form, agencia: e.target.value })} /></Field>
           <Field label="Conta nº"><TextInput value={form.contaNum} onChange={(e) => setForm({ ...form, contaNum: e.target.value })} /></Field>
         </div>
@@ -1561,8 +1663,8 @@ function ContactsView({ contacts, empresas, selectedEmpresa, onSave }) {
                   {selectedEmpresa === "all" && <td className="px-4 py-2.5"><EmpresaTag empresas={empresas} empresaId={c.empresaId} /></td>}
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
-                      <button onClick={() => setModal(c)} className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                      <button onClick={() => remove(c.id)} className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                      <button onClick={() => setModal(c)} title="Editar contato" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                      <button onClick={() => remove(c.id)} title="Excluir contato" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
                     </div>
                   </td>
                 </tr>
@@ -1903,8 +2005,8 @@ function PayablesView({ payables, accounts, empresas, selectedEmpresa, categorie
                       {p.status !== "Pago" && (
                         <Button variant="subtle" onClick={() => setPayModal(p)}><Check size={13} /> Dar baixa</Button>
                       )}
-                      <button onClick={() => { setAiNote(""); setModal(p); }} className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                      <button onClick={() => remove(p.id)} className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                      <button onClick={() => { setAiNote(""); setModal(p); }} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                      <button onClick={() => remove(p.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
                     </div>
                   </td>
                 </tr>
@@ -2178,7 +2280,7 @@ function InstallmentsReviewModal({ review, categories, empresas, partyLabel = "F
                   <TextInput value={r.descricao} onChange={(e) => updateRow(i, { descricao: e.target.value })} />
                 </td>
                 <td className="px-2 py-1.5">
-                  <button onClick={() => removeRow(i)} className="p-1 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                  <button onClick={() => removeRow(i)} title="Remover parcela" className="p-1 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
                 </td>
               </tr>
             ))}
@@ -2500,8 +2602,8 @@ function ReceivablesView({ receivables, accounts, empresas, selectedEmpresa, cat
                       {r.status !== "Recebido" && (
                         <Button variant="subtle" onClick={() => setRecModal(r)}><Check size={13} /> Dar baixa</Button>
                       )}
-                      <button onClick={() => setModal(r)} className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                      <button onClick={() => remove(r.id)} className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                      <button onClick={() => setModal(r)} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                      <button onClick={() => remove(r.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
                     </div>
                   </td>
                 </tr>
@@ -2757,8 +2859,8 @@ function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categor
                     </td>
                     <td className="px-4 py-2.5">
                       <div className="flex justify-end gap-1">
-                        <button onClick={() => setModal(e)} className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                        <button onClick={() => remove(e.id)} className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                        <button onClick={() => setModal(e)} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                        <button onClick={() => remove(e.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
                       </div>
                     </td>
                   </tr>
@@ -2883,8 +2985,8 @@ function TransfersView({ transfers, accounts, empresas, selectedEmpresa, onSave 
                     <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{t.descricao}</td>
                     <td className="px-4 py-2.5">
                       <div className="flex justify-end gap-1">
-                        <button onClick={() => setModal(t)} className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                        <button onClick={() => remove(t.id)} className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                        <button onClick={() => setModal(t)} title="Editar transferência" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                        <button onClick={() => remove(t.id)} title="Excluir transferência" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
                       </div>
                     </td>
                   </tr>
@@ -3032,8 +3134,8 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }
                       {o.status !== "Pago" && (
                         <Button variant="subtle" onClick={() => setPayModal(o)}><Check size={13} /> Dar baixa</Button>
                       )}
-                      <button onClick={() => setModal(o)} className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                      <button onClick={() => remove(o.id)} className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                      <button onClick={() => setModal(o)} title="Editar obrigação" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                      <button onClick={() => remove(o.id)} title="Excluir obrigação" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
                     </div>
                   </td>
                 </tr>
@@ -3136,7 +3238,7 @@ function CategoriesView({ categories, readOnly, onSave }) {
               <div key={c.codigo} className="flex items-center justify-between text-sm py-1">
                 <span style={{ color: COLORS.ink }}>{c.codigo} · {c.nome}</span>
                 {!readOnly && (
-                  <button onClick={() => removeReceita(c.codigo)} className="p-1 rounded hover:bg-black/5"><Trash2 size={13} color={COLORS.red} /></button>
+                  <button onClick={() => removeReceita(c.codigo)} title="Excluir categoria" className="p-1 rounded hover:bg-black/5"><Trash2 size={13} color={COLORS.red} /></button>
                 )}
               </div>
             ))}
@@ -3144,7 +3246,7 @@ function CategoriesView({ categories, readOnly, onSave }) {
           {!readOnly && (
             <div className="flex gap-2">
               <TextInput value={newReceita} onChange={(e) => setNewReceita(e.target.value)} placeholder="Nova categoria de receita" onKeyDown={(e) => e.key === "Enter" && addReceita()} />
-              <Button variant="subtle" onClick={addReceita}><Plus size={14} /></Button>
+              <Button variant="subtle" onClick={addReceita} title="Adicionar categoria de receita"><Plus size={14} /></Button>
             </div>
           )}
         </Card>
@@ -3155,7 +3257,7 @@ function CategoriesView({ categories, readOnly, onSave }) {
               <div key={c.codigo} className="flex items-center justify-between text-sm py-1">
                 <span style={{ color: COLORS.ink }}>{c.codigo} · {c.nome}</span>
                 {!readOnly && (
-                  <button onClick={() => removeDespesa(c.codigo)} className="p-1 rounded hover:bg-black/5"><Trash2 size={13} color={COLORS.red} /></button>
+                  <button onClick={() => removeDespesa(c.codigo)} title="Excluir categoria" className="p-1 rounded hover:bg-black/5"><Trash2 size={13} color={COLORS.red} /></button>
                 )}
               </div>
             ))}
@@ -3163,7 +3265,7 @@ function CategoriesView({ categories, readOnly, onSave }) {
           {!readOnly && (
             <div className="flex gap-2">
               <TextInput value={newDespesa} onChange={(e) => setNewDespesa(e.target.value)} placeholder="Nova categoria de despesa" onKeyDown={(e) => e.key === "Enter" && addDespesa()} />
-              <Button variant="subtle" onClick={addDespesa}><Plus size={14} /></Button>
+              <Button variant="subtle" onClick={addDespesa} title="Adicionar categoria de despesa"><Plus size={14} /></Button>
             </div>
           )}
         </Card>
@@ -4598,9 +4700,9 @@ function ResumoView({ accounts, payables, receivables, bankEntries, transfers, a
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold" style={{ color: COLORS.ink }}>Fluxo de caixa</h2>
             <div className="flex items-center gap-1">
-              <button onClick={() => setMonthOffset((o) => o - 1)} className="p-1 rounded hover:bg-black/5"><ChevronLeft size={16} color={COLORS.inkSoft} /></button>
-              <button onClick={() => setMonthOffset(0)} className="text-xs px-1.5" style={{ color: COLORS.inkSoft }}>hoje</button>
-              <button onClick={() => setMonthOffset((o) => o + 1)} className="p-1 rounded hover:bg-black/5"><ChevronRight size={16} color={COLORS.inkSoft} /></button>
+              <button onClick={() => setMonthOffset((o) => o - 1)} title="Mês anterior" className="p-1 rounded hover:bg-black/5"><ChevronLeft size={16} color={COLORS.inkSoft} /></button>
+              <button onClick={() => setMonthOffset(0)} title="Voltar pro mês atual" className="text-xs px-1.5" style={{ color: COLORS.inkSoft }}>hoje</button>
+              <button onClick={() => setMonthOffset((o) => o + 1)} title="Próximo mês" className="p-1 rounded hover:bg-black/5"><ChevronRight size={16} color={COLORS.inkSoft} /></button>
             </div>
           </div>
           <div className="grid grid-cols-3 gap-2">

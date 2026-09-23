@@ -23,6 +23,10 @@ create table if not exists public.empresas (
   cnpj text,
   "razaoSocial" text,
   endereco text,
+  segmento text,
+  proprietario text,
+  "contatoEmail" text,
+  "contatoCelular" text,
   ativa boolean not null default true,
   created_at timestamptz not null default now()
 );
