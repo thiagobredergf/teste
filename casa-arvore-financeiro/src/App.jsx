@@ -332,9 +332,14 @@ function EmptyState({ icon: Icon, title, subtitle }) {
 function FinanceiroApp({ userEmail, onLogout }) {
   const [ready, setReady] = useState(false);
   const [role, setRole] = useState(null); // "gestor" | "owner"
-  const [view, setView] = useState("gestor");
+  const [view, setView] = useState("empresas");
   const [empresas, setEmpresas] = useState([]);
-  const [selectedEmpresa, setSelectedEmpresa] = useState("all");
+  // Nunca é "all" — o operador sempre trabalha dentro de UMA empresa por
+  // vez (evita risco de lançar/classificar coisa na empresa errada). Pra
+  // trocar de empresa, ele volta pro Cadastro (tela Empresas) e clica no
+  // card da empresa desejada — não existe mais um seletor "Todas as
+  // empresas" pairando pelas telas.
+  const [selectedEmpresa, setSelectedEmpresa] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [payables, setPayables] = useState([]);
   const [receivables, setReceivables] = useState([]);
@@ -374,9 +379,10 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setDocumentUploads(data.documentUploads || []);
       setCategories(data.categories || DEFAULT_CATEGORIES);
       // Dono não tem visão consolidada entre empresas — pousa direto no
-      // Resumo da(s) empresa(s) dele. Gestor pousa na Visão Geral.
-      setSelectedEmpresa(myRole === "owner" ? (data.empresas || [])[0]?.id || "all" : data.selectedEmpresa || "all");
-      setView(myRole === "owner" ? "resumo" : "gestor");
+      // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
+      // cards de todas), pra escolher com qual vai trabalhar.
+      setSelectedEmpresa(myRole === "owner" ? (data.empresas || [])[0]?.id || null : null);
+      setView(myRole === "owner" ? "resumo" : "empresas");
       setReady(true);
     })();
   }, []);
@@ -425,10 +431,11 @@ function FinanceiroApp({ userEmail, onLogout }) {
   );
 
   const inScope = useCallback(
-    (item) => !item.deletedAt && (selectedEmpresa === "all" || item.empresaId === selectedEmpresa),
+    (item) => !item.deletedAt && item.empresaId === selectedEmpresa,
     [selectedEmpresa]
   );
   const empresasAtivas = useMemo(() => empresas.filter((e) => e.ativa !== false), [empresas]);
+  const currentEmpresa = useMemo(() => empresas.find((e) => e.id === selectedEmpresa) || null, [empresas, selectedEmpresa]);
   const accountsF = useMemo(() => accounts.filter(inScope), [accounts, inScope]);
   const payablesF = useMemo(() => payables.filter(inScope), [payables, inScope]);
   const receivablesF = useMemo(() => receivables.filter(inScope), [receivables, inScope]);
@@ -601,10 +608,10 @@ function FinanceiroApp({ userEmail, onLogout }) {
   }
 
   const nav = [
+    { id: "empresas", label: "Empresas", icon: Building2 },
     ...(role === "gestor" ? [{ id: "gestor", label: "Visão Geral", icon: Users }] : []),
     { id: "dashboard", label: "Painel", icon: LayoutDashboard },
     { id: "resumo", label: "Resumo", icon: CalendarClock },
-    { id: "empresas", label: "Empresas", icon: Building2 },
     { id: "accounts", label: "Contas", icon: Landmark },
     { id: "contacts", label: "Contatos", icon: Contact },
     { id: "payables", label: "Contas a Pagar", icon: ArrowUpCircle },
@@ -621,8 +628,9 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const navById = Object.fromEntries(nav.map((n) => [n.id, n]));
 
   const RAIL_SECTIONS = [
-    { id: "visao", label: "Visão Geral", icon: LayoutDashboard, items: ["gestor", "dashboard", "resumo"] },
     { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas"] },
+    ...(role === "gestor" ? [{ id: "visao", label: "Visão Geral", icon: Users, items: ["gestor"] }] : []),
+    { id: "painel", label: "Painel", icon: LayoutDashboard, items: ["dashboard", "resumo"] },
     { id: "lancamentos", label: "Lançamentos", icon: Wallet, items: ["payables", "receivables", "bank", "transfers"] },
     { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
     { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "reports", "documentUploads", "lixeira"] },
@@ -673,22 +681,6 @@ function FinanceiroApp({ userEmail, onLogout }) {
           <p className="font-semibold text-[15px] leading-tight" style={{ color: COLORS.ink }}>ESEK</p>
           <p className="text-[13px]" style={{ color: COLORS.inkSoft }}>Gestão Financeira</p>
         </div>
-        {view !== "empresas" && view !== "contacts" && (
-          <div className="px-2 pb-3">
-            <select
-              value={selectedEmpresa}
-              onChange={(e) => changeEmpresa(e.target.value)}
-              className="w-full text-sm rounded-lg px-2.5 py-2 outline-none"
-              style={{ background: COLORS.bg, color: COLORS.ink, border: `1px solid ${COLORS.border}` }}
-              title="Filtrar o sistema por uma empresa, ou ver todas"
-            >
-              <option value="all">Todas as empresas</option>
-              {empresasAtivas.map((e) => (
-                <option key={e.id} value={e.id}>{e.nome}</option>
-              ))}
-            </select>
-          </div>
-        )}
         <p className="px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: COLORS.inkSoft }}>
           {searching ? "Resultados" : activeSection.label}
         </p>
@@ -733,6 +725,30 @@ function FinanceiroApp({ userEmail, onLogout }) {
             />
           </div>
           <div className="flex-1" />
+          {/* Identificação de qual empresa está ativa — sempre visível, pra
+              nunca ter dúvida em qual empresa a ação vai cair. Pra trocar,
+              o operador só consegue indo em Empresas e clicando noutro
+              card (não existe mais um seletor rápido aqui). */}
+          {view === "gestor" ? (
+            <span className="text-sm font-medium px-3 py-1.5 rounded-lg" style={{ background: COLORS.bg, color: COLORS.inkSoft }}>
+              Visão Geral · Todas as empresas
+            </span>
+          ) : view !== "empresas" && currentEmpresa && (
+            <button
+              onClick={() => setView("empresas")}
+              title="Trocar de empresa"
+              className="flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded-lg hover:opacity-80 transition-opacity"
+              style={{ background: COLORS.greenSoft, color: COLORS.primary }}
+            >
+              {currentEmpresa.logoUrl ? (
+                <img src={currentEmpresa.logoUrl} alt="" className="w-5 h-5 rounded-full object-cover shrink-0" />
+              ) : (
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: currentEmpresa.cor }} />
+              )}
+              {currentEmpresa.nome}
+              <ChevronDown size={13} />
+            </button>
+          )}
           <button
             onClick={() => setView("resumo")}
             className="relative w-9 h-9 rounded-lg flex items-center justify-center"
@@ -805,6 +821,17 @@ function FinanceiroApp({ userEmail, onLogout }) {
               </div>
             )}
           </Card>
+        ) : !selectedEmpresa && view !== "empresas" && view !== "gestor" ? (
+          <Card className="p-8">
+            <EmptyState
+              icon={Building2}
+              title="Selecione uma empresa"
+              subtitle="Escolha o card da empresa que você quer trabalhar, em Cadastros, antes de continuar."
+            />
+            <div className="flex justify-center mt-2">
+              <Button onClick={() => setView("empresas")}><Building2 size={15} /> Ir para Empresas</Button>
+            </div>
+          </Card>
         ) : (
           <>
             {view === "gestor" && (
@@ -841,8 +868,6 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 receivableBreakdown={receivableBreakdown}
                 upcomingPayables={upcomingPayables}
                 upcomingReceivables={upcomingReceivables}
-                selectedEmpresa={selectedEmpresa}
-                empresaBreakdown={empresaBreakdown}
               />
             )}
 
@@ -850,9 +875,12 @@ function FinanceiroApp({ userEmail, onLogout }) {
               <EmpresasView
                 empresas={empresas}
                 role={role}
+                documentUploads={documentUploads}
                 onSave={(v) => persist("empresas", v, setEmpresas)}
                 onOpenAccounts={(id) => { changeEmpresa(id); setView("accounts"); }}
                 onOpenContacts={(id) => { changeEmpresa(id); setView("contacts"); }}
+                onOpenDocuments={(id) => { changeEmpresa(id); setView("documentUploads"); }}
+                onOpenEmpresa={(id) => { changeEmpresa(id); setView("resumo"); }}
               />
             )}
 
@@ -1054,7 +1082,6 @@ function FinanceiroApp({ userEmail, onLogout }) {
 function Dashboard({
   year, setYear, totals, monthlyFlow, accounts, accountBalance, totalBalance,
   categoryBreakdown, receivableBreakdown, upcomingPayables, upcomingReceivables,
-  selectedEmpresa, empresaBreakdown,
 }) {
   const chartData = MONTHS.map((m, i) => ({
     mes: m,
@@ -1075,7 +1102,7 @@ function Dashboard({
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold" style={{ color: COLORS.ink }}>Painel financeiro</h1>
-          <p className="text-sm" style={{ color: COLORS.inkSoft }}>Regime de caixa · visão consolidada do ano</p>
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>Regime de caixa · visão do ano desta empresa</p>
         </div>
         <Select value={year} onChange={(e) => setYear(Number(e.target.value))} className="w-28">
           {[year - 1, year, year + 1].map((y) => (
@@ -1120,39 +1147,6 @@ function Dashboard({
           </ResponsiveContainer>
         </div>
       </Card>
-
-      {selectedEmpresa === "all" && empresaBreakdown.length > 1 && (
-        <Card className="p-4 overflow-x-auto">
-          <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.ink }}>Resultado por empresa</h2>
-          <table className="w-full text-sm min-w-[520px]">
-            <thead>
-              <tr style={{ color: COLORS.inkSoft }}>
-                <th className="text-left font-medium pb-2">Empresa</th>
-                <th className="text-right font-medium pb-2">Entradas</th>
-                <th className="text-right font-medium pb-2">Saídas</th>
-                <th className="text-right font-medium pb-2">Saldo do ano</th>
-                <th className="text-right font-medium pb-2">Saldo em contas</th>
-              </tr>
-            </thead>
-            <tbody>
-              {empresaBreakdown.map((eb) => (
-                <tr key={eb.empresa.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <td className="py-2">
-                    <span className="inline-flex items-center gap-2" style={{ color: COLORS.ink }}>
-                      <span className="w-2 h-2 rounded-full" style={{ background: eb.empresa.cor }} />
-                      {eb.empresa.nome}
-                    </span>
-                  </td>
-                  <td className="py-2 text-right tabular-nums" style={{ color: COLORS.green }}>{fmtBRL(eb.entradas)}</td>
-                  <td className="py-2 text-right tabular-nums" style={{ color: COLORS.red }}>{fmtBRL(eb.saidas)}</td>
-                  <td className="py-2 text-right tabular-nums font-medium" style={{ color: eb.saldo >= 0 ? COLORS.green : COLORS.red }}>{fmtBRL(eb.saldo)}</td>
-                  <td className="py-2 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(eb.saldoContas)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
-      )}
 
       <div className="grid md:grid-cols-2 gap-4">
         <Card className="p-4">
@@ -1258,20 +1252,9 @@ function BreakdownTable({ data, columns }) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  Accounts                                                               */
+/*  Empresas                                                               */
 /* ---------------------------------------------------------------------- */
-function EmpresaTag({ empresas, empresaId }) {
-  const emp = empresas.find((e) => e.id === empresaId);
-  if (!emp) return null;
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: COLORS.inkSoft }}>
-      <span className="w-2 h-2 rounded-full" style={{ background: emp.cor }} />
-      {emp.nome}
-    </span>
-  );
-}
-
-function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts }) {
+function EmpresasView({ empresas, role, documentUploads, onSave, onOpenAccounts, onOpenContacts, onOpenDocuments, onOpenEmpresa }) {
   const [modal, setModal] = useState(null);
   const isGestor = role === "gestor";
 
@@ -1307,31 +1290,37 @@ function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts }
 
   return (
     <div className="space-y-4">
-      <Header title="Empresas do grupo" subtitle="Cada empresa mantém suas próprias contas, contas a pagar/receber e lançamentos, dentro do mesmo sistema.">
+      <div className="flex justify-end">
         {isGestor && <Button onClick={() => setModal({})}><Plus size={15} /> Nova empresa</Button>}
-      </Header>
+      </div>
 
       {empresas.length === 0 ? (
         <Card><EmptyState icon={Building2} title="Nenhuma empresa cadastrada" subtitle="Ex.: Casarão, Casa Pôr do Sol, Vai da Praia." /></Card>
       ) : (
         <div className="grid md:grid-cols-2 gap-3">
-          {empresas.map((e) => (
+          {empresas.map((e) => {
+            const pendentes = documentUploads.filter((u) => u.empresaId === e.id && u.status !== "processado").length;
+            return (
             <Card key={e.id} className="p-4" style={e.ativa === false ? { opacity: 0.6 } : {}}>
               <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-2.5">
+                <div
+                  className="flex items-center gap-2.5 cursor-pointer flex-1 min-w-0"
+                  onClick={() => onOpenEmpresa(e.id)}
+                  title="Entrar nesta empresa"
+                >
                   {e.logoUrl ? (
                     <img src={e.logoUrl} alt="" className="w-8 h-8 rounded-full object-cover shrink-0" style={{ border: `1px solid ${COLORS.border}` }} />
                   ) : (
                     <span className="w-3 h-3 rounded-full shrink-0" style={{ background: e.cor }} />
                   )}
-                  <div>
+                  <div className="min-w-0">
                     <p className="font-semibold text-sm flex items-center gap-1.5" style={{ color: COLORS.ink }}>
                       {e.nome} {e.ativa === false && <Badge tone="neutral">Inativa</Badge>}
                     </p>
                     {e.cnpj && <p className="text-xs" style={{ color: COLORS.inkSoft }}>{e.cnpj}</p>}
                   </div>
                 </div>
-                <div className="flex gap-1">
+                <div className="flex gap-1 shrink-0">
                   <button onClick={() => onOpenAccounts(e.id)} title="Ver contas bancárias desta empresa" className="p-1.5 rounded-md hover:bg-black/5">
                     <Landmark size={14} color={COLORS.inkSoft} />
                   </button>
@@ -1355,9 +1344,16 @@ function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts }
                   )}
                 </div>
               </div>
-              {(e.segmento || e.proprietario || e.contatoEmail || e.contatoCelular) && (
-                <div className="pb-3 space-y-0.5">
-                  {e.segmento && <p className="text-xs"><Badge tone="neutral">{e.segmento}</Badge></p>}
+              {(e.segmento || e.proprietario || e.contatoEmail || e.contatoCelular || pendentes > 0) && (
+                <div className="pb-3 space-y-1">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {e.segmento && <Badge tone="neutral">{e.segmento}</Badge>}
+                    {pendentes > 0 && (
+                      <button onClick={() => onOpenDocuments(e.id)} title="Ver documentos pendentes desta empresa">
+                        <Badge tone="amber"><Inbox size={11} /> {pendentes} documento{pendentes > 1 ? "s" : ""} pendente{pendentes > 1 ? "s" : ""}</Badge>
+                      </button>
+                    )}
+                  </div>
                   {e.proprietario && <p className="text-xs" style={{ color: COLORS.inkSoft }}>Proprietário: {e.proprietario}</p>}
                   {(e.contatoEmail || e.contatoCelular) && (
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>
@@ -1368,7 +1364,8 @@ function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts }
               )}
               {isGestor && <EmpresaOwnersPanel empresa={e} />}
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -1594,9 +1591,9 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
   );
 }
 
-function AccountsView({ accounts, empresas, selectedEmpresa, accountBalance, onSave }) {
+function AccountsView({ accounts, selectedEmpresa, accountBalance, onSave }) {
   const [modal, setModal] = useState(null); // account being edited, or {} for new
-  const visible = accounts.filter((a) => selectedEmpresa === "all" || a.empresaId === selectedEmpresa);
+  const visible = accounts.filter((a) => a.empresaId === selectedEmpresa);
 
   const submit = (form) => {
     if (form.id) {
@@ -1615,7 +1612,7 @@ function AccountsView({ accounts, empresas, selectedEmpresa, accountBalance, onS
   return (
     <div className="space-y-4">
       <Header title="Contas (Caixa & Bancos)" subtitle="Cadastre onde o dinheiro entra e sai.">
-        <Button onClick={() => setModal({ empresaId: selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id })}>
+        <Button onClick={() => setModal({ empresaId: selectedEmpresa })}>
           <Plus size={15} /> Nova conta
         </Button>
       </Header>
@@ -1630,7 +1627,6 @@ function AccountsView({ accounts, empresas, selectedEmpresa, accountBalance, onS
                 <div>
                   <p className="font-semibold text-sm" style={{ color: COLORS.ink }}>{a.nome}</p>
                   <p className="text-xs" style={{ color: COLORS.inkSoft }}>{a.tipo}{a.banco ? ` · ${a.banco}` : ""}</p>
-                  {selectedEmpresa === "all" && <div className="pt-1"><EmpresaTag empresas={empresas} empresaId={a.empresaId} /></div>}
                 </div>
                 <div className="flex gap-1">
                   <button onClick={() => setModal(a)} title="Editar conta" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
@@ -1648,26 +1644,21 @@ function AccountsView({ accounts, empresas, selectedEmpresa, accountBalance, onS
         </div>
       )}
 
-      {modal && <AccountModal initial={modal} empresas={empresas} onClose={() => setModal(null)} onSubmit={submit} />}
+      {modal && <AccountModal initial={modal} onClose={() => setModal(null)} onSubmit={submit} />}
     </div>
   );
 }
 
-function AccountModal({ initial, empresas, onClose, onSubmit }) {
+function AccountModal({ initial, onClose, onSubmit }) {
   const [form, setForm] = useState({
     nome: "", tipo: "Conta Corrente", banco: "", agencia: "", contaNum: "",
-    saldoInicial: 0, dataInicial: todayISO(), empresaId: empresas[0]?.id || "", ...initial,
+    saldoInicial: 0, dataInicial: todayISO(), ...initial,
   });
   const [bancoOutro, setBancoOutro] = useState(() => !!form.banco && !BANCOS_BRASIL.some((b) => b.nome === form.banco));
   const valid = form.nome.trim() && form.empresaId;
   return (
     <Modal title={initial.id ? "Editar conta" : "Nova conta"} onClose={onClose}>
       <div className="grid gap-3">
-        <Field label="Empresa">
-          <Select value={form.empresaId} onChange={(e) => setForm({ ...form, empresaId: e.target.value })}>
-            {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
-          </Select>
-        </Field>
         <Field label="Nome da conta">
           <TextInput value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} placeholder="Ex.: Banco Bradesco" />
         </Field>
@@ -1728,10 +1719,10 @@ function AccountModal({ initial, empresas, onClose, onSubmit }) {
 /*  Contatos (fornecedores/clientes) — cadastro único, usado tanto em      */
 /*  Contas a Pagar quanto em Contas a Receber, pra futura cobrança.        */
 /* ---------------------------------------------------------------------- */
-function ContactsView({ contacts, empresas, selectedEmpresa, onSave }) {
+function ContactsView({ contacts, selectedEmpresa, onSave }) {
   const [modal, setModal] = useState(null);
   const visible = contacts
-    .filter((c) => !c.deletedAt && (selectedEmpresa === "all" || c.empresaId === selectedEmpresa))
+    .filter((c) => !c.deletedAt && c.empresaId === selectedEmpresa)
     .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
 
   const submit = (form) => {
@@ -1747,7 +1738,7 @@ function ContactsView({ contacts, empresas, selectedEmpresa, onSave }) {
   return (
     <div className="space-y-4">
       <Header title="Contatos" subtitle="Fornecedores e clientes cadastrados — usados em Contas a Pagar/Receber e reaproveitados pra cobrança.">
-        <Button onClick={() => setModal({ empresaId: selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id })}>
+        <Button onClick={() => setModal({ empresaId: selectedEmpresa })}>
           <Plus size={15} /> Novo contato
         </Button>
       </Header>
@@ -1761,7 +1752,6 @@ function ContactsView({ contacts, empresas, selectedEmpresa, onSave }) {
                 <th className="text-left font-medium px-4 py-2.5">Nome</th>
                 <th className="text-left font-medium px-4 py-2.5">CPF/CNPJ</th>
                 <th className="text-left font-medium px-4 py-2.5">Contato</th>
-                {selectedEmpresa === "all" && <th className="text-left font-medium px-4 py-2.5">Empresa</th>}
                 <th className="text-right font-medium px-4 py-2.5">Ações</th>
               </tr>
             </thead>
@@ -1774,7 +1764,6 @@ function ContactsView({ contacts, empresas, selectedEmpresa, onSave }) {
                   </td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{c.documento || "—"}</td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{c.contato || "—"}</td>
-                  {selectedEmpresa === "all" && <td className="px-4 py-2.5"><EmpresaTag empresas={empresas} empresaId={c.empresaId} /></td>}
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
                       <button onClick={() => setModal(c)} title="Editar contato" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
@@ -1787,14 +1776,14 @@ function ContactsView({ contacts, empresas, selectedEmpresa, onSave }) {
           </table>
         )}
       </Card>
-      {modal && <ContactModal initial={modal} empresas={empresas} contacts={contacts} onClose={() => setModal(null)} onSubmit={submit} />}
+      {modal && <ContactModal initial={modal} contacts={contacts} onClose={() => setModal(null)} onSubmit={submit} />}
     </div>
   );
 }
 
-function ContactModal({ initial, empresas, contacts = [], onClose, onSubmit }) {
+function ContactModal({ initial, contacts = [], onClose, onSubmit }) {
   const [form, setForm] = useState({
-    nome: "", documento: "", contato: "", email: "", empresaId: empresas[0]?.id || "", ...initial,
+    nome: "", documento: "", contato: "", email: "", ...initial,
   });
   const [autoFillNote, setAutoFillNote] = useState("");
   const valid = form.nome.trim() && form.empresaId;
@@ -1826,11 +1815,6 @@ function ContactModal({ initial, empresas, contacts = [], onClose, onSubmit }) {
             {autoFillNote}
           </p>
         )}
-        <Field label="Empresa">
-          <Select value={form.empresaId} onChange={(e) => setForm({ ...form, empresaId: e.target.value })}>
-            {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
-          </Select>
-        </Field>
         <Field label="Nome"><TextInput value={form.nome} onChange={(e) => handleNome(e.target.value)} /></Field>
         <Field label="CPF/CNPJ"><TextInput value={form.documento} onChange={(e) => setForm({ ...form, documento: e.target.value })} placeholder="000.000.000-00 ou 00.000.000/0000-00" /></Field>
         <Field label="Contato (telefone/WhatsApp)"><TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} /></Field>
@@ -1946,7 +1930,7 @@ function StatusSummary({ items, statuses }) {
 /*  Contas a Pagar                                                         */
 /* ---------------------------------------------------------------------- */
 function PayablesView({
-  payables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
+  payables, accounts, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
   pendingImport, onImportProcessed,
 }) {
   const [modal, setModal] = useState(null);
@@ -1965,7 +1949,7 @@ function PayablesView({
     const ex = await callExtractDocument(fileBase64, mediaType, "payable");
     const categoriaMatch = categories.find((c) => c.nome === ex.categoria_sugerida)?.nome;
     const parcelas = Array.isArray(ex.parcelas) && ex.parcelas.length > 0 ? ex.parcelas : [ex];
-    const empresaId = selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id;
+    const empresaId = selectedEmpresa;
 
     if (parcelas.length > 1) {
       // Parcelas com valor/vencimento próprios (ex: carnê de IPTU) — nunca
@@ -2040,7 +2024,7 @@ function PayablesView({
   }, [pendingImport]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const withDerived = payables
-    .filter((p) => !p.deletedAt && (selectedEmpresa === "all" || p.empresaId === selectedEmpresa))
+    .filter((p) => !p.deletedAt && p.empresaId === selectedEmpresa)
     .map((p) => {
       let statusDisplay = p.status;
       if (p.status !== "Pago" && p.vencimento < todayISO()) statusDisplay = "Atrasado";
@@ -2111,7 +2095,7 @@ function PayablesView({
         <Button variant="ghost" onClick={() => setScheduleModal(true)}>
           <CalendarClock size={15} /> Agendar pagamentos
         </Button>
-        <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id }); }}>
+        <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa }); }}>
           <Plus size={15} /> Novo lançamento
         </Button>
       </Header>
@@ -2141,7 +2125,6 @@ function PayablesView({
                 <th className="text-left font-medium px-4 py-2.5">Vencimento</th>
                 <th className="text-left font-medium px-4 py-2.5">Fornecedor</th>
                 <th className="text-left font-medium px-4 py-2.5">Categoria</th>
-                {selectedEmpresa === "all" && <th className="text-left font-medium px-4 py-2.5">Empresa</th>}
                 <th className="text-right font-medium px-4 py-2.5">Valor</th>
                 <th className="text-left font-medium px-4 py-2.5">Status</th>
                 <th className="text-right font-medium px-4 py-2.5">Ações</th>
@@ -2157,7 +2140,6 @@ function PayablesView({
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>{p.descricao}</p>
                   </td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{p.categoria}</td>
-                  {selectedEmpresa === "all" && <td className="px-4 py-2.5"><EmpresaTag empresas={empresas} empresaId={p.empresaId} /></td>}
                   <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(p.valor)}</td>
                   <td className="px-4 py-2.5">
                     <StatusBadge status={p.statusDisplay} />
@@ -2180,7 +2162,7 @@ function PayablesView({
 
       {modal && (
         <PayableModal
-          initial={modal} categories={categories} empresas={empresas} contacts={contacts} aiNote={aiNote}
+          initial={modal} categories={categories} contacts={contacts} aiNote={aiNote}
           onClose={() => { setModal(null); setAiNote(""); pendingUploadRef.current = null; }}
           onSubmit={submit}
         />
@@ -2189,7 +2171,6 @@ function PayablesView({
         <InstallmentsReviewModal
           review={installmentsReview}
           categories={categories}
-          empresas={empresas}
           partyLabel="Fornecedor"
           onClose={() => { setInstallmentsReview(null); pendingUploadRef.current = null; }}
           onConfirm={(rows, party, categoria, empresaId) => {
@@ -2234,9 +2215,8 @@ function PayablesView({
         <ScheduleModal
           title="Agendar pagamentos"
           nameField="fornecedor"
-          items={payables.filter((p) => p.status !== "Pago" && (selectedEmpresa === "all" || p.empresaId === selectedEmpresa))}
-          accounts={accounts}
-          empresas={empresas}
+          items={payables.filter((p) => p.status !== "Pago" && p.empresaId === selectedEmpresa)}
+          accounts={accounts.filter((a) => a.empresaId === selectedEmpresa)}
           onClose={() => setScheduleModal(false)}
           onConfirm={confirmSchedule}
         />
@@ -2313,11 +2293,11 @@ function StatusBadge({ status }) {
   return <Badge tone="neutral">{status}</Badge>;
 }
 
-function PayableModal({ initial, categories, empresas, contacts = [], aiNote, onClose, onSubmit }) {
+function PayableModal({ initial, categories, contacts = [], aiNote, onClose, onSubmit }) {
   const linkedContact = contacts.find((c) => c.id === initial.contactId);
   const [form, setForm] = useState({
     dataLanc: todayISO(), vencimento: todayISO(), fornecedor: "", categoria: categories[0]?.nome || "",
-    descricao: "", valor: "", formaPgto: "PIX", status: "A Pagar", empresaId: empresas[0]?.id || "",
+    descricao: "", valor: "", formaPgto: "PIX", status: "A Pagar",
     documento: linkedContact?.documento || "", contato: linkedContact?.contato || "", ...initial,
   });
   const valid = form.fornecedor.trim() && Number(form.valor) > 0 && form.empresaId;
@@ -2341,13 +2321,6 @@ function PayableModal({ initial, categories, empresas, contacts = [], aiNote, on
         </p>
       )}
       <div className="grid md:grid-cols-2 gap-3">
-        {empresas.length > 1 && (
-          <Field label="Empresa">
-            <Select value={form.empresaId} onChange={(e) => setForm({ ...form, empresaId: e.target.value })}>
-              {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
-            </Select>
-          </Field>
-        )}
         <Field label="Fornecedor">
           <TextInput list="contatos-fornecedor" value={form.fornecedor} onChange={(e) => handleFornecedor(e.target.value)} />
           <datalist id="contatos-fornecedor">
@@ -2395,10 +2368,10 @@ function PayableModal({ initial, categories, empresas, contacts = [], aiNote, on
 // cálculo de divisão igual nem uma data somada mês a mês (isso é o que o
 // "Parcelas"/"Recorrente" do PayableModal fazem, e não serve aqui: parcelas
 // reais de um carnê costumam ter valores diferentes entre si).
-function InstallmentsReviewModal({ review, categories, empresas, partyLabel = "Fornecedor", onClose, onConfirm }) {
+function InstallmentsReviewModal({ review, categories, partyLabel = "Fornecedor", onClose, onConfirm }) {
   const [party, setParty] = useState(review.party);
   const [categoria, setCategoria] = useState(review.categoria);
-  const [empresaId, setEmpresaId] = useState(review.empresaId);
+  const empresaId = review.empresaId;
   const [rows, setRows] = useState(review.rows);
 
   const updateRow = (i, patch) => setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -2412,14 +2385,7 @@ function InstallmentsReviewModal({ review, categories, empresas, partyLabel = "F
       <p className="text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: COLORS.greenSoft, color: COLORS.green }}>
         Cada parcela veio com o valor e vencimento lidos direto do documento — confira e ajuste antes de criar os lançamentos. A data de lançamento de todas será hoje.
       </p>
-      <div className="grid md:grid-cols-3 gap-3 mb-4">
-        {empresas.length > 1 && (
-          <Field label="Empresa">
-            <Select value={empresaId} onChange={(e) => setEmpresaId(e.target.value)}>
-              {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
-            </Select>
-          </Field>
-        )}
+      <div className="grid md:grid-cols-2 gap-3 mb-4">
         <Field label={partyLabel}><TextInput value={party} onChange={(e) => setParty(e.target.value)} /></Field>
         <Field label="Categoria">
           <Select value={categoria} onChange={(e) => setCategoria(e.target.value)}>
@@ -2496,7 +2462,7 @@ function SettleModal({ title, label, dateLabel, accountLabel, item, accounts, on
   );
 }
 
-function ScheduleModal({ title, items, nameField, accounts, empresas, onClose, onConfirm }) {
+function ScheduleModal({ title, items, nameField, accounts, onClose, onConfirm }) {
   const [contaId, setContaId] = useState("");
   const [data, setData] = useState(todayISO());
   const [checked, setChecked] = useState({});
@@ -2522,7 +2488,7 @@ function ScheduleModal({ title, items, nameField, accounts, empresas, onClose, o
             <Select value={contaId} onChange={(e) => { setContaId(e.target.value); setChecked({}); }}>
               <option value="">Selecione uma conta</option>
               {accounts.map((a) => (
-                <option key={a.id} value={a.id}>{a.nome}{empresas?.length > 1 ? ` — ${empresas.find((e) => e.id === a.empresaId)?.nome || ""}` : ""}</option>
+                <option key={a.id} value={a.id}>{a.nome}</option>
               ))}
             </Select>
           </Field>
@@ -2585,7 +2551,7 @@ function ScheduleModal({ title, items, nameField, accounts, empresas, onClose, o
 /*  Contas a Receber                                                       */
 /* ---------------------------------------------------------------------- */
 function ReceivablesView({
-  receivables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
+  receivables, accounts, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
   pendingImport, onImportProcessed,
 }) {
   const [modal, setModal] = useState(null);
@@ -2603,7 +2569,7 @@ function ReceivablesView({
     const ex = await callExtractDocument(fileBase64, mediaType, "receivable");
     const categoriaMatch = categories.find((c) => c.nome === ex.categoria_sugerida)?.nome;
     const parcelas = Array.isArray(ex.parcelas) && ex.parcelas.length > 0 ? ex.parcelas : [ex];
-    const empresaId = selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id;
+    const empresaId = selectedEmpresa;
 
     if (parcelas.length > 1) {
       setInstallmentsReview({
@@ -2668,7 +2634,7 @@ function ReceivablesView({
   }, [pendingImport]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const withDerived = receivables
-    .filter((r) => !r.deletedAt && (selectedEmpresa === "all" || r.empresaId === selectedEmpresa))
+    .filter((r) => !r.deletedAt && r.empresaId === selectedEmpresa)
     .map((r) => {
       let statusDisplay = r.status;
       if (r.status !== "Recebido" && r.vencimento < todayISO()) statusDisplay = "Inadimplente";
@@ -2728,7 +2694,7 @@ function ReceivablesView({
           <Upload size={15} /> {importing ? "Lendo documento…" : "Importar documento"}
           <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing} />
         </label>
-        <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id }); }}>
+        <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa }); }}>
           <Plus size={15} /> Novo lançamento
         </Button>
       </Header>
@@ -2758,7 +2724,6 @@ function ReceivablesView({
                 <th className="text-left font-medium px-4 py-2.5">Vencimento</th>
                 <th className="text-left font-medium px-4 py-2.5">Cliente</th>
                 <th className="text-left font-medium px-4 py-2.5">Categoria</th>
-                {selectedEmpresa === "all" && <th className="text-left font-medium px-4 py-2.5">Empresa</th>}
                 <th className="text-right font-medium px-4 py-2.5">Valor</th>
                 <th className="text-left font-medium px-4 py-2.5">Status</th>
                 <th className="text-right font-medium px-4 py-2.5">Ações</th>
@@ -2774,7 +2739,6 @@ function ReceivablesView({
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>{r.descricao}</p>
                   </td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{r.categoria}</td>
-                  {selectedEmpresa === "all" && <td className="px-4 py-2.5"><EmpresaTag empresas={empresas} empresaId={r.empresaId} /></td>}
                   <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(r.valor)}</td>
                   <td className="px-4 py-2.5"><StatusBadge status={r.statusDisplay} /></td>
                   <td className="px-4 py-2.5">
@@ -2795,7 +2759,7 @@ function ReceivablesView({
 
       {modal && (
         <ReceivableModal
-          initial={modal} categories={categories} empresas={empresas} contacts={contacts} aiNote={aiNote}
+          initial={modal} categories={categories} contacts={contacts} aiNote={aiNote}
           onClose={() => { setModal(null); setAiNote(""); pendingUploadRef.current = null; }}
           onSubmit={submit}
         />
@@ -2804,7 +2768,6 @@ function ReceivablesView({
         <InstallmentsReviewModal
           review={installmentsReview}
           categories={categories}
-          empresas={empresas}
           partyLabel="Cliente"
           onClose={() => { setInstallmentsReview(null); pendingUploadRef.current = null; }}
           onConfirm={(rows, party, categoria, empresaId) => {
@@ -2849,11 +2812,11 @@ function ReceivablesView({
   );
 }
 
-function ReceivableModal({ initial, categories, empresas, contacts = [], aiNote, onClose, onSubmit }) {
+function ReceivableModal({ initial, categories, contacts = [], aiNote, onClose, onSubmit }) {
   const linkedContact = contacts.find((c) => c.id === initial.contactId);
   const [form, setForm] = useState({
     dataLanc: todayISO(), vencimento: todayISO(), cliente: "", categoria: categories[0]?.nome || "",
-    descricao: "", valor: "", formaReceb: "PIX", status: "A Receber", empresaId: empresas[0]?.id || "",
+    descricao: "", valor: "", formaReceb: "PIX", status: "A Receber",
     documento: linkedContact?.documento || "", contato: linkedContact?.contato || "", ...initial,
   });
   const valid = form.cliente.trim() && Number(form.valor) > 0 && form.empresaId;
@@ -2877,13 +2840,6 @@ function ReceivableModal({ initial, categories, empresas, contacts = [], aiNote,
         </p>
       )}
       <div className="grid md:grid-cols-2 gap-3">
-        {empresas.length > 1 && (
-          <Field label="Empresa">
-            <Select value={form.empresaId} onChange={(e) => setForm({ ...form, empresaId: e.target.value })}>
-              {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
-            </Select>
-          </Field>
-        )}
         <Field label="Cliente">
           <TextInput list="contatos-cliente" value={form.cliente} onChange={(e) => handleCliente(e.target.value)} />
           <datalist id="contatos-cliente">
@@ -2928,12 +2884,12 @@ function ReceivableModal({ initial, categories, empresas, contacts = [], aiNote,
 /* ---------------------------------------------------------------------- */
 /*  Lançamentos Bancários                                                  */
 /* ---------------------------------------------------------------------- */
-function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categories, onSave, pendingImport, onImportProcessed }) {
+function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSave, pendingImport, onImportProcessed }) {
   const [modal, setModal] = useState(null);
   const [aiNote, setAiNote] = useState("");
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState("");
-  const scopedAccounts = accounts.filter((a) => selectedEmpresa === "all" || a.empresaId === selectedEmpresa);
+  const scopedAccounts = accounts.filter((a) => a.empresaId === selectedEmpresa);
   const submit = (form) => {
     if (form.id) onSave(entries.map((e) => (e.id === form.id ? form : e)));
     else onSave([...entries, { ...form, id: uid() }]);
@@ -2948,7 +2904,7 @@ function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categor
     onSave(entries.map((e) => (e.id === id ? { ...e, deletedAt: new Date().toISOString() } : e)));
   };
   const sorted = [...entries]
-    .filter((e) => !e.deletedAt && (selectedEmpresa === "all" || e.empresaId === selectedEmpresa))
+    .filter((e) => !e.deletedAt && e.empresaId === selectedEmpresa)
     .sort((a, b) => (b.data || "").localeCompare(a.data || ""));
 
   const processExtractedDocument = async (fileBase64, mediaType) => {
@@ -3030,7 +2986,6 @@ function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categor
               <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
                 <th className="text-left font-medium px-4 py-2.5">Data</th>
                 <th className="text-left font-medium px-4 py-2.5">Conta</th>
-                {selectedEmpresa === "all" && <th className="text-left font-medium px-4 py-2.5">Empresa</th>}
                 <th className="text-left font-medium px-4 py-2.5">Tipo</th>
                 <th className="text-left font-medium px-4 py-2.5">Categoria</th>
                 <th className="text-left font-medium px-4 py-2.5">Descrição</th>
@@ -3045,7 +3000,6 @@ function BankEntriesView({ entries, accounts, empresas, selectedEmpresa, categor
                   <tr key={e.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
                     <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{fmtDate(e.data)}</td>
                     <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{acc?.nome || "—"}</td>
-                    {selectedEmpresa === "all" && <td className="px-4 py-2.5"><EmpresaTag empresas={empresas} empresaId={e.empresaId} /></td>}
                     <td className="px-4 py-2.5"><Badge tone={e.tipo === "Entrada" ? "green" : "red"}>{e.tipo}</Badge></td>
                     <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{e.categoria}</td>
                     <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{e.descricao}</td>
@@ -3130,9 +3084,9 @@ function BankEntryModal({ initial, accounts, categories, suggestion, aiNote, onC
 /* ---------------------------------------------------------------------- */
 /*  Transferências                                                         */
 /* ---------------------------------------------------------------------- */
-function TransfersView({ transfers, accounts, empresas, selectedEmpresa, onSave }) {
+function TransfersView({ transfers, accounts, selectedEmpresa, onSave }) {
   const [modal, setModal] = useState(null);
-  const scopedAccounts = accounts.filter((a) => selectedEmpresa !== "all" && a.empresaId === selectedEmpresa);
+  const scopedAccounts = accounts.filter((a) => a.empresaId === selectedEmpresa);
   const submit = (form) => {
     if (form.id) onSave(transfers.map((t) => (t.id === form.id ? form : t)));
     else onSave([...transfers, { ...form, id: uid() }]);
@@ -3143,7 +3097,7 @@ function TransfersView({ transfers, accounts, empresas, selectedEmpresa, onSave 
     onSave(transfers.map((t) => (t.id === id ? { ...t, deletedAt: new Date().toISOString() } : t)));
   };
   const sorted = [...transfers]
-    .filter((t) => !t.deletedAt && (selectedEmpresa === "all" || t.empresaId === selectedEmpresa))
+    .filter((t) => !t.deletedAt && t.empresaId === selectedEmpresa)
     .sort((a, b) => (b.data || "").localeCompare(a.data || ""));
 
   return (
@@ -3151,11 +3105,9 @@ function TransfersView({ transfers, accounts, empresas, selectedEmpresa, onSave 
       <Header title="Transferências entre contas" subtitle="Movimentações internas — não afetam o fluxo de caixa.">
         <Button onClick={() => setModal({})} disabled={scopedAccounts.length < 2}><Plus size={15} /> Nova transferência</Button>
       </Header>
-      {selectedEmpresa === "all" ? (
-        <p className="text-sm px-1" style={{ color: COLORS.inkSoft }}>Selecione uma empresa específica no menu lateral para registrar uma transferência entre contas dela.</p>
-      ) : scopedAccounts.length < 2 ? (
+      {scopedAccounts.length < 2 && (
         <p className="text-sm px-1" style={{ color: COLORS.inkSoft }}>Cadastre pelo menos 2 contas nesta empresa para registrar transferências.</p>
-      ) : null}
+      )}
       <Card className="overflow-x-auto">
         {sorted.length === 0 ? (
           <EmptyState icon={ArrowLeftRight} title="Nenhuma transferência" subtitle="Registre movimentações entre as contas da empresa, como Bradesco → Itaú." />
@@ -3166,7 +3118,6 @@ function TransfersView({ transfers, accounts, empresas, selectedEmpresa, onSave 
                 <th className="text-left font-medium px-4 py-2.5">Data</th>
                 <th className="text-left font-medium px-4 py-2.5">De</th>
                 <th className="text-left font-medium px-4 py-2.5">Para</th>
-                {selectedEmpresa === "all" && <th className="text-left font-medium px-4 py-2.5">Empresa</th>}
                 <th className="text-right font-medium px-4 py-2.5">Valor</th>
                 <th className="text-left font-medium px-4 py-2.5">Descrição</th>
                 <th className="text-right font-medium px-4 py-2.5">Ações</th>
@@ -3181,7 +3132,6 @@ function TransfersView({ transfers, accounts, empresas, selectedEmpresa, onSave 
                     <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{fmtDate(t.data)}</td>
                     <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{from?.nome || "—"}</td>
                     <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{to?.nome || "—"}</td>
-                    {selectedEmpresa === "all" && <td className="px-4 py-2.5"><EmpresaTag empresas={empresas} empresaId={t.empresaId} /></td>}
                     <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(t.valor)}</td>
                     <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{t.descricao}</td>
                     <td className="px-4 py-2.5">
@@ -3247,14 +3197,14 @@ function competenciaLabel(c) {
   return `${MONTHS[Number(m) - 1] || m}/${y}`;
 }
 
-function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }) {
+function FiscalView({ obligations, accounts, selectedEmpresa, onSave }) {
   const [modal, setModal] = useState(null);
   const [payModal, setPayModal] = useState(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
 
   const withDerived = obligations
-    .filter((o) => !o.deletedAt && (selectedEmpresa === "all" || o.empresaId === selectedEmpresa))
+    .filter((o) => !o.deletedAt && o.empresaId === selectedEmpresa)
     .map((o) => {
       let statusDisplay = o.status;
       if (o.status !== "Pago" && (o.vencimento || "") < todayISO()) statusDisplay = "Atrasado";
@@ -3287,7 +3237,7 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }
   return (
     <div className="space-y-4">
       <Header title="Calendário Fiscal" subtitle={`${filtered.length} obrigação(ões) · ${fmtBRL(total)}`}>
-        <Button onClick={() => setModal({ empresaId: selectedEmpresa !== "all" ? selectedEmpresa : empresas[0]?.id })}>
+        <Button onClick={() => setModal({ empresaId: selectedEmpresa })}>
           <Plus size={15} /> Nova obrigação
         </Button>
       </Header>
@@ -3310,7 +3260,6 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }
                 <th className="text-left font-medium px-4 py-2.5">Competência</th>
                 <th className="text-left font-medium px-4 py-2.5">Vencimento</th>
                 <th className="text-left font-medium px-4 py-2.5">Tributo</th>
-                {selectedEmpresa === "all" && <th className="text-left font-medium px-4 py-2.5">Empresa</th>}
                 <th className="text-right font-medium px-4 py-2.5">Valor</th>
                 <th className="text-left font-medium px-4 py-2.5">Status</th>
                 <th className="text-left font-medium px-4 py-2.5">Banco</th>
@@ -3326,7 +3275,6 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }
                     <p className="font-medium">{o.tributo}</p>
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>{o.descricao}</p>
                   </td>
-                  {selectedEmpresa === "all" && <td className="px-4 py-2.5"><EmpresaTag empresas={empresas} empresaId={o.empresaId} /></td>}
                   <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(o.valor)}</td>
                   <td className="px-4 py-2.5"><StatusBadge status={o.statusDisplay} /></td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{accounts.find((a) => a.id === o.contaId)?.nome || "—"}</td>
@@ -3347,7 +3295,7 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }
       </Card>
 
       {modal && (
-        <FiscalModal initial={modal} empresas={empresas} onClose={() => setModal(null)} onSubmit={submit} />
+        <FiscalModal initial={modal} onClose={() => setModal(null)} onSubmit={submit} />
       )}
       {payModal && (
         <SettleModal
@@ -3365,22 +3313,15 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }
   );
 }
 
-function FiscalModal({ initial, empresas, onClose, onSubmit }) {
+function FiscalModal({ initial, onClose, onSubmit }) {
   const [form, setForm] = useState({
     competencia: todayISO().slice(0, 7), vencimento: todayISO(), tributo: TRIBUTOS_COMUNS[0],
-    descricao: "", valor: "", status: "Pendente", empresaId: empresas[0]?.id || "", ...initial,
+    descricao: "", valor: "", status: "Pendente", ...initial,
   });
   const valid = form.tributo.trim() && Number(form.valor) > 0 && form.empresaId;
   return (
     <Modal title={initial.id ? "Editar obrigação" : "Nova obrigação fiscal"} onClose={onClose} wide>
       <div className="grid md:grid-cols-2 gap-3">
-        {empresas.length > 1 && (
-          <Field label="Empresa">
-            <Select value={form.empresaId} onChange={(e) => setForm({ ...form, empresaId: e.target.value })}>
-              {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
-            </Select>
-          </Field>
-        )}
         <Field label="Tributo">
           <input
             list="tributos-comuns"
@@ -3497,8 +3438,8 @@ function ReportsView(props) {
   const { empresas, selectedEmpresa, year } = props;
   const [tab, setTab] = useState("dre");
   const [printMode, setPrintMode] = useState("current"); // "current" | "all" — decides what shows up when window.print() runs
-  const empresaLabel = selectedEmpresa === "all" ? "Todas as empresas" : empresas.find((e) => e.id === selectedEmpresa)?.nome || "";
-  const empresaLogo = selectedEmpresa === "all" ? null : empresas.find((e) => e.id === selectedEmpresa)?.logoUrl;
+  const empresaLabel = empresas.find((e) => e.id === selectedEmpresa)?.nome || "";
+  const empresaLogo = empresas.find((e) => e.id === selectedEmpresa)?.logoUrl;
   const printDate = fmtDate(todayISO());
 
   const exportPdf = (mode) => {
@@ -3542,7 +3483,7 @@ function ReportsView(props) {
         <div className="mb-3 hidden print:flex items-center gap-3">
           {empresaLogo && <img src={empresaLogo} alt="" className="w-10 h-10 rounded object-contain" />}
           <div>
-            <h2 className="text-lg font-semibold" style={{ color: COLORS.ink }}>{selectedEmpresa === "all" ? "Todas as empresas" : empresaLabel} · {activeReport.label}</h2>
+            <h2 className="text-lg font-semibold" style={{ color: COLORS.ink }}>{empresaLabel} · {activeReport.label}</h2>
             <p className="text-xs" style={{ color: COLORS.inkSoft }}>{empresaLabel} · Ano {year} · Emitido em {printDate}</p>
           </div>
         </div>
@@ -3562,7 +3503,7 @@ function ReportsView(props) {
               <div className="mb-3 flex items-center gap-3">
                 {empresaLogo && <img src={empresaLogo} alt="" className="w-10 h-10 rounded object-contain" />}
                 <div>
-                  <h2 className="text-lg font-semibold" style={{ color: COLORS.ink }}>{selectedEmpresa === "all" ? "Todas as empresas" : empresaLabel} · {label}</h2>
+                  <h2 className="text-lg font-semibold" style={{ color: COLORS.ink }}>{empresaLabel} · {label}</h2>
                   <p className="text-xs" style={{ color: COLORS.inkSoft }}>{empresaLabel} · Ano {year} · Emitido em {printDate}</p>
                 </div>
               </div>
@@ -4573,13 +4514,13 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
 /* ---------------------------------------------------------------------- */
 /*  Documentos Recebidos — caixa de entrada do link de upload sem login   */
 /* ---------------------------------------------------------------------- */
-function DocumentUploadsView({ uploads, empresas, selectedEmpresa, onSave, onProcess, processError }) {
+function DocumentUploadsView({ uploads, selectedEmpresa, onSave, onProcess, processError }) {
   const [preview, setPreview] = useState(null); // { item, url }
   const [previewError, setPreviewError] = useState("");
   const [processing, setProcessing] = useState(false);
 
   const visible = uploads
-    .filter((u) => selectedEmpresa === "all" || u.empresaId === selectedEmpresa)
+    .filter((u) => u.empresaId === selectedEmpresa)
     .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
 
   const setStatus = (id, status) => onSave(uploads.map((u) => (u.id === id ? { ...u, status } : u)));
@@ -4626,7 +4567,6 @@ function DocumentUploadsView({ uploads, empresas, selectedEmpresa, onSave, onPro
             <thead>
               <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
                 <th className="text-left font-medium px-4 py-2.5">Arquivo</th>
-                {selectedEmpresa === "all" && <th className="text-left font-medium px-4 py-2.5">Empresa</th>}
                 <th className="text-left font-medium px-4 py-2.5">Recebido</th>
                 <th className="text-left font-medium px-4 py-2.5">Status</th>
                 <th className="text-right font-medium px-4 py-2.5">Ações</th>
@@ -4640,7 +4580,6 @@ function DocumentUploadsView({ uploads, empresas, selectedEmpresa, onSave, onPro
                       {u.fileName}
                     </button>
                   </td>
-                  {selectedEmpresa === "all" && <td className="px-4 py-2.5"><EmpresaTag empresas={empresas} empresaId={u.empresaId} /></td>}
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{timeAgo(u.created_at)}</td>
                   <td className="px-4 py-2.5">
                     <Badge tone={u.status === "processado" ? "green" : "amber"}>{u.status === "processado" ? "Processado" : "Pendente"}</Badge>
