@@ -555,7 +555,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
 
   const RAIL_SECTIONS = [
     { id: "visao", label: "Visão Geral", icon: LayoutDashboard, items: ["gestor", "dashboard", "resumo"] },
-    { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas", "contacts"] },
+    { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas"] },
     { id: "lancamentos", label: "Lançamentos", icon: Wallet, items: ["payables", "receivables", "bank", "transfers"] },
     { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
     { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "reports", "lixeira"] },
@@ -606,7 +606,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
           <p className="font-semibold text-[15px] leading-tight" style={{ color: COLORS.ink }}>ESEK</p>
           <p className="text-[13px]" style={{ color: COLORS.inkSoft }}>Gestão Financeira</p>
         </div>
-        {view !== "empresas" && (
+        {view !== "empresas" && view !== "contacts" && (
           <div className="px-2 pb-3">
             <select
               value={selectedEmpresa}
@@ -785,6 +785,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 role={role}
                 onSave={(v) => persist("empresas", v, setEmpresas)}
                 onOpenAccounts={(id) => { changeEmpresa(id); setView("accounts"); }}
+                onOpenContacts={(id) => { changeEmpresa(id); setView("contacts"); }}
               />
             )}
 
@@ -1186,7 +1187,7 @@ function EmpresaTag({ empresas, empresaId }) {
   );
 }
 
-function EmpresasView({ empresas, role, onSave, onOpenAccounts }) {
+function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts }) {
   const [modal, setModal] = useState(null);
   const isGestor = role === "gestor";
 
@@ -1236,6 +1237,9 @@ function EmpresasView({ empresas, role, onSave, onOpenAccounts }) {
                 <div className="flex gap-1">
                   <button onClick={() => onOpenAccounts(e.id)} title="Ver contas bancárias desta empresa" className="p-1.5 rounded-md hover:bg-black/5">
                     <Landmark size={14} color={COLORS.inkSoft} />
+                  </button>
+                  <button onClick={() => onOpenContacts(e.id)} title="Ver contatos desta empresa (clientes/fornecedores)" className="p-1.5 rounded-md hover:bg-black/5">
+                    <Contact size={14} color={COLORS.inkSoft} />
                   </button>
                   <button onClick={() => setModal(e)} title="Editar empresa" className="p-1.5 rounded-md hover:bg-black/5">
                     <Pencil size={14} color={COLORS.inkSoft} />
