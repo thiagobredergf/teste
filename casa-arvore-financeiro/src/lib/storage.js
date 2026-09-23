@@ -131,33 +131,46 @@ export async function storageSet(key, value) {
     }
   }
   if (newArray.length) {
-    // O upsert em lote do PostgREST exige que todo objeto do array tenha
-    // exatamente as mesmas colunas — senão devolve 400 e NADA é salvo, nem
-    // os itens que estavam corretos. Isso acontecia sempre que o array
-    // misturava linhas antigas (vindas do select("*"), com todas as colunas,
-    // ex: created_at) com uma linha nova recém-criada no formulário (só com
-    // os campos que o usuário preencheu).
+    // O upsert em lote do PostgREST exige que todo objeto de uma mesma
+    // chamada tenha exatamente as mesmas colunas — senão devolve 400 e NADA
+    // é salvo, nem os itens que estavam corretos. Isso acontecia sempre que
+    // o array misturava linhas antigas (vindas do select("*"), com todas as
+    // colunas) com uma linha nova recém-criada no formulário (só com os
+    // campos que o usuário preencheu).
     //
-    // Não dá pra simplesmente preencher a coluna ausente com null: created_at
-    // tem "default now()" no banco, e um null explícito SOBRESCREVE esse
-    // default (viola not-null) — só omitir a coluna inteiramente deixa o
-    // Postgres aplicar o default na criação e preservar o valor já existente
-    // num upsert de atualização. Por isso created_at nunca é enviado — as
-    // outras colunas ausentes (opcionais, ex: logoUrl) viram null.
+    // Não dá pra simplesmente preencher toda coluna ausente com null: várias
+    // têm "not null default" no banco (created_at, mas também
+    // empresas.ativa, payables/receivables/bankEntries/transfers.conciliado,
+    // etc.) — um null explícito SOBRESCREVE o default e viola o not-null,
+    // derrubando o lote inteiro (foi exatamente isso que quebrou o
+    // cadastro de uma 2ª empresa: a nova linha não tinha "ativa", a antiga
+    // tinha, e o null enviado pra nova violou o not-null). Só omitir a
+    // coluna inteiramente deixa o Postgres aplicar o default.
+    //
+    // Por isso created_at nunca é enviado (é metadado puro, nunca deve
+    // voltar do cliente) e as demais linhas são agrupadas por "assinatura"
+    // de colunas: cada grupo manda só as colunas que seus próprios
+    // registros realmente têm, sem herdar coluna de outro registro do
+    // array que por acaso já tinha esse campo preenchido.
     const OMIT_KEYS = new Set(["created_at"]);
-    const allKeys = Array.from(newArray.reduce((keys, row) => {
-      Object.keys(row).forEach((k) => { if (!OMIT_KEYS.has(k)) keys.add(k); });
-      return keys;
-    }, new Set()));
-    const normalized = newArray.map((row) => {
-      const complete = {};
-      for (const k of allKeys) complete[k] = row[k] ?? null;
-      return complete;
-    });
-    const { error } = await supabase.from(table).upsert(normalized);
-    if (error) {
-      console.error(`storageSet(${key}) falhou ao gravar:`, error);
-      return null;
+    const groups = new Map();
+    for (const row of newArray) {
+      const keys = Object.keys(row).filter((k) => !OMIT_KEYS.has(k)).sort();
+      const sig = keys.join("|");
+      if (!groups.has(sig)) groups.set(sig, { keys, rows: [] });
+      groups.get(sig).rows.push(row);
+    }
+    for (const { keys, rows } of groups.values()) {
+      const normalized = rows.map((row) => {
+        const complete = {};
+        for (const k of keys) complete[k] = row[k] ?? null;
+        return complete;
+      });
+      const { error } = await supabase.from(table).upsert(normalized);
+      if (error) {
+        console.error(`storageSet(${key}) falhou ao gravar:`, error);
+        return null;
+      }
     }
   }
   return { key, value };
