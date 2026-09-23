@@ -258,7 +258,7 @@ function Card({ children, className = "", style = {} }) {
   );
 }
 
-function Button({ children, onClick, variant = "primary", type = "button", className = "", disabled, title }) {
+function Button({ children, onClick, variant = "primary", type = "button", className = "", disabled, title, style }) {
   const base = "inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
   const styles = {
     primary: { background: COLORS.primary, color: "#fff" },
@@ -267,7 +267,7 @@ function Button({ children, onClick, variant = "primary", type = "button", class
     subtle: { background: "#EFEEE8", color: COLORS.ink },
   };
   return (
-    <button type={type} disabled={disabled} onClick={onClick} title={title} className={`${base} ${className}`} style={styles[variant]}>
+    <button type={type} disabled={disabled} onClick={onClick} title={title} className={`${base} ${className}`} style={{ ...styles[variant], ...style }}>
       {children}
     </button>
   );
@@ -397,6 +397,16 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const changeEmpresa = useCallback((id) => {
     setSelectedEmpresa(id);
     saveKey("selectedEmpresa", id);
+  }, []);
+
+  // Navegação genérica do menu (rail, painel de itens, botões "Ir para
+  // Empresas"): ao voltar pra Cadastro de Empresas ou Visão Geral, a empresa
+  // selecionada é esquecida de propósito — senão o operador clicava numa
+  // ação (lançamento, fiscal, análise) sem escolher empresa e o sistema
+  // silenciosamente reaproveitava a última empresa que ele tinha olhado.
+  const goToView = useCallback((id) => {
+    setView(id);
+    if (id === "empresas" || id === "gestor") setSelectedEmpresa(null);
   }, []);
 
   // Processa um documento já recebido pelo link de upload sem login: baixa
@@ -610,8 +620,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const nav = [
     { id: "empresas", label: "Empresas", icon: Building2 },
     ...(role === "gestor" ? [{ id: "gestor", label: "Visão Geral", icon: Users }] : []),
-    { id: "dashboard", label: "Painel", icon: LayoutDashboard },
     { id: "resumo", label: "Resumo", icon: CalendarClock },
+    { id: "dashboard", label: "Painel", icon: LayoutDashboard },
     { id: "accounts", label: "Contas", icon: Landmark },
     { id: "contacts", label: "Contatos", icon: Contact },
     { id: "payables", label: "Contas a Pagar", icon: ArrowUpCircle },
@@ -630,7 +640,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const RAIL_SECTIONS = [
     { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas"] },
     ...(role === "gestor" ? [{ id: "visao", label: "Visão Geral", icon: Users, items: ["gestor"] }] : []),
-    { id: "painel", label: "Painel", icon: LayoutDashboard, items: ["dashboard", "resumo"] },
+    { id: "painel", label: "Painel", icon: LayoutDashboard, items: ["resumo", "dashboard"] },
     { id: "lancamentos", label: "Lançamentos", icon: Wallet, items: ["payables", "receivables", "bank", "transfers"] },
     { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
     { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "reports", "documentUploads", "lixeira"] },
@@ -664,7 +674,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
           return (
             <button
               key={s.id}
-              onClick={() => { setNavQuery(""); setView(first.id); }}
+              onClick={() => { setNavQuery(""); goToView(first.id); }}
               title={s.label}
               className="w-10 h-10 rounded-xl flex items-center justify-center transition-colors"
               style={{ background: active ? COLORS.greenSoft : "transparent", color: active ? COLORS.primary : COLORS.inkSoft }}
@@ -693,7 +703,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
           return (
             <button
               key={n.id}
-              onClick={() => setView(n.id)}
+              onClick={() => goToView(n.id)}
               className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left transition-colors"
               style={{
                 background: active ? COLORS.greenSoft : "transparent",
@@ -735,7 +745,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
             </span>
           ) : view !== "empresas" && currentEmpresa && (
             <button
-              onClick={() => setView("empresas")}
+              onClick={() => goToView("empresas")}
               title="Trocar de empresa"
               className="flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded-lg hover:opacity-80 transition-opacity"
               style={{ background: COLORS.greenSoft, color: COLORS.primary }}
@@ -817,7 +827,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
             />
             {role === "gestor" && (
               <div className="flex justify-center mt-2">
-                <Button onClick={() => setView("empresas")}><Plus size={15} /> Cadastrar empresa</Button>
+                <Button onClick={() => goToView("empresas")}><Plus size={15} /> Cadastrar empresa</Button>
               </div>
             )}
           </Card>
@@ -829,7 +839,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
               subtitle="Escolha o card da empresa que você quer trabalhar, em Cadastros, antes de continuar."
             />
             <div className="flex justify-center mt-2">
-              <Button onClick={() => setView("empresas")}><Building2 size={15} /> Ir para Empresas</Button>
+              <Button onClick={() => goToView("empresas")}><Building2 size={15} /> Ir para Empresas</Button>
             </div>
           </Card>
         ) : (
@@ -839,6 +849,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 empresas={empresasAtivas}
                 empresaBreakdown={empresaBreakdown}
                 year={year}
+                documentUploads={documentUploads}
                 onOpenEmpresa={(id) => { changeEmpresa(id); setView("resumo"); }}
               />
             )}
@@ -1304,7 +1315,7 @@ function EmpresasView({ empresas, role, documentUploads, onSave, onOpenAccounts,
             <Card key={e.id} className="p-4" style={e.ativa === false ? { opacity: 0.6 } : {}}>
               <div className="flex items-start justify-between mb-3">
                 <div
-                  className="flex items-center gap-2.5 cursor-pointer flex-1 min-w-0"
+                  className="flex items-center gap-2.5 cursor-pointer flex-1 min-w-0 -m-2 p-2 rounded-xl transition-all duration-150 hover:bg-[#E4F0E7] hover:shadow-[0_4px_14px_rgba(31,58,52,0.18)] hover:-translate-y-0.5"
                   onClick={() => onOpenEmpresa(e.id)}
                   title="Entrar nesta empresa"
                 >
@@ -1431,8 +1442,9 @@ function EmpresaOwnersPanel({ empresa }) {
           onChange={(e) => setEmail(e.target.value)}
           placeholder="email-do-dono@exemplo.com"
           className="text-xs"
+          style={{ height: 30, padding: "0 10px" }}
         />
-        <Button variant="subtle" onClick={addOwner} disabled={busy}>
+        <Button variant="subtle" onClick={addOwner} disabled={busy} className="text-xs shrink-0" style={{ height: 30, padding: "0 10px" }}>
           <Plus size={13} /> Dar acesso
         </Button>
       </div>
@@ -1882,26 +1894,49 @@ function Header({ title, subtitle, children }) {
 
 function FilterBar({ search, setSearch, status, setStatus, statusOptions, placeholder, dateFrom, setDateFrom, dateTo, setDateTo }) {
   return (
-    <div className="flex items-center gap-2 flex-wrap">
+    <div
+      className="flex items-center gap-2 flex-wrap p-2 rounded-xl"
+      style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
+    >
       <div className="relative flex-1 min-w-[200px]">
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" color={COLORS.inkSoft} />
-        <TextInput value={search} onChange={(e) => setSearch(e.target.value)} placeholder={placeholder} className="pl-8" />
+        <TextInput value={search} onChange={(e) => setSearch(e.target.value)} placeholder={placeholder} className="pl-8" style={{ height: 38 }} />
       </div>
-      <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-44">
+      <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-44" style={{ height: 38 }}>
         <option value="">Todos os status</option>
         {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
       </Select>
       {setDateFrom && (
-        <>
-          <TextInput type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-40" title="Vencimento de" />
-          <span className="text-sm" style={{ color: COLORS.inkSoft }}>até</span>
-          <TextInput type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-40" title="Vencimento até" />
-          {(dateFrom || dateTo) && (
-            <button onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs font-medium px-2 py-1 rounded-full" style={{ background: "#EFEEE8", color: COLORS.ink }}>
-              Limpar período
+        <div
+          className="flex items-center gap-1.5 rounded-lg pl-2.5 pr-1.5 shrink-0"
+          style={{ background: "#fff", border: `1px solid ${COLORS.border}`, height: 38 }}
+        >
+          <Calendar size={14} color={COLORS.inkSoft} className="shrink-0" />
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            title="Vencimento de"
+            className="text-sm outline-none bg-transparent"
+            style={{ color: COLORS.ink, width: 108 }}
+          />
+          <span className="text-xs shrink-0" style={{ color: COLORS.inkSoft }}>até</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            title="Vencimento até"
+            className="text-sm outline-none bg-transparent"
+            style={{ color: COLORS.ink, width: 108 }}
+          />
+          {(dateFrom || dateTo) ? (
+            <button onClick={() => { setDateFrom(""); setDateTo(""); }} title="Limpar período" className="p-1 rounded-full hover:bg-black/5 shrink-0">
+              <X size={13} color={COLORS.inkSoft} />
             </button>
+          ) : (
+            <span className="w-1.5 shrink-0" />
           )}
-        </>
+        </div>
       )}
     </div>
   );
@@ -4750,11 +4785,11 @@ function LixeiraView({
 /* ---------------------------------------------------------------------- */
 /*  Visão Geral (dashboard do gestor — landing pós-login)                  */
 /* ---------------------------------------------------------------------- */
-function GestorDashboard({ empresas, empresaBreakdown, year, onOpenEmpresa }) {
+function GestorDashboard({ empresas, empresaBreakdown, year, documentUploads, onOpenEmpresa }) {
   if (empresas.length === 0) {
     return (
       <div className="space-y-4">
-        <Header title="Visão Geral" subtitle="Todas as empresas do grupo, num só lugar." />
+        <Header title="Visão Geral" subtitle="Seu portfólio de empresas atendidas." />
         <Card className="p-8">
           <EmptyState icon={Building2} title="Nenhuma empresa cadastrada" subtitle="Cadastre a primeira empresa em “Empresas” pra começar." />
         </Card>
@@ -4762,28 +4797,45 @@ function GestorDashboard({ empresas, empresaBreakdown, year, onOpenEmpresa }) {
     );
   }
 
-  const totalEntradas = empresaBreakdown.reduce((s, e) => s + e.entradas, 0);
-  const totalSaidas = empresaBreakdown.reduce((s, e) => s + e.saidas, 0);
-  const totalSaldoContas = empresaBreakdown.reduce((s, e) => s + e.saldoContas, 0);
+  // Portfólio do analista BPO: quantas empresas ele atende, de que tipo, e
+  // o que está pendente — não o financeiro consolidado (cada empresa tem
+  // sua própria contabilidade; misturar os valores de clientes diferentes
+  // não faz sentido de negócio pra quem presta o serviço).
+  const segmentoCounts = empresas.reduce((acc, e) => {
+    if (e.segmento) acc[e.segmento] = (acc[e.segmento] || 0) + 1;
+    return acc;
+  }, {});
+  const pendentesTotal = documentUploads.filter((u) => u.status !== "processado").length;
 
   return (
     <div className="space-y-4">
-      <Header title="Visão Geral" subtitle={`Todas as empresas do grupo · Ano ${year}`} />
+      <Header title="Visão Geral" subtitle="Seu portfólio de empresas atendidas." />
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <Card className="p-4">
-          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Entradas no ano (todas)</p>
-          <p className="text-lg font-semibold" style={{ color: COLORS.green }}>{fmtBRL(totalEntradas)}</p>
+          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Clientes ativos</p>
+          <p className="text-lg font-semibold" style={{ color: COLORS.ink }}>{empresas.length}</p>
         </Card>
         <Card className="p-4">
-          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Saídas no ano (todas)</p>
-          <p className="text-lg font-semibold" style={{ color: COLORS.red }}>{fmtBRL(totalSaidas)}</p>
+          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Segmentos atendidos</p>
+          <p className="text-lg font-semibold" style={{ color: COLORS.ink }}>{Object.keys(segmentoCounts).length || "—"}</p>
         </Card>
         <Card className="p-4">
-          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Saldo em contas (todas)</p>
-          <p className="text-lg font-semibold" style={{ color: COLORS.ink }}>{fmtBRL(totalSaldoContas)}</p>
+          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Documentos pendentes no portfólio</p>
+          <p className="text-lg font-semibold" style={{ color: pendentesTotal > 0 ? COLORS.amber : COLORS.ink }}>{pendentesTotal}</p>
         </Card>
       </div>
+
+      {Object.keys(segmentoCounts).length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-xs font-medium" style={{ color: COLORS.inkSoft }}>Por atividade:</span>
+          {Object.entries(segmentoCounts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([seg, count]) => (
+              <Badge key={seg} tone="neutral">{seg} · {count}</Badge>
+            ))}
+        </div>
+      )}
 
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
         {empresaBreakdown.map(({ empresa, entradas, saidas, saldo, saldoContas }) => (
