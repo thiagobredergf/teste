@@ -482,11 +482,17 @@ function FinanceiroApp({ userEmail, onLogout }) {
       const transfOut = transfers
         .filter((t) => !t.deletedAt && t.contaOrigemId === accId)
         .reduce((s, t) => s + Number(t.valor || 0), 0);
+      // Obrigação fiscal com baixa dada também é dinheiro saindo da conta —
+      // sem isso, pagar um DAS/FGTS pelo Calendário Fiscal não derrubava o
+      // saldo em lugar nenhum do sistema (Contas, Resumo, Relatórios).
+      const fiscalOut = fiscalObligations
+        .filter((o) => !o.deletedAt && o.status === "Pago" && o.contaId === accId)
+        .reduce((s, o) => s + Number(o.valor || 0), 0);
       return (
-        Number(acc.saldoInicial || 0) + recIn + bankIn + transfIn - payOut - bankOut - transfOut
+        Number(acc.saldoInicial || 0) + recIn + bankIn + transfIn - payOut - bankOut - transfOut - fiscalOut
       );
     },
-    [accounts, receivables, bankEntries, transfers, payables]
+    [accounts, receivables, bankEntries, transfers, payables, fiscalObligations]
   );
 
   const totalBalance = useMemo(
@@ -495,7 +501,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   );
 
   // monthly realized cash flow for selected year: {entradas[12], saidas[12]}
-  const buildMonthlyFlow = useCallback((recArr, payArr, bankArr, yr) => {
+  const buildMonthlyFlow = useCallback((recArr, payArr, bankArr, fiscalArr, yr) => {
     const entradas = Array(12).fill(0);
     const saidas = Array(12).fill(0);
     recArr.forEach((r) => {
@@ -512,14 +518,19 @@ function FinanceiroApp({ userEmail, onLogout }) {
         saidas[monthIndex(p.dataPgto)] += Number(p.valorPago || p.valor || 0);
       }
     });
+    fiscalArr.forEach((o) => {
+      if (o.status === "Pago" && yearOf(o.dataPagamento) === yr) {
+        saidas[monthIndex(o.dataPagamento)] += Number(o.valor || 0);
+      }
+    });
     let acc = 0;
     const acumulado = entradas.map((e, i) => (acc += e - saidas[i]));
     return { entradas, saidas, acumulado };
   }, []);
 
   const monthlyFlow = useMemo(
-    () => buildMonthlyFlow(receivablesF, payablesF, bankEntriesF, year),
-    [receivablesF, payablesF, bankEntriesF, year, buildMonthlyFlow]
+    () => buildMonthlyFlow(receivablesF, payablesF, bankEntriesF, fiscalObligationsF, year),
+    [receivablesF, payablesF, bankEntriesF, fiscalObligationsF, year, buildMonthlyFlow]
   );
 
   const empresaBreakdown = useMemo(() => {
@@ -528,14 +539,15 @@ function FinanceiroApp({ userEmail, onLogout }) {
       const recE = receivables.filter((r) => !r.deletedAt && r.empresaId === emp.id);
       const payE = payables.filter((p) => !p.deletedAt && p.empresaId === emp.id);
       const bankE = bankEntries.filter((b) => !b.deletedAt && b.empresaId === emp.id);
+      const fiscalE = fiscalObligations.filter((o) => !o.deletedAt && o.empresaId === emp.id);
       const accE = accounts.filter((a) => a.empresaId === emp.id);
-      const flow = buildMonthlyFlow(recE, payE, bankE, year);
+      const flow = buildMonthlyFlow(recE, payE, bankE, fiscalE, year);
       const entradas = flow.entradas.reduce((a, b) => a + b, 0);
       const saidas = flow.saidas.reduce((a, b) => a + b, 0);
       const saldoContas = accE.reduce((s, a) => s + accountBalance(a.id), 0);
       return { empresa: emp, entradas, saidas, saldo: entradas - saidas, saldoContas };
     });
-  }, [empresasAtivas, receivables, payables, bankEntries, accounts, year, buildMonthlyFlow, accountBalance]);
+  }, [empresasAtivas, receivables, payables, bankEntries, fiscalObligations, accounts, year, buildMonthlyFlow, accountBalance]);
 
   const totals = useMemo(() => {
     const totalEntradas = monthlyFlow.entradas.reduce((a, b) => a + b, 0);
@@ -1010,6 +1022,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 receivables={receivablesF}
                 bankEntries={bankEntriesF}
                 transfers={transfersF}
+                fiscalObligations={fiscalObligationsF}
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
                 categoryBreakdown={categoryBreakdown}
@@ -3803,12 +3816,15 @@ function DREReport({ year, categoryBreakdown, receivableBreakdown, totals }) {
 }
 
 /* --- Fluxo de Caixa Projetado --- */
-function FluxoProjetadoReport({ payables, receivables, accounts, accountBalance }) {
+function FluxoProjetadoReport({ payables, receivables, fiscalObligations, accounts, accountBalance }) {
   const today = todayISO();
   const totalBalance = accounts.reduce((s, a) => s + accountBalance(a.id), 0);
 
   const openPayables = payables.filter((p) => p.status !== "Pago");
   const openReceivables = receivables.filter((r) => r.status !== "Recebido");
+  // "Sugerido" ainda não foi validado pelo analista — não entra na
+  // projeção até virar uma obrigação de verdade.
+  const openFiscal = fiscalObligations.filter((o) => o.status !== "Pago" && o.status !== "Sugerido");
 
   const buckets = [
     { label: "Vencidos", test: (d) => d < 0 },
@@ -3824,14 +3840,18 @@ function FluxoProjetadoReport({ payables, receivables, accounts, accountBalance 
     const entradas = openReceivables
       .filter((r) => b.test(daysBetween(today, r.vencimento)))
       .reduce((s, r) => s + Number(r.valor || 0), 0);
-    const saidas = openPayables
+    const saidas = [...openPayables, ...openFiscal]
       .filter((p) => b.test(daysBetween(today, p.vencimento)))
       .reduce((s, p) => s + Number(p.valor || 0), 0);
     if (b.label !== "Vencidos") saldoAcumulado += entradas - saidas;
     return { label: b.label, entradas, saidas, saldoAcumulado, vencidos: b.label === "Vencidos" };
   });
 
-  const itemized = [...openPayables.map((p) => ({ ...p, __tipo: "Pagar", __nome: p.fornecedor })), ...openReceivables.map((r) => ({ ...r, __tipo: "Receber", __nome: r.cliente }))]
+  const itemized = [
+    ...openPayables.map((p) => ({ ...p, __tipo: "Pagar", __nome: p.fornecedor })),
+    ...openReceivables.map((r) => ({ ...r, __tipo: "Receber", __nome: r.cliente })),
+    ...openFiscal.map((o) => ({ ...o, __tipo: "Fiscal", __nome: o.tributo })),
+  ]
     .filter((i) => daysBetween(today, i.vencimento) <= 90)
     .sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""));
 
@@ -4058,7 +4078,7 @@ function ComparativoReport({ empresaBreakdown }) {
 }
 
 /* --- Extrato de Conta --- */
-function ExtratoContaReport({ accounts, payables, receivables, bankEntries, transfers, accountBalance }) {
+function ExtratoContaReport({ accounts, payables, receivables, bankEntries, transfers, fiscalObligations, accountBalance }) {
   const [contaId, setContaId] = useState(accounts[0]?.id || "");
   useEffect(() => {
     if (!accounts.find((a) => a.id === contaId)) setContaId(accounts[0]?.id || "");
@@ -4084,6 +4104,9 @@ function ExtratoContaReport({ accounts, payables, receivables, bankEntries, tran
   });
   transfers.filter((t) => t.contaDestinoId === contaId).forEach((t) => {
     movs.push({ id: `td-${t.id}`, data: t.data, tipo: "Entrada", valor: Number(t.valor || 0), descricao: `Transferência recebida — ${t.descricao || ""}` });
+  });
+  fiscalObligations.filter((o) => o.status === "Pago" && o.contaId === contaId).forEach((o) => {
+    movs.push({ id: `fo-${o.id}`, data: o.dataPagamento, tipo: "Saída", valor: Number(o.valor || 0), descricao: `Obrigação fiscal — ${o.tributo}` });
   });
 
   const sorted = movs.filter((m) => m.data).sort((a, b) => a.data.localeCompare(b.data) || a.id.localeCompare(b.id));
