@@ -27,6 +27,7 @@ create table if not exists public.empresas (
   proprietario text,
   "contatoEmail" text,
   "contatoCelular" text,
+  "uploadToken" text unique not null default gen_random_uuid()::text,
   ativa boolean not null default true,
   created_at timestamptz not null default now()
 );
@@ -147,6 +148,18 @@ create table if not exists public."fiscalObligations" (
   "dataPagamento" date,
   "contaId" text,
   "deletedAt" timestamptz,
+  created_at timestamptz not null default now()
+);
+
+-- Caixa de entrada de documentos recebidos via link público (sem login) —
+-- ver supabase/functions/public-upload/index.ts.
+create table if not exists public."documentUploads" (
+  id text primary key,
+  "empresaId" text not null references public.empresas(id) on delete cascade,
+  "fileName" text not null,
+  "mediaType" text not null,
+  "storagePath" text not null,
+  status text not null default 'pendente' check (status in ('pendente', 'processado')),
   created_at timestamptz not null default now()
 );
 
@@ -282,6 +295,31 @@ drop policy if exists "fiscal_obligations_access" on public."fiscalObligations";
 create policy "fiscal_obligations_access" on public."fiscalObligations" for all to authenticated
   using (public.has_empresa_access(auth.uid(), "empresaId"))
   with check (public.has_empresa_access(auth.uid(), "empresaId"));
+
+alter table public."documentUploads" enable row level security;
+-- "for all" (não só select/update) porque o storageSet() do app faz upsert
+-- (INSERT ... ON CONFLICT DO UPDATE) até pra atualizar uma linha existente,
+-- e o Postgres exige a policy de INSERT nesse caminho também. Quem SEM
+-- login manda um documento continua passando só pela Edge Function pública
+-- public-upload, que usa a service role key (ignora RLS) — não precisa de
+-- policy pra anônimo aqui.
+drop policy if exists "document_uploads_access" on public."documentUploads";
+create policy "document_uploads_access" on public."documentUploads" for all to authenticated
+  using (public.has_empresa_access(auth.uid(), "empresaId"))
+  with check (public.has_empresa_access(auth.uid(), "empresaId"));
+
+-- Bucket privado pros arquivos recebidos via link de upload sem login —
+-- leitura só pra quem tem acesso à empresa (o caminho do arquivo começa
+-- com o id da empresa: "<empresaId>/arquivo").
+insert into storage.buckets (id, name, public)
+values ('documentos-recebidos', 'documentos-recebidos', false)
+on conflict (id) do nothing;
+drop policy if exists "documentos_recebidos_select" on storage.objects;
+create policy "documentos_recebidos_select" on storage.objects for select to authenticated
+  using (
+    bucket_id = 'documentos-recebidos'
+    and public.has_empresa_access(auth.uid(), (storage.foldername(name))[1])
+  );
 
 -- plano de contas é global (compartilhado por todas as empresas do BPO);
 -- todo mundo lê, só gestor edita

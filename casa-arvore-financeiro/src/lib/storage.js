@@ -20,6 +20,7 @@ const TABLE_NAMES = {
   transfers: "transfers",
   fiscalObligations: "fiscalObligations",
   contacts: "contacts",
+  documentUploads: "documentUploads",
 };
 
 // selectedEmpresa é só preferência de navegação de quem está olhando a

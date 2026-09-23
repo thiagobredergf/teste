@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -162,6 +162,7 @@ const STORE_KEYS = {
   transfers: "transfers",
   fiscalObligations: "fiscalObligations",
   contacts: "contacts",
+  documentUploads: "documentUploads",
   categories: "categories",
   selectedEmpresa: "selectedEmpresa",
 };
@@ -306,6 +307,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [transfers, setTransfers] = useState([]);
   const [fiscalObligations, setFiscalObligations] = useState([]);
   const [contacts, setContacts] = useState([]);
+  const [documentUploads, setDocumentUploads] = useState([]);
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
@@ -332,6 +334,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setTransfers(data.transfers || []);
       setFiscalObligations(data.fiscalObligations || []);
       setContacts(data.contacts || []);
+      setDocumentUploads(data.documentUploads || []);
       setCategories(data.categories || DEFAULT_CATEGORIES);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da(s) empresa(s) dele. Gestor pousa na Visão Geral.
@@ -549,6 +552,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "categories", label: "Plano de Contas", icon: ListTree },
     { id: "reconciliation", label: "Conciliação Bancária", icon: CheckCircle2 },
     { id: "reports", label: "Relatórios", icon: FileText },
+    { id: "documentUploads", label: "Documentos Recebidos", icon: Inbox },
     { id: "lixeira", label: "Lixeira", icon: Trash2 },
   ];
   const navById = Object.fromEntries(nav.map((n) => [n.id, n]));
@@ -558,7 +562,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas"] },
     { id: "lancamentos", label: "Lançamentos", icon: Wallet, items: ["payables", "receivables", "bank", "transfers"] },
     { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
-    { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "reports", "lixeira"] },
+    { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "reports", "documentUploads", "lixeira"] },
   ].map((s) => ({ ...s, items: s.items.map((id) => navById[id]).filter(Boolean) }));
 
   const activeSection = RAIL_SECTIONS.find((s) => s.items.some((n) => n.id === view)) || RAIL_SECTIONS[0];
@@ -902,6 +906,15 @@ function FinanceiroApp({ userEmail, onLogout }) {
               />
             )}
 
+            {view === "documentUploads" && (
+              <DocumentUploadsView
+                uploads={documentUploads}
+                empresas={empresas}
+                selectedEmpresa={selectedEmpresa}
+                onSave={(v) => persist("documentUploads", v, setDocumentUploads)}
+              />
+            )}
+
             {view === "lixeira" && (
               <LixeiraView
                 empresas={empresas}
@@ -1208,6 +1221,19 @@ function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts }
     onSave(empresas.map((x) => (x.id === e.id ? { ...x, ativa } : x)));
   };
 
+  // Link de upload sem login: quem recebe (o sócio da empresa cliente) só
+  // precisa desse link pra mandar boleto/comprovante/NF direto pra caixa de
+  // entrada dessa empresa — sem criar usuário nem senha no ESEK.
+  const copyUploadLink = async (e) => {
+    const url = `${window.location.origin}${window.location.pathname}?upload=${e.uploadToken}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      alert(`Link de upload copiado! Envie pro cliente:\n\n${url}`);
+    } catch {
+      window.prompt("Copie o link de upload:", url);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <Header title="Empresas do grupo" subtitle="Cada empresa mantém suas próprias contas, contas a pagar/receber e lançamentos, dentro do mesmo sistema.">
@@ -1240,6 +1266,9 @@ function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts }
                   </button>
                   <button onClick={() => onOpenContacts(e.id)} title="Ver contatos desta empresa (clientes/fornecedores)" className="p-1.5 rounded-md hover:bg-black/5">
                     <Contact size={14} color={COLORS.inkSoft} />
+                  </button>
+                  <button onClick={() => copyUploadLink(e)} title="Copiar link de upload sem login (pro cliente enviar documentos)" className="p-1.5 rounded-md hover:bg-black/5">
+                    <Link2 size={14} color={COLORS.inkSoft} />
                   </button>
                   <button onClick={() => setModal(e)} title="Editar empresa" className="p-1.5 rounded-md hover:bg-black/5">
                     <Pencil size={14} color={COLORS.inkSoft} />
@@ -1687,25 +1716,51 @@ function ContactsView({ contacts, empresas, selectedEmpresa, onSave }) {
           </table>
         )}
       </Card>
-      {modal && <ContactModal initial={modal} empresas={empresas} onClose={() => setModal(null)} onSubmit={submit} />}
+      {modal && <ContactModal initial={modal} empresas={empresas} contacts={contacts} onClose={() => setModal(null)} onSubmit={submit} />}
     </div>
   );
 }
 
-function ContactModal({ initial, empresas, onClose, onSubmit }) {
+function ContactModal({ initial, empresas, contacts = [], onClose, onSubmit }) {
   const [form, setForm] = useState({
     nome: "", documento: "", contato: "", email: "", empresaId: empresas[0]?.id || "", ...initial,
   });
+  const [autoFillNote, setAutoFillNote] = useState("");
   const valid = form.nome.trim() && form.empresaId;
+
+  // Mesmo nome já cadastrado em OUTRA empresa (ex: um fornecedor que atende
+  // mais de uma do grupo) — copia CPF/CNPJ, contato e e-mail de lá pra não
+  // pedir pra digitar de novo. Continua sendo um registro próprio desta
+  // empresa, nunca compartilha o id (cada empresa mantém seu cadastro
+  // segregado, como já conversamos).
+  const handleNome = (nome) => {
+    const nomeTrim = nome.trim().toLowerCase();
+    const other = !initial.id && nomeTrim
+      ? contacts.find((c) => !c.deletedAt && c.empresaId !== form.empresaId && c.nome.trim().toLowerCase() === nomeTrim)
+      : null;
+    if (other && !form.documento && !form.contato) {
+      setForm((f) => ({ ...f, nome, documento: other.documento || "", contato: other.contato || "", email: other.email || "" }));
+      setAutoFillNote(`Dados copiados do cadastro de "${other.nome}" em outra empresa — confira antes de salvar.`);
+    } else {
+      setForm((f) => ({ ...f, nome }));
+      if (!other) setAutoFillNote("");
+    }
+  };
+
   return (
     <Modal title={initial.id ? "Editar contato" : "Novo contato"} onClose={onClose}>
       <div className="grid gap-3">
+        {autoFillNote && (
+          <p className="text-xs px-3 py-2 rounded-lg" style={{ background: COLORS.greenSoft, color: COLORS.green }}>
+            {autoFillNote}
+          </p>
+        )}
         <Field label="Empresa">
           <Select value={form.empresaId} onChange={(e) => setForm({ ...form, empresaId: e.target.value })}>
             {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
           </Select>
         </Field>
-        <Field label="Nome"><TextInput value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} /></Field>
+        <Field label="Nome"><TextInput value={form.nome} onChange={(e) => handleNome(e.target.value)} /></Field>
         <Field label="CPF/CNPJ"><TextInput value={form.documento} onChange={(e) => setForm({ ...form, documento: e.target.value })} placeholder="000.000.000-00 ou 00.000.000/0000-00" /></Field>
         <Field label="Contato (telefone/WhatsApp)"><TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} /></Field>
         <Field label="E-mail"><TextInput type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
@@ -1739,7 +1794,19 @@ function resolveContact(contacts, { nome, documento, contato, empresaId }) {
     const next = contacts.map((c, i) => (i === idx ? merged : c));
     return { contacts: next, contact: merged };
   }
-  const created = { id: uid(), empresaId, nome: nomeTrim, documento: documento || "", contato: contato || "", email: "" };
+  // Mesmo nome já cadastrado em OUTRA empresa — copia CPF/CNPJ e contato de
+  // lá, mas cria um registro próprio desta empresa (nunca compartilha id).
+  const other = contacts.find(
+    (c) => !c.deletedAt && c.empresaId !== empresaId && c.nome.trim().toLowerCase() === nomeTrim.toLowerCase()
+  );
+  const created = {
+    id: uid(),
+    empresaId,
+    nome: nomeTrim,
+    documento: documento || other?.documento || "",
+    contato: contato || other?.contato || "",
+    email: other?.email || "",
+  };
   return { contacts: [...contacts, created], contact: created };
 }
 
@@ -2167,7 +2234,9 @@ function PayableModal({ initial, categories, empresas, contacts = [], aiNote, on
   const valid = form.fornecedor.trim() && Number(form.valor) > 0 && form.empresaId;
   const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId);
   const handleFornecedor = (nome) => {
-    const match = contactOptions.find((c) => c.nome.toLowerCase() === nome.trim().toLowerCase());
+    const nomeTrim = nome.trim().toLowerCase();
+    const match = contactOptions.find((c) => c.nome.toLowerCase() === nomeTrim)
+      || contacts.find((c) => !c.deletedAt && c.nome.toLowerCase() === nomeTrim); // mesmo nome em outra empresa
     setForm((f) => ({
       ...f,
       fornecedor: nome,
@@ -2685,7 +2754,9 @@ function ReceivableModal({ initial, categories, empresas, contacts = [], aiNote,
   const valid = form.cliente.trim() && Number(form.valor) > 0 && form.empresaId;
   const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId);
   const handleCliente = (nome) => {
-    const match = contactOptions.find((c) => c.nome.toLowerCase() === nome.trim().toLowerCase());
+    const nomeTrim = nome.trim().toLowerCase();
+    const match = contactOptions.find((c) => c.nome.toLowerCase() === nomeTrim)
+      || contacts.find((c) => !c.deletedAt && c.nome.toLowerCase() === nomeTrim); // mesmo nome em outra empresa
     setForm((f) => ({
       ...f,
       cliente: nome,
@@ -4384,6 +4455,85 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
 }
 
 /* ---------------------------------------------------------------------- */
+/*  Documentos Recebidos — caixa de entrada do link de upload sem login   */
+/* ---------------------------------------------------------------------- */
+function DocumentUploadsView({ uploads, empresas, selectedEmpresa, onSave }) {
+  const visible = uploads
+    .filter((u) => selectedEmpresa === "all" || u.empresaId === selectedEmpresa)
+    .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+
+  const setStatus = (id, status) => onSave(uploads.map((u) => (u.id === id ? { ...u, status } : u)));
+  const remove = (id) => {
+    if (!confirmDelete("Excluir este documento da caixa de entrada? O arquivo enviado não pode ser recuperado depois.")) return;
+    onSave(uploads.filter((u) => u.id !== id));
+  };
+  const handleView = async (item) => {
+    const { data, error } = await supabase.storage.from("documentos-recebidos").createSignedUrl(item.storagePath, 120);
+    if (error) {
+      alert("Não consegui abrir o arquivo: " + error.message);
+      return;
+    }
+    window.open(data.signedUrl, "_blank");
+  };
+
+  return (
+    <div className="space-y-4">
+      <Header title="Documentos Recebidos" subtitle="Arquivos que os clientes enviaram pelo link de upload, sem precisar logar no sistema." />
+      <Card className="overflow-x-auto">
+        {visible.length === 0 ? (
+          <EmptyState
+            icon={Inbox}
+            title="Nenhum documento recebido"
+            subtitle='Copie o link de upload no ícone "🔗" do card da empresa (tela Empresas) e envie pro cliente — os arquivos que ele mandar aparecem aqui.'
+          />
+        ) : (
+          <table className="w-full text-sm min-w-[720px]">
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-4 py-2.5">Arquivo</th>
+                {selectedEmpresa === "all" && <th className="text-left font-medium px-4 py-2.5">Empresa</th>}
+                <th className="text-left font-medium px-4 py-2.5">Recebido</th>
+                <th className="text-left font-medium px-4 py-2.5">Status</th>
+                <th className="text-right font-medium px-4 py-2.5">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((u) => (
+                <tr key={u.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{u.fileName}</td>
+                  {selectedEmpresa === "all" && <td className="px-4 py-2.5"><EmpresaTag empresas={empresas} empresaId={u.empresaId} /></td>}
+                  <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{timeAgo(u.created_at)}</td>
+                  <td className="px-4 py-2.5">
+                    <Badge tone={u.status === "processado" ? "green" : "amber"}>{u.status === "processado" ? "Processado" : "Pendente"}</Badge>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <div className="flex justify-end gap-1">
+                      <button onClick={() => handleView(u)} title="Ver/baixar arquivo" className="p-1.5 rounded-md hover:bg-black/5">
+                        <FileText size={14} color={COLORS.inkSoft} />
+                      </button>
+                      <button
+                        onClick={() => setStatus(u.id, u.status === "processado" ? "pendente" : "processado")}
+                        title={u.status === "processado" ? "Marcar como pendente" : "Marcar como processado"}
+                        className="p-1.5 rounded-md hover:bg-black/5"
+                      >
+                        <Check size={14} color={u.status === "processado" ? COLORS.inkSoft : COLORS.green} />
+                      </button>
+                      <button onClick={() => remove(u.id)} title="Excluir da caixa de entrada" className="p-1.5 rounded-md hover:bg-black/5">
+                        <Trash2 size={14} color={COLORS.red} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
 /*  Lixeira — itens excluídos de qualquer módulo, com opção de restaurar  */
 /* ---------------------------------------------------------------------- */
 function LixeiraView({
@@ -4790,9 +4940,115 @@ function Login() {
 }
 
 /* ---------------------------------------------------------------------- */
+/*  Upload público (sem login) — link próprio por empresa                 */
+/* ---------------------------------------------------------------------- */
+function PublicUploadPage({ token }) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  const [sent, setSent] = useState([]); // [{fileName, empresaNome}]
+
+  const handleFiles = async (fileList) => {
+    setError("");
+    setUploading(true);
+    for (const file of fileList) {
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(new Error("Erro lendo o arquivo."));
+          reader.readAsDataURL(file);
+        });
+        const fileBase64 = dataUrl.split(",")[1] || "";
+        const { data, error: err } = await supabase.functions.invoke("public-upload", {
+          body: { token, fileBase64, mediaType: file.type, fileName: file.name },
+        });
+        if (err) {
+          let detail = err.message;
+          if (err.context && typeof err.context.json === "function") {
+            try {
+              const b = await err.context.clone().json();
+              if (b?.error) detail = b.error;
+            } catch {
+              // corpo não era JSON — mantém a mensagem genérica
+            }
+          }
+          throw new Error(detail);
+        }
+        if (!data?.ok) throw new Error(data?.error || "Não consegui enviar o arquivo.");
+        setSent((prev) => [...prev, { fileName: file.name, empresaNome: data.empresaNome }]);
+      } catch (err) {
+        setError(err?.message || "Erro ao enviar o documento.");
+      }
+    }
+    setUploading(false);
+  };
+
+  const empresaNome = sent[0]?.empresaNome;
+
+  return (
+    <div className="w-full min-h-screen flex items-center justify-center p-4" style={{ background: COLORS.bg, fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
+      <Card className="w-full max-w-md p-6">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: COLORS.primary }}>
+            <Sparkles size={16} color="#fff" />
+          </span>
+          <p className="font-semibold text-base" style={{ color: COLORS.ink }}>ESEK</p>
+        </div>
+        <p className="text-sm mb-5" style={{ color: COLORS.inkSoft }}>
+          {empresaNome ? `Envio de documentos — ${empresaNome}` : "Envie boletos, notas fiscais e comprovantes pro seu analista, sem precisar de login."}
+        </p>
+
+        <label
+          className="flex flex-col items-center justify-center gap-2 py-10 rounded-xl cursor-pointer text-center transition-colors"
+          style={{ border: `2px dashed ${COLORS.border}`, background: "#FAFAF7" }}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files?.length) handleFiles(Array.from(e.dataTransfer.files)); }}
+        >
+          <Upload size={22} color={COLORS.inkSoft} />
+          <span className="text-sm font-medium" style={{ color: COLORS.ink }}>
+            {uploading ? "Enviando…" : "Clique ou arraste o arquivo aqui"}
+          </span>
+          <span className="text-xs" style={{ color: COLORS.inkSoft }}>PDF, JPG, PNG ou WEBP</span>
+          <input
+            type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={uploading}
+            onChange={(e) => { if (e.target.files?.length) handleFiles(Array.from(e.target.files)); e.target.value = ""; }}
+          />
+        </label>
+
+        {error && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm mt-3" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+            <AlertTriangle size={15} /> {error}
+          </div>
+        )}
+
+        {sent.length > 0 && (
+          <div className="mt-4 space-y-1.5">
+            {sent.map((s, i) => (
+              <div key={i} className="flex items-center gap-2 text-sm px-3 py-2 rounded-lg" style={{ background: COLORS.greenSoft, color: COLORS.green }}>
+                <CheckCircle2 size={14} className="shrink-0" /> "{s.fileName}" recebido com sucesso.
+              </div>
+            ))}
+          </div>
+        )}
+
+        <p className="text-xs mt-5" style={{ color: COLORS.inkSoft }}>
+          Pode enviar mais de um arquivo. Seu analista financeiro vai revisar e lançar cada documento no sistema.
+        </p>
+      </Card>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
 /*  Auth gate                                                              */
 /* ---------------------------------------------------------------------- */
 export default function App() {
+  // Link de upload sem login (?upload=<token>) — checa ANTES de qualquer
+  // coisa de autenticação, porque quem abre esse link não tem (e não
+  // precisa ter) usuário no ESEK.
+  const uploadToken = new URLSearchParams(window.location.search).get("upload");
+  if (uploadToken) return <PublicUploadPage token={uploadToken} />;
+
   const [session, setSession] = useState(undefined); // undefined = carregando, null = deslogado
 
   useEffect(() => {
