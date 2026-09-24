@@ -32,6 +32,8 @@ const COLORS = {
   border: "#E4E1D8",
   amber: "#B8792F",
   amberSoft: "#F3E7D2",
+  blue: "#2F6E8C",
+  blueSoft: "#DFEAF0",
 };
 
 const MONTHS = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
@@ -252,6 +254,7 @@ function Badge({ children, tone = "neutral" }) {
     amber: { bg: COLORS.amberSoft, fg: COLORS.amber },
     red: { bg: COLORS.redSoft, fg: COLORS.red },
     gold: { bg: COLORS.goldSoft, fg: COLORS.gold },
+    blue: { bg: COLORS.blueSoft, fg: COLORS.blue },
   };
   const t = tones[tone] || tones.neutral;
   return (
@@ -2057,8 +2060,8 @@ function StatusSummary({ items, statuses }) {
       {statuses.map(({ key, label, tone }) => {
         const subset = items.filter((i) => i.statusDisplay === key);
         const total = subset.reduce((s, i) => s + Number(i.valor || 0), 0);
-        const bg = { green: COLORS.greenSoft, red: COLORS.redSoft, amber: COLORS.amberSoft, neutral: "#EEEDE7" }[tone];
-        const fg = { green: COLORS.green, red: COLORS.red, amber: COLORS.amber, neutral: COLORS.inkSoft }[tone];
+        const bg = { green: COLORS.greenSoft, red: COLORS.redSoft, amber: COLORS.amberSoft, gold: COLORS.goldSoft, blue: COLORS.blueSoft, neutral: "#EEEDE7" }[tone];
+        const fg = { green: COLORS.green, red: COLORS.red, amber: COLORS.amber, gold: COLORS.gold, blue: COLORS.blue, neutral: COLORS.inkSoft }[tone];
         return (
           <div key={key} className="rounded-lg p-2.5" style={{ background: bg }}>
             <p className="text-[11px]" style={{ color: fg }}>{label}</p>
@@ -2173,9 +2176,13 @@ function PayablesView({
   const withDerived = payables
     .filter((p) => !p.deletedAt && p.empresaId === selectedEmpresa)
     .map((p) => {
+      // Atrasado/Próximo só faz sentido pra quem ainda está parado em "A
+      // Pagar" — uma vez que o analista já propôs uma data (Agendado) ou o
+      // dono já autorizou (Autorizado), o status mostra isso, não mais o
+      // quão perto/longe o vencimento original está.
       let statusDisplay = p.status;
-      if (p.status !== "Pago" && p.vencimento < todayISO()) statusDisplay = "Atrasado";
-      else if (p.status !== "Pago" && daysUntil(p.vencimento) <= 10) statusDisplay = "Próximo";
+      if (p.status === "A Pagar" && p.vencimento < todayISO()) statusDisplay = "Atrasado";
+      else if (p.status === "A Pagar" && daysUntil(p.vencimento) <= 10) statusDisplay = "Próximo";
       return { ...p, statusDisplay };
     });
 
@@ -2223,16 +2230,34 @@ function PayablesView({
     setPayModal(null);
   };
 
-  const confirmSchedule = (ids, dataPgto, contaPgtoId) => {
+  // "Agendar pagamentos" NÃO é uma baixa — é a proposta do analista BPO de
+  // quando/de qual conta cada conta será paga, virando a "relação" que o
+  // dono autoriza. Por isso a data é livre (inclusive futura) e nada em
+  // valorPago/dataPgto/contaPgtoId é tocado aqui — só a baixa de verdade
+  // (Dar baixa) mexe nesses campos.
+  const confirmSchedule = (ids, agendadoPara, contaAgendadaId) => {
     const idSet = new Set(ids);
-    onSave(payables.map((p) => (idSet.has(p.id) ? { ...p, status: "Pago", dataPgto, valorPago: p.valor, contaPgtoId } : p)));
-    ids.forEach((id) => logAudit(selectedEmpresa, "payable", id, "baixa", `Dar baixa em lote — ${fmtDate(dataPgto)}`, userEmail));
+    onSave(payables.map((p) => (idSet.has(p.id) ? { ...p, status: "Agendado", agendadoPara, contaAgendadaId } : p)));
+    ids.forEach((id) => logAudit(selectedEmpresa, "payable", id, "agendar", `Incluído na ordem de pagamento — proposto pra ${fmtDate(agendadoPara)}`, userEmail));
     setScheduleModal(false);
   };
 
+  const authorizePayment = (p) => {
+    if (!confirmDelete(`Autorizar o pagamento de "${p.fornecedor}" (${fmtBRL(p.valor)}, proposto pra ${fmtDate(p.agendadoPara)})?`)) return;
+    onSave(payables.map((x) => (x.id === p.id ? { ...x, status: "Autorizado", autorizadoPor: userEmail, autorizadoEm: new Date().toISOString() } : x)));
+    logAudit(selectedEmpresa, "payable", p.id, "autorizar", `Autorizou pagamento de ${fmtBRL(p.valor)}`, userEmail);
+  };
+
+  const cancelSchedule = (p) => {
+    if (!confirmDelete(`Cancelar o agendamento de "${p.fornecedor}"? Ela volta pra "A Pagar".`)) return;
+    onSave(payables.map((x) => (x.id === p.id ? { ...x, status: "A Pagar", agendadoPara: null, contaAgendadaId: null, autorizadoPor: null, autorizadoEm: null } : x)));
+    logAudit(selectedEmpresa, "payable", p.id, "cancelar_agendamento", `Cancelou agendamento de ${fmtBRL(p.valor)}`, userEmail);
+  };
+
   const cancelPayment = (p) => {
-    if (!confirmDelete(`Cancelar a baixa de "${p.fornecedor}"? Ela volta pra "A Pagar".`)) return;
-    onSave(payables.map((x) => (x.id === p.id ? { ...x, status: "A Pagar", dataPgto: null, valorPago: null, contaPgtoId: null } : x)));
+    if (!confirmDelete(`Cancelar a baixa de "${p.fornecedor}"? Ela volta pra "${p.autorizadoPor ? "Autorizado" : p.agendadoPara ? "Agendado" : "A Pagar"}".`)) return;
+    const revertStatus = p.autorizadoPor ? "Autorizado" : p.agendadoPara ? "Agendado" : "A Pagar";
+    onSave(payables.map((x) => (x.id === p.id ? { ...x, status: revertStatus, dataPgto: null, valorPago: null, contaPgtoId: null } : x)));
     logAudit(selectedEmpresa, "payable", p.id, "cancelar_baixa", `Cancelou baixa de ${fmtBRL(p.valorPago || p.valor)}`, userEmail);
   };
 
@@ -2264,10 +2289,12 @@ function PayablesView({
         { key: "A Pagar", label: "A pagar", tone: "neutral" },
         { key: "Próximo", label: "Próximo (10 dias)", tone: "amber" },
         { key: "Atrasado", label: "Atrasado", tone: "red" },
+        { key: "Agendado", label: "Agendado", tone: "gold" },
+        { key: "Autorizado", label: "Autorizado", tone: "blue" },
         { key: "Pago", label: "Pago", tone: "green" },
       ]} />
       <FilterBar search={search} setSearch={setSearch} status={status} setStatus={setStatus}
-        statusOptions={["A Pagar", "Próximo", "Pago", "Atrasado"]} placeholder="Buscar fornecedor, descrição..."
+        statusOptions={["A Pagar", "Próximo", "Atrasado", "Agendado", "Autorizado", "Pago"]} placeholder="Buscar fornecedor, descrição..."
         dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} />
 
       <Card className="overflow-x-auto">
@@ -2299,13 +2326,28 @@ function PayablesView({
                   <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(p.valor)}</td>
                   <td className="px-4 py-2.5">
                     <StatusBadge status={p.statusDisplay} />
+                    {(p.status === "Agendado" || p.status === "Autorizado") && (
+                      <p className="text-[11px] mt-0.5" style={{ color: COLORS.inkSoft }}>
+                        {fmtDate(p.agendadoPara)} · {accounts.find((a) => a.id === p.contaAgendadaId)?.nome || "—"}
+                      </p>
+                    )}
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
-                      {p.status !== "Pago" ? (
+                      {p.status === "Pago" && (
+                        <button onClick={() => cancelPayment(p)} title="Cancelar baixa" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
+                      )}
+                      {p.status === "Agendado" && (
+                        <>
+                          <Button variant="subtle" onClick={() => authorizePayment(p)} title={`Proposto pra ${fmtDate(p.agendadoPara)}`}><ShieldCheck size={13} /> Autorizar</Button>
+                          <button onClick={() => cancelSchedule(p)} title="Cancelar agendamento (volta pra A Pagar)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
+                        </>
+                      )}
+                      {p.status === "Autorizado" && (
+                        <button onClick={() => cancelSchedule(p)} title="Cancelar agendamento (volta pra A Pagar)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
+                      )}
+                      {p.status !== "Pago" && (
                         <Button variant="subtle" onClick={() => setPayModal(p)}><Check size={13} /> Dar baixa</Button>
-                      ) : (
-                        <button onClick={() => cancelPayment(p)} title="Cancelar baixa (volta pra A Pagar)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                       )}
                       <button onClick={() => { setAiNote(""); setModal(p); }} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
                       <button onClick={() => remove(p.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
@@ -2373,7 +2415,7 @@ function PayablesView({
         <ScheduleModal
           title="Agendar pagamentos"
           nameField="fornecedor"
-          items={payables.filter((p) => p.status !== "Pago" && p.empresaId === selectedEmpresa)}
+          items={payables.filter((p) => p.status === "A Pagar" && p.empresaId === selectedEmpresa)}
           accounts={accounts.filter((a) => a.empresaId === selectedEmpresa)}
           onClose={() => setScheduleModal(false)}
           onConfirm={confirmSchedule}
@@ -2448,6 +2490,8 @@ function StatusBadge({ status }) {
   if (status === "Pago" || status === "Recebido") return <Badge tone="green">{status}</Badge>;
   if (status === "Atrasado" || status === "Inadimplente") return <Badge tone="red">{status}</Badge>;
   if (status === "Próximo") return <Badge tone="amber">{status}</Badge>;
+  if (status === "Agendado") return <Badge tone="gold">{status}</Badge>;
+  if (status === "Autorizado") return <Badge tone="blue">{status}</Badge>;
   return <Badge tone="neutral">{status}</Badge>;
 }
 
@@ -2603,9 +2647,12 @@ function InstallmentsReviewModal({ review, categories, partyLabel = "Fornecedor"
 }
 
 function SettleModal({ title, label, dateLabel, accountLabel, item, accounts, onClose, onConfirm }) {
-  const [data, setData] = useState(todayISO());
+  // Se o item já tinha sido agendado (ordem de pagamento), a baixa parte
+  // da data/conta propostas — desde que a data não seja futura, já que
+  // baixa nunca pode ser.
+  const [data, setData] = useState(item.agendadoPara && item.agendadoPara <= todayISO() ? item.agendadoPara : todayISO());
   const [valor, setValor] = useState(item.valor);
-  const [contaId, setContaId] = useState(accounts[0]?.id || "");
+  const [contaId, setContaId] = useState(item.contaAgendadaId || accounts[0]?.id || "");
   return (
     <Modal title={title} onClose={onClose}>
       <div className="grid gap-3">
@@ -2650,8 +2697,11 @@ function ScheduleModal({ title, items, nameField, accounts, onClose, onConfirm }
   return (
     <Modal title={title} onClose={onClose} wide>
       <div className="grid gap-3">
+        <p className="text-xs -mt-1 px-3 py-2 rounded-lg" style={{ background: COLORS.goldSoft, color: COLORS.gold }}>
+          Isso ainda não é uma baixa — é a proposta de pagamento que o dono vai autorizar. Escolha a data que fizer sentido pro seu fluxo de caixa (pode ser futura).
+        </p>
         <div className="grid md:grid-cols-2 gap-3">
-          <Field label="Conta que vai pagar">
+          <Field label="Conta prevista pro pagamento">
             <Select value={contaId} onChange={(e) => { setContaId(e.target.value); setChecked({}); }}>
               <option value="">Selecione uma conta</option>
               {accounts.map((a) => (
@@ -2659,8 +2709,8 @@ function ScheduleModal({ title, items, nameField, accounts, onClose, onConfirm }
               ))}
             </Select>
           </Field>
-          <Field label="Data do pagamento">
-            <TextInput type="date" value={data} max={todayISO()} onChange={(e) => setData(e.target.value)} />
+          <Field label="Data proposta pro pagamento">
+            <TextInput type="date" value={data} onChange={(e) => setData(e.target.value)} />
           </Field>
         </div>
 
@@ -2705,7 +2755,7 @@ function ScheduleModal({ title, items, nameField, accounts, onClose, onConfirm }
               onClick={() => onConfirm(selecionados.map((i) => i.id), data, contaId)}
               disabled={selecionados.length === 0}
             >
-              Confirmar {selecionados.length > 0 ? `(${selecionados.length})` : ""}
+              Agendar {selecionados.length > 0 ? `(${selecionados.length})` : ""}
             </Button>
           </div>
         </div>
