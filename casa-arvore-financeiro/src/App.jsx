@@ -655,6 +655,20 @@ function FinanceiroApp({ userEmail, onLogout }) {
     return items.slice(0, 8);
   }, [payablesF, receivablesF, bankEntriesF, transfersF, empresaNome]);
 
+  // O que precisa de atenção na empresa aberta agora — documento recebido
+  // ainda não classificado, ou fornecedor/cliente que entrou num
+  // lançamento mas cujo cadastro (CPF/CNPJ, contato) nunca foi completado
+  // (todo lançamento nasce com um Contato pareado pelo nome, mesmo que
+  // vazio — não dá pra saber se falta cadastrar só pelo nome existir).
+  const pendingDocs = useMemo(
+    () => documentUploads.filter((u) => u.empresaId === selectedEmpresa && u.status !== "processado"),
+    [documentUploads, selectedEmpresa]
+  );
+  const pendingContacts = useMemo(
+    () => contacts.filter((c) => !c.deletedAt && c.empresaId === selectedEmpresa && !c.documento && !c.contato),
+    [contacts, selectedEmpresa]
+  );
+
   if (!ready) {
     return (
       <div className="w-full h-full flex items-center justify-center" style={{ background: COLORS.bg, minHeight: 480 }}>
@@ -932,11 +946,9 @@ function FinanceiroApp({ userEmail, onLogout }) {
               <EmpresasView
                 empresas={empresas}
                 role={role}
-                documentUploads={documentUploads}
                 onSave={(v) => persist("empresas", v, setEmpresas)}
                 onOpenAccounts={(id) => { changeEmpresa(id); setView("accounts"); }}
                 onOpenContacts={(id) => { changeEmpresa(id); setView("contacts"); }}
-                onOpenDocuments={(id) => { changeEmpresa(id); setView("documentUploads"); }}
                 onOpenEmpresa={(id) => { changeEmpresa(id); setView("resumo"); }}
               />
             )}
@@ -1130,6 +1142,51 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 })}
               </div>
             )}
+
+            {selectedEmpresa && (
+              <div className="pt-4 mt-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                <p className="font-semibold text-sm" style={{ color: COLORS.ink }}>Pendências</p>
+                <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>O que precisa de atenção nesta empresa</p>
+                {pendingDocs.length === 0 && pendingContacts.length === 0 ? (
+                  <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nada pendente por aqui.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {pendingDocs.length > 0 && (
+                      <button
+                        onClick={() => goToView("documentUploads")}
+                        className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
+                      >
+                        <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
+                          <Inbox size={14} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <p className="text-sm font-medium" style={{ color: COLORS.ink }}>
+                            {pendingDocs.length} documento{pendingDocs.length > 1 ? "s" : ""} pendente{pendingDocs.length > 1 ? "s" : ""}
+                          </p>
+                          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Aguardando classificação</p>
+                        </span>
+                      </button>
+                    )}
+                    {pendingContacts.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => goToView("contacts")}
+                        className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
+                        title="Completar cadastro deste contato"
+                      >
+                        <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
+                          <Contact size={14} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate" style={{ color: COLORS.ink }}>{c.nome}</p>
+                          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Cadastro incompleto — falta CPF/CNPJ ou contato</p>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </aside>
         </div>
       </div>
@@ -1315,7 +1372,7 @@ function BreakdownTable({ data, columns }) {
 /* ---------------------------------------------------------------------- */
 /*  Empresas                                                               */
 /* ---------------------------------------------------------------------- */
-function EmpresasView({ empresas, role, documentUploads, onSave, onOpenAccounts, onOpenContacts, onOpenDocuments, onOpenEmpresa }) {
+function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts, onOpenEmpresa }) {
   const [modal, setModal] = useState(null);
   const isGestor = role === "gestor";
 
@@ -1360,7 +1417,6 @@ function EmpresasView({ empresas, role, documentUploads, onSave, onOpenAccounts,
       ) : (
         <div className="grid md:grid-cols-2 gap-3">
           {empresas.map((e) => {
-            const pendentes = documentUploads.filter((u) => u.empresaId === e.id && u.status !== "processado").length;
             return (
             <Card key={e.id} className="p-4" style={e.ativa === false ? { opacity: 0.6 } : {}}>
               <div className="flex items-start justify-between mb-3">
@@ -1405,16 +1461,13 @@ function EmpresasView({ empresas, role, documentUploads, onSave, onOpenAccounts,
                   )}
                 </div>
               </div>
-              {(e.segmento || e.proprietario || e.contatoEmail || e.contatoCelular || pendentes > 0) && (
+              {(e.segmento || e.proprietario || e.contatoEmail || e.contatoCelular) && (
                 <div className="pb-3 space-y-1">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {e.segmento && <Badge tone="neutral">{e.segmento}</Badge>}
-                    {pendentes > 0 && (
-                      <button onClick={() => onOpenDocuments(e.id)} title="Ver documentos pendentes desta empresa">
-                        <Badge tone="amber"><Inbox size={11} /> {pendentes} documento{pendentes > 1 ? "s" : ""} pendente{pendentes > 1 ? "s" : ""}</Badge>
-                      </button>
-                    )}
-                  </div>
+                  {e.segmento && (
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Badge tone="neutral">{e.segmento}</Badge>
+                    </div>
+                  )}
                   {e.proprietario && <p className="text-xs" style={{ color: COLORS.inkSoft }}>Proprietário: {e.proprietario}</p>}
                   {(e.contatoEmail || e.contatoCelular) && (
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>
