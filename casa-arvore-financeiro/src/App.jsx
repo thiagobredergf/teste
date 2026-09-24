@@ -1872,7 +1872,7 @@ function AccountModal({ initial, onClose, onSubmit }) {
             <TextInput type="number" step="0.01" value={form.saldoInicial} onChange={(e) => setForm({ ...form, saldoInicial: e.target.value })} />
           </Field>
           <Field label="Data do saldo inicial">
-            <TextInput type="date" value={form.dataInicial} onChange={(e) => setForm({ ...form, dataInicial: e.target.value })} />
+            <TextInput type="date" value={form.dataInicial} max={todayISO()} onChange={(e) => setForm({ ...form, dataInicial: e.target.value })} />
           </Field>
         </div>
         <div className="flex justify-end gap-2 pt-2">
@@ -2620,7 +2620,7 @@ function PayableModal({ initial, categories, contacts = [], aiNote, previewDoc, 
           <Field label="Nº do documento">
             <TextInput value={form.numeroDocumento || ""} onChange={(e) => setForm({ ...form, numeroDocumento: e.target.value })} placeholder="Nº da NF, boleto..." />
           </Field>
-          <Field label="Data de lançamento"><TextInput type="date" value={form.dataLanc} onChange={(e) => setForm({ ...form, dataLanc: e.target.value })} /></Field>
+          <Field label="Data de lançamento"><TextInput type="date" value={form.dataLanc} max={todayISO()} onChange={(e) => setForm({ ...form, dataLanc: e.target.value })} /></Field>
           <Field label="Vencimento"><TextInput type="date" value={form.vencimento} onChange={(e) => setForm({ ...form, vencimento: e.target.value })} /></Field>
           <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} /></Field>
           <Field label="Forma de pagamento">
@@ -3211,7 +3211,7 @@ function ReceivableModal({ initial, categories, contacts = [], aiNote, previewDo
           <Field label="Nº do documento">
             <TextInput value={form.numeroDocumento || ""} onChange={(e) => setForm({ ...form, numeroDocumento: e.target.value })} placeholder="Nº da NF, boleto..." />
           </Field>
-          <Field label="Data de lançamento"><TextInput type="date" value={form.dataLanc} onChange={(e) => setForm({ ...form, dataLanc: e.target.value })} /></Field>
+          <Field label="Data de lançamento"><TextInput type="date" value={form.dataLanc} max={todayISO()} onChange={(e) => setForm({ ...form, dataLanc: e.target.value })} /></Field>
           <Field label="Vencimento"><TextInput type="date" value={form.vencimento} onChange={(e) => setForm({ ...form, vencimento: e.target.value })} /></Field>
           <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} /></Field>
           <Field label="Forma de recebimento">
@@ -3413,7 +3413,7 @@ function BankEntryModal({ initial, accounts, categories, suggestion, aiNote, pre
       )}
       <div className={previewDoc ? "grid md:grid-cols-[1fr_300px] gap-4" : ""}>
         <div className="grid gap-3">
-          <Field label="Data"><TextInput type="date" value={form.data} onChange={(e) => setForm({ ...form, data: e.target.value })} /></Field>
+          <Field label="Data"><TextInput type="date" value={form.data} max={todayISO()} onChange={(e) => setForm({ ...form, data: e.target.value })} /></Field>
           <Field label="Conta">
             <Select value={form.contaId} onChange={(e) => setForm({ ...form, contaId: e.target.value })}>
               {accounts.length === 0 && <option value="">Cadastre uma conta primeiro</option>}
@@ -3528,7 +3528,7 @@ function TransferModal({ initial, accounts, onClose, onSubmit }) {
   return (
     <Modal title={initial.id ? "Editar transferência" : "Nova transferência"} onClose={onClose}>
       <div className="grid gap-3">
-        <Field label="Data"><TextInput type="date" value={form.data} onChange={(e) => setForm({ ...form, data: e.target.value })} /></Field>
+        <Field label="Data"><TextInput type="date" value={form.data} max={todayISO()} onChange={(e) => setForm({ ...form, data: e.target.value })} /></Field>
         <Field label="Saiu da conta">
           <Select value={form.contaOrigemId} onChange={(e) => setForm({ ...form, contaOrigemId: e.target.value })}>
             {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
