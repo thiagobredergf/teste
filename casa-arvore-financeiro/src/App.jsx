@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -150,6 +150,17 @@ async function callExtractDocument(fileBase64, mediaType, context) {
   }
   if (!data?.ok) throw new Error(data?.error || "Não consegui ler o documento.");
   return data.extracted || {};
+}
+
+// Log de auditoria (dar baixa / cancelar baixa) — insert direto, fora do
+// storageGet/storageSet genérico: esse log é só-inserção (a policy de RLS
+// nem tem update/delete), então não pode passar pelo diff "apaga o que
+// não vier no array" que storageSet faz pras outras tabelas.
+async function logAudit(empresaId, entity, entityId, action, detail, userEmail) {
+  const { error } = await supabase.from("auditLog").insert({
+    id: `al-${uid()}`, empresaId, entity, entityId, action, detail, userEmail,
+  });
+  if (error) console.error("logAudit falhou:", error);
 }
 
 const fmtBRL = (n) =>
@@ -944,6 +955,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 onSave={(v) => persist("payables", v, setPayables)}
                 pendingImport={pendingImport?.context === "payable" ? pendingImport : null}
                 onImportProcessed={handleImportProcessed}
+                userEmail={userEmail}
               />
             )}
 
@@ -959,6 +971,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 onSave={(v) => persist("receivables", v, setReceivables)}
                 pendingImport={pendingImport?.context === "receivable" ? pendingImport : null}
                 onImportProcessed={handleImportProcessed}
+                userEmail={userEmail}
               />
             )}
 
@@ -992,6 +1005,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 empresas={empresasAtivas}
                 selectedEmpresa={selectedEmpresa}
                 onSave={(v) => persist("fiscalObligations", v, setFiscalObligations)}
+                userEmail={userEmail}
               />
             )}
 
@@ -1991,7 +2005,7 @@ function StatusSummary({ items, statuses }) {
 /* ---------------------------------------------------------------------- */
 function PayablesView({
   payables, accounts, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
-  pendingImport, onImportProcessed,
+  pendingImport, onImportProcessed, userEmail,
 }) {
   const [modal, setModal] = useState(null);
   const [payModal, setPayModal] = useState(null);
@@ -2131,13 +2145,21 @@ function PayablesView({
 
   const confirmPayment = (id, dataPgto, valorPago, contaPgtoId) => {
     onSave(payables.map((p) => (p.id === id ? { ...p, status: "Pago", dataPgto, valorPago, contaPgtoId } : p)));
+    logAudit(selectedEmpresa, "payable", id, "baixa", `Dar baixa — ${fmtBRL(valorPago)} em ${fmtDate(dataPgto)}`, userEmail);
     setPayModal(null);
   };
 
   const confirmSchedule = (ids, dataPgto, contaPgtoId) => {
     const idSet = new Set(ids);
     onSave(payables.map((p) => (idSet.has(p.id) ? { ...p, status: "Pago", dataPgto, valorPago: p.valor, contaPgtoId } : p)));
+    ids.forEach((id) => logAudit(selectedEmpresa, "payable", id, "baixa", `Dar baixa em lote — ${fmtDate(dataPgto)}`, userEmail));
     setScheduleModal(false);
+  };
+
+  const cancelPayment = (p) => {
+    if (!confirmDelete(`Cancelar a baixa de "${p.fornecedor}"? Ela volta pra "A Pagar".`)) return;
+    onSave(payables.map((x) => (x.id === p.id ? { ...x, status: "A Pagar", dataPgto: null, valorPago: null, contaPgtoId: null } : x)));
+    logAudit(selectedEmpresa, "payable", p.id, "cancelar_baixa", `Cancelou baixa de ${fmtBRL(p.valorPago || p.valor)}`, userEmail);
   };
 
   const total = filtered.reduce((s, p) => s + Number(p.valor || 0), 0);
@@ -2206,8 +2228,10 @@ function PayablesView({
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
-                      {p.status !== "Pago" && (
+                      {p.status !== "Pago" ? (
                         <Button variant="subtle" onClick={() => setPayModal(p)}><Check size={13} /> Dar baixa</Button>
+                      ) : (
+                        <button onClick={() => cancelPayment(p)} title="Cancelar baixa (volta pra A Pagar)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                       )}
                       <button onClick={() => { setAiNote(""); setModal(p); }} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
                       <button onClick={() => remove(p.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
@@ -2505,7 +2529,10 @@ function SettleModal({ title, label, dateLabel, accountLabel, item, accounts, on
   return (
     <Modal title={title} onClose={onClose}>
       <div className="grid gap-3">
-        <Field label={dateLabel}><TextInput type="date" value={data} onChange={(e) => setData(e.target.value)} /></Field>
+        <Field label={dateLabel}>
+          <TextInput type="date" value={data} max={todayISO()} onChange={(e) => setData(e.target.value)} />
+          <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Baixa registra um pagamento que já aconteceu — não é possível dar baixa numa data futura.</p>
+        </Field>
         <Field label={label}><TextInput type="number" step="0.01" value={valor} onChange={(e) => setValor(e.target.value)} /></Field>
         <Field label={accountLabel}>
           <Select value={contaId} onChange={(e) => setContaId(e.target.value)}>
@@ -2553,7 +2580,7 @@ function ScheduleModal({ title, items, nameField, accounts, onClose, onConfirm }
             </Select>
           </Field>
           <Field label="Data do pagamento">
-            <TextInput type="date" value={data} onChange={(e) => setData(e.target.value)} />
+            <TextInput type="date" value={data} max={todayISO()} onChange={(e) => setData(e.target.value)} />
           </Field>
         </div>
 
@@ -2612,7 +2639,7 @@ function ScheduleModal({ title, items, nameField, accounts, onClose, onConfirm }
 /* ---------------------------------------------------------------------- */
 function ReceivablesView({
   receivables, accounts, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
-  pendingImport, onImportProcessed,
+  pendingImport, onImportProcessed, userEmail,
 }) {
   const [modal, setModal] = useState(null);
   const [recModal, setRecModal] = useState(null);
@@ -2739,7 +2766,13 @@ function ReceivablesView({
   };
   const confirmReceipt = (id, dataReceb, valorRecebido, contaRecebId) => {
     onSave(receivables.map((r) => (r.id === id ? { ...r, status: "Recebido", dataReceb, valorRecebido, contaRecebId } : r)));
+    logAudit(selectedEmpresa, "receivable", id, "baixa", `Dar baixa — ${fmtBRL(valorRecebido)} em ${fmtDate(dataReceb)}`, userEmail);
     setRecModal(null);
+  };
+  const cancelReceipt = (r) => {
+    if (!confirmDelete(`Cancelar o recebimento de "${r.cliente}"? Ele volta pra "A Receber".`)) return;
+    onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: "A Receber", dataReceb: null, valorRecebido: null, contaRecebId: null } : x)));
+    logAudit(selectedEmpresa, "receivable", r.id, "cancelar_baixa", `Cancelou recebimento de ${fmtBRL(r.valorRecebido || r.valor)}`, userEmail);
   };
 
   const total = filtered.reduce((s, r) => s + Number(r.valor || 0), 0);
@@ -2803,8 +2836,10 @@ function ReceivablesView({
                   <td className="px-4 py-2.5"><StatusBadge status={r.statusDisplay} /></td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
-                      {r.status !== "Recebido" && (
+                      {r.status !== "Recebido" ? (
                         <Button variant="subtle" onClick={() => setRecModal(r)}><Check size={13} /> Dar baixa</Button>
+                      ) : (
+                        <button onClick={() => cancelReceipt(r)} title="Cancelar recebimento (volta pra A Receber)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                       )}
                       <button onClick={() => setModal(r)} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
                       <button onClick={() => remove(r.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
@@ -3348,7 +3383,7 @@ function buildFiscalSuggestions(empresa, existing, year) {
   return out;
 }
 
-function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }) {
+function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave, userEmail }) {
   const [modal, setModal] = useState(null);
   const [payModal, setPayModal] = useState(null);
   const [search, setSearch] = useState("");
@@ -3389,7 +3424,13 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }
   };
   const confirmPayment = (id, dataPagamento, valor, contaId) => {
     onSave(obligations.map((o) => (o.id === id ? { ...o, status: "Pago", dataPagamento, valor, contaId } : o)));
+    logAudit(selectedEmpresa, "fiscalObligation", id, "baixa", `Dar baixa — ${fmtBRL(valor)} em ${fmtDate(dataPagamento)}`, userEmail);
     setPayModal(null);
+  };
+  const cancelPayment = (o) => {
+    if (!confirmDelete(`Cancelar a baixa de "${o.tributo}"? Ela volta pra "Pendente".`)) return;
+    onSave(obligations.map((x) => (x.id === o.id ? { ...x, status: "Pendente", dataPagamento: null, contaId: null } : x)));
+    logAudit(selectedEmpresa, "fiscalObligation", o.id, "cancelar_baixa", `Cancelou baixa de ${fmtBRL(o.valor)}`, userEmail);
   };
   const validateSuggestion = (id) => {
     onSave(obligations.map((o) => (o.id === id ? { ...o, status: "Pendente" } : o)));
@@ -3498,8 +3539,10 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave }
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{accounts.find((a) => a.id === o.contaId)?.nome || "—"}</td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
-                      {o.status !== "Pago" && (
+                      {o.status !== "Pago" ? (
                         <Button variant="subtle" onClick={() => setPayModal(o)}><Check size={13} /> Dar baixa</Button>
+                      ) : (
+                        <button onClick={() => cancelPayment(o)} title="Cancelar baixa (volta pra Pendente)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                       )}
                       <button onClick={() => setModal(o)} title="Editar obrigação" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
                       <button onClick={() => remove(o.id)} title="Excluir obrigação" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
@@ -3650,6 +3693,7 @@ const REPORT_TABS = [
   { id: "aging", label: "Aging", Comp: AgingReport },
   { id: "comparativo", label: "Comparativo entre Empresas", Comp: ComparativoReport },
   { id: "extrato", label: "Extrato de Conta", Comp: ExtratoContaReport },
+  { id: "auditoria", label: "Auditoria", Comp: AuditLogReport },
 ];
 
 function ReportsView(props) {
@@ -4157,6 +4201,73 @@ function ExtratoContaReport({ accounts, payables, receivables, bankEntries, tran
                   {m.tipo === "Entrada" ? "+" : "−"}{fmtBRL(m.valor)}
                 </td>
                 <td className="px-2 py-2 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(m.running)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </ReportCard>
+  );
+}
+
+const AUDIT_ENTITY_LABEL = { payable: "Conta a pagar", receivable: "Conta a receber", fiscalObligation: "Obrigação fiscal" };
+const AUDIT_ACTION_LABEL = { baixa: "Dar baixa", cancelar_baixa: "Cancelar baixa" };
+
+function fmtDateTime(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+}
+
+// Log de auditoria — só leitura aqui (o insert acontece direto em
+// logAudit(), no momento de dar/cancelar uma baixa). Carrega sozinho
+// porque, ao contrário do resto do app, essa tabela não passa pelo
+// storageGet genérico em FinanceiroApp (é grande demais pra manter tudo
+// em memória o tempo todo, e a tela normalmente só é aberta sob demanda).
+function AuditLogReport({ selectedEmpresa }) {
+  const [rows, setRows] = useState(null); // null = carregando
+
+  useEffect(() => {
+    let cancelled = false;
+    setRows(null);
+    (async () => {
+      const { data, error } = await supabase
+        .from("auditLog")
+        .select("*")
+        .eq("empresaId", selectedEmpresa)
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (!cancelled) setRows(error ? [] : data);
+    })();
+    return () => { cancelled = true; };
+  }, [selectedEmpresa]);
+
+  return (
+    <ReportCard title="Log de auditoria" subtitle="Toda baixa e cancelamento de baixa fica registrado aqui — data, hora, usuário e ação. Ninguém, nem o gestor, consegue editar ou apagar essas linhas por dentro do sistema.">
+      {rows === null ? (
+        <p className="text-sm py-6 text-center" style={{ color: COLORS.inkSoft }}>Carregando…</p>
+      ) : rows.length === 0 ? (
+        <EmptyState icon={ShieldCheck} title="Nada registrado ainda" subtitle="Assim que alguém der ou cancelar uma baixa nessa empresa, aparece aqui." />
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+              <th className="text-left font-medium px-2 py-2">Quando</th>
+              <th className="text-left font-medium px-2 py-2">Usuário</th>
+              <th className="text-left font-medium px-2 py-2">Ação</th>
+              <th className="text-left font-medium px-2 py-2">Registro</th>
+              <th className="text-left font-medium px-2 py-2">Detalhe</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                <td className="px-2 py-2 whitespace-nowrap" style={{ color: COLORS.inkSoft }}>{fmtDateTime(r.created_at)}</td>
+                <td className="px-2 py-2" style={{ color: COLORS.ink }}>{r.userEmail || "—"}</td>
+                <td className="px-2 py-2">
+                  <Badge tone={r.action === "cancelar_baixa" ? "amber" : "green"}>{AUDIT_ACTION_LABEL[r.action] || r.action}</Badge>
+                </td>
+                <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{AUDIT_ENTITY_LABEL[r.entity] || r.entity}</td>
+                <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{r.detail}</td>
               </tr>
             ))}
           </tbody>
