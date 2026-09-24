@@ -314,11 +314,11 @@ function Select(props) {
   );
 }
 
-function Modal({ title, onClose, children, wide }) {
+function Modal({ title, onClose, children, wide, xwide }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(20,24,22,0.45)" }}>
       <div
-        className={`w-full ${wide ? "max-w-2xl" : "max-w-md"} rounded-2xl overflow-hidden max-h-[90vh] flex flex-col`}
+        className={`w-full ${xwide ? "max-w-5xl" : wide ? "max-w-2xl" : "max-w-md"} rounded-2xl overflow-hidden max-h-[90vh] flex flex-col`}
         style={{ background: COLORS.panel }}
       >
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
@@ -329,6 +329,23 @@ function Modal({ title, onClose, children, wide }) {
         </div>
         <div className="px-5 py-4 overflow-y-auto">{children}</div>
       </div>
+    </div>
+  );
+}
+
+// Preview do documento (imagem ou PDF) ao lado do formulário de
+// confirmação de um lançamento extraído por IA — só existe enquanto o
+// arquivo ainda está em memória (base64), então só aparece pra
+// lançamentos recém-importados, nunca ao editar um já salvo.
+function DocumentPreviewPanel({ doc }) {
+  if (!doc) return null;
+  return (
+    <div className="rounded-lg overflow-hidden shrink-0 md:sticky md:top-0" style={{ border: `1px solid ${COLORS.border}`, background: "#FAFAF7", width: "100%", height: 420 }}>
+      {doc.mediaType === "application/pdf" ? (
+        <iframe src={doc.url} title="Documento" className="w-full h-full" style={{ border: "none" }} />
+      ) : (
+        <img src={doc.url} alt="Documento" className="w-full h-full object-contain" />
+      )}
     </div>
   );
 }
@@ -2018,6 +2035,7 @@ function PayablesView({
   const [importError, setImportError] = useState("");
   const [aiNote, setAiNote] = useState("");
   const [installmentsReview, setInstallmentsReview] = useState(null);
+  const [previewDoc, setPreviewDoc] = useState(null);
 
   const processExtractedDocument = async (fileBase64, mediaType) => {
     const ex = await callExtractDocument(fileBase64, mediaType, "payable");
@@ -2044,6 +2062,7 @@ function PayablesView({
     } else {
       const p = parcelas[0] || {};
       setAiNote("Dados extraídos automaticamente do documento — confira antes de salvar.");
+      setPreviewDoc({ url: `data:${mediaType};base64,${fileBase64}`, mediaType });
       setModal({
         empresaId,
         fornecedor: ex.contraparte || "",
@@ -2051,6 +2070,7 @@ function PayablesView({
         vencimento: p.vencimento || todayISO(),
         dataLanc: todayISO(),
         descricao: p.descricao || "",
+        numeroDocumento: ex.numero_documento || "",
         ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
       });
     }
@@ -2132,6 +2152,7 @@ function PayablesView({
       onSave([...payables, ...withContact.map((f) => ({ ...f, id: uid() }))]);
     }
     setModal(null);
+    setPreviewDoc(null);
     if (pendingUploadRef.current) {
       onImportProcessed?.(pendingUploadRef.current);
       pendingUploadRef.current = null;
@@ -2246,8 +2267,8 @@ function PayablesView({
 
       {modal && (
         <PayableModal
-          initial={modal} categories={categories} contacts={contacts} aiNote={aiNote}
-          onClose={() => { setModal(null); setAiNote(""); pendingUploadRef.current = null; }}
+          initial={modal} categories={categories} contacts={contacts} aiNote={aiNote} previewDoc={previewDoc}
+          onClose={() => { setModal(null); setAiNote(""); setPreviewDoc(null); pendingUploadRef.current = null; }}
           onSubmit={submit}
         />
       )}
@@ -2377,7 +2398,7 @@ function StatusBadge({ status }) {
   return <Badge tone="neutral">{status}</Badge>;
 }
 
-function PayableModal({ initial, categories, contacts = [], aiNote, onClose, onSubmit }) {
+function PayableModal({ initial, categories, contacts = [], aiNote, previewDoc, onClose, onSubmit }) {
   const linkedContact = contacts.find((c) => c.id === initial.contactId);
   const [form, setForm] = useState({
     dataLanc: todayISO(), vencimento: todayISO(), fornecedor: "", categoria: categories[0]?.nome || "",
@@ -2398,41 +2419,47 @@ function PayableModal({ initial, categories, contacts = [], aiNote, onClose, onS
     }));
   };
   return (
-    <Modal title={initial.id ? "Editar conta a pagar" : "Nova conta a pagar"} onClose={onClose} wide>
+    <Modal title={initial.id ? "Editar conta a pagar" : "Nova conta a pagar"} onClose={onClose} wide={!previewDoc} xwide={!!previewDoc}>
       {aiNote && (
         <p className="text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: COLORS.greenSoft, color: COLORS.green }}>
           {aiNote}
         </p>
       )}
-      <div className="grid md:grid-cols-2 gap-3">
-        <Field label="Fornecedor">
-          <TextInput list="contatos-fornecedor" value={form.fornecedor} onChange={(e) => handleFornecedor(e.target.value)} />
-          <datalist id="contatos-fornecedor">
-            {contactOptions.map((c) => <option key={c.id} value={c.nome} />)}
-          </datalist>
-        </Field>
-        <Field label="Categoria">
-          <Select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
-            {categories.map((c) => <option key={c.codigo} value={c.nome}>{c.nome}</option>)}
-          </Select>
-        </Field>
-        <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} className="md:col-span-2" /></Field>
-        <Field label="Data de lançamento"><TextInput type="date" value={form.dataLanc} onChange={(e) => setForm({ ...form, dataLanc: e.target.value })} /></Field>
-        <Field label="Vencimento"><TextInput type="date" value={form.vencimento} onChange={(e) => setForm({ ...form, vencimento: e.target.value })} /></Field>
-        <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} /></Field>
-        <Field label="Forma de pagamento">
-          <Select value={form.formaPgto} onChange={(e) => setForm({ ...form, formaPgto: e.target.value })}>
-            <option>PIX</option><option>Boleto</option><option>TED</option><option>Dinheiro</option>
-            <option>Cartão</option><option>Débito Automático</option>
-          </Select>
-        </Field>
-        <Field label="CPF/CNPJ do fornecedor">
-          <TextInput value={form.documento} onChange={(e) => setForm({ ...form, documento: e.target.value })} placeholder="Opcional — usado pra cobrança futura" />
-        </Field>
-        <Field label="Contato do fornecedor">
-          <TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone/WhatsApp" />
-        </Field>
-        {!initial.id && <InstallmentFields form={form} setForm={setForm} />}
+      <div className={previewDoc ? "grid md:grid-cols-[1fr_300px] gap-4" : ""}>
+        <div className="grid md:grid-cols-2 gap-3">
+          <Field label="Fornecedor">
+            <TextInput list="contatos-fornecedor" value={form.fornecedor} onChange={(e) => handleFornecedor(e.target.value)} />
+            <datalist id="contatos-fornecedor">
+              {contactOptions.map((c) => <option key={c.id} value={c.nome} />)}
+            </datalist>
+          </Field>
+          <Field label="Categoria">
+            <Select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
+              {categories.map((c) => <option key={c.codigo} value={c.nome}>{c.nome}</option>)}
+            </Select>
+          </Field>
+          <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} className="md:col-span-2" /></Field>
+          <Field label="Nº do documento">
+            <TextInput value={form.numeroDocumento || ""} onChange={(e) => setForm({ ...form, numeroDocumento: e.target.value })} placeholder="Nº da NF, boleto..." />
+          </Field>
+          <Field label="Data de lançamento"><TextInput type="date" value={form.dataLanc} onChange={(e) => setForm({ ...form, dataLanc: e.target.value })} /></Field>
+          <Field label="Vencimento"><TextInput type="date" value={form.vencimento} onChange={(e) => setForm({ ...form, vencimento: e.target.value })} /></Field>
+          <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} /></Field>
+          <Field label="Forma de pagamento">
+            <Select value={form.formaPgto} onChange={(e) => setForm({ ...form, formaPgto: e.target.value })}>
+              <option>PIX</option><option>Boleto</option><option>TED</option><option>Dinheiro</option>
+              <option>Cartão</option><option>Débito Automático</option>
+            </Select>
+          </Field>
+          <Field label="CPF/CNPJ do fornecedor">
+            <TextInput value={form.documento} onChange={(e) => setForm({ ...form, documento: e.target.value })} placeholder="Opcional — usado pra cobrança futura" />
+          </Field>
+          <Field label="Contato do fornecedor">
+            <TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone/WhatsApp" />
+          </Field>
+          {!initial.id && <InstallmentFields form={form} setForm={setForm} />}
+        </div>
+        <DocumentPreviewPanel doc={previewDoc} />
       </div>
       <div className="flex justify-end gap-2 pt-4">
         <Button variant="ghost" onClick={onClose}>Cancelar</Button>
@@ -2651,6 +2678,7 @@ function ReceivablesView({
   const [importError, setImportError] = useState("");
   const [aiNote, setAiNote] = useState("");
   const [installmentsReview, setInstallmentsReview] = useState(null);
+  const [previewDoc, setPreviewDoc] = useState(null);
 
   const processExtractedDocument = async (fileBase64, mediaType) => {
     const ex = await callExtractDocument(fileBase64, mediaType, "receivable");
@@ -2673,6 +2701,7 @@ function ReceivablesView({
     } else {
       const p = parcelas[0] || {};
       setAiNote("Dados extraídos automaticamente do documento — confira antes de salvar.");
+      setPreviewDoc({ url: `data:${mediaType};base64,${fileBase64}`, mediaType });
       setModal({
         empresaId,
         cliente: ex.contraparte || "",
@@ -2680,6 +2709,7 @@ function ReceivablesView({
         vencimento: p.vencimento || todayISO(),
         dataLanc: todayISO(),
         descricao: p.descricao || "",
+        numeroDocumento: ex.numero_documento || "",
         ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
       });
     }
@@ -2755,6 +2785,7 @@ function ReceivablesView({
       onSave([...receivables, ...withContact.map((f) => ({ ...f, id: uid() }))]);
     }
     setModal(null);
+    setPreviewDoc(null);
     if (pendingUploadRef.current) {
       onImportProcessed?.(pendingUploadRef.current);
       pendingUploadRef.current = null;
@@ -2854,8 +2885,8 @@ function ReceivablesView({
 
       {modal && (
         <ReceivableModal
-          initial={modal} categories={categories} contacts={contacts} aiNote={aiNote}
-          onClose={() => { setModal(null); setAiNote(""); pendingUploadRef.current = null; }}
+          initial={modal} categories={categories} contacts={contacts} aiNote={aiNote} previewDoc={previewDoc}
+          onClose={() => { setModal(null); setAiNote(""); setPreviewDoc(null); pendingUploadRef.current = null; }}
           onSubmit={submit}
         />
       )}
@@ -2907,7 +2938,7 @@ function ReceivablesView({
   );
 }
 
-function ReceivableModal({ initial, categories, contacts = [], aiNote, onClose, onSubmit }) {
+function ReceivableModal({ initial, categories, contacts = [], aiNote, previewDoc, onClose, onSubmit }) {
   const linkedContact = contacts.find((c) => c.id === initial.contactId);
   const [form, setForm] = useState({
     dataLanc: todayISO(), vencimento: todayISO(), cliente: "", categoria: categories[0]?.nome || "",
@@ -2928,40 +2959,46 @@ function ReceivableModal({ initial, categories, contacts = [], aiNote, onClose, 
     }));
   };
   return (
-    <Modal title={initial.id ? "Editar conta a receber" : "Nova conta a receber"} onClose={onClose} wide>
+    <Modal title={initial.id ? "Editar conta a receber" : "Nova conta a receber"} onClose={onClose} wide={!previewDoc} xwide={!!previewDoc}>
       {aiNote && (
         <p className="text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: COLORS.greenSoft, color: COLORS.green }}>
           {aiNote}
         </p>
       )}
-      <div className="grid md:grid-cols-2 gap-3">
-        <Field label="Cliente">
-          <TextInput list="contatos-cliente" value={form.cliente} onChange={(e) => handleCliente(e.target.value)} />
-          <datalist id="contatos-cliente">
-            {contactOptions.map((c) => <option key={c.id} value={c.nome} />)}
-          </datalist>
-        </Field>
-        <Field label="Categoria">
-          <Select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
-            {categories.map((c) => <option key={c.codigo} value={c.nome}>{c.nome}</option>)}
-          </Select>
-        </Field>
-        <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} className="md:col-span-2" /></Field>
-        <Field label="Data de lançamento"><TextInput type="date" value={form.dataLanc} onChange={(e) => setForm({ ...form, dataLanc: e.target.value })} /></Field>
-        <Field label="Vencimento"><TextInput type="date" value={form.vencimento} onChange={(e) => setForm({ ...form, vencimento: e.target.value })} /></Field>
-        <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} /></Field>
-        <Field label="Forma de recebimento">
-          <Select value={form.formaReceb} onChange={(e) => setForm({ ...form, formaReceb: e.target.value })}>
-            <option>PIX</option><option>Boleto</option><option>TED</option><option>Dinheiro</option><option>Cartão</option>
-          </Select>
-        </Field>
-        <Field label="CPF/CNPJ do cliente">
-          <TextInput value={form.documento} onChange={(e) => setForm({ ...form, documento: e.target.value })} placeholder="Opcional — usado pra cobrança futura" />
-        </Field>
-        <Field label="Contato do cliente">
-          <TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone/WhatsApp" />
-        </Field>
-        {!initial.id && <InstallmentFields form={form} setForm={setForm} />}
+      <div className={previewDoc ? "grid md:grid-cols-[1fr_300px] gap-4" : ""}>
+        <div className="grid md:grid-cols-2 gap-3">
+          <Field label="Cliente">
+            <TextInput list="contatos-cliente" value={form.cliente} onChange={(e) => handleCliente(e.target.value)} />
+            <datalist id="contatos-cliente">
+              {contactOptions.map((c) => <option key={c.id} value={c.nome} />)}
+            </datalist>
+          </Field>
+          <Field label="Categoria">
+            <Select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
+              {categories.map((c) => <option key={c.codigo} value={c.nome}>{c.nome}</option>)}
+            </Select>
+          </Field>
+          <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} className="md:col-span-2" /></Field>
+          <Field label="Nº do documento">
+            <TextInput value={form.numeroDocumento || ""} onChange={(e) => setForm({ ...form, numeroDocumento: e.target.value })} placeholder="Nº da NF, boleto..." />
+          </Field>
+          <Field label="Data de lançamento"><TextInput type="date" value={form.dataLanc} onChange={(e) => setForm({ ...form, dataLanc: e.target.value })} /></Field>
+          <Field label="Vencimento"><TextInput type="date" value={form.vencimento} onChange={(e) => setForm({ ...form, vencimento: e.target.value })} /></Field>
+          <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} /></Field>
+          <Field label="Forma de recebimento">
+            <Select value={form.formaReceb} onChange={(e) => setForm({ ...form, formaReceb: e.target.value })}>
+              <option>PIX</option><option>Boleto</option><option>TED</option><option>Dinheiro</option><option>Cartão</option>
+            </Select>
+          </Field>
+          <Field label="CPF/CNPJ do cliente">
+            <TextInput value={form.documento} onChange={(e) => setForm({ ...form, documento: e.target.value })} placeholder="Opcional — usado pra cobrança futura" />
+          </Field>
+          <Field label="Contato do cliente">
+            <TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone/WhatsApp" />
+          </Field>
+          {!initial.id && <InstallmentFields form={form} setForm={setForm} />}
+        </div>
+        <DocumentPreviewPanel doc={previewDoc} />
       </div>
       <div className="flex justify-end gap-2 pt-4">
         <Button variant="ghost" onClick={onClose}>Cancelar</Button>
@@ -2984,11 +3021,13 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
   const [aiNote, setAiNote] = useState("");
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState("");
+  const [previewDoc, setPreviewDoc] = useState(null);
   const scopedAccounts = accounts.filter((a) => a.empresaId === selectedEmpresa);
   const submit = (form) => {
     if (form.id) onSave(entries.map((e) => (e.id === form.id ? form : e)));
     else onSave([...entries, { ...form, id: uid() }]);
     setModal(null);
+    setPreviewDoc(null);
     if (pendingUploadRef.current) {
       onImportProcessed?.(pendingUploadRef.current);
       pendingUploadRef.current = null;
@@ -3007,6 +3046,7 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
     const p = (Array.isArray(ex.parcelas) && ex.parcelas[0]) || ex;
     const categoriaMatch = categories.find((c) => c === ex.categoria_sugerida);
     setAiNote("Dados extraídos automaticamente do comprovante — confira antes de salvar.");
+    setPreviewDoc({ url: `data:${mediaType};base64,${fileBase64}`, mediaType });
     setModal({
       contaId: scopedAccounts[0]?.id || "",
       tipo: ex.tipo_lancamento === "Entrada" ? "Entrada" : "Saída",
@@ -3116,8 +3156,8 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
       </Card>
       {modal && (
         <BankEntryModal
-          initial={modal} accounts={scopedAccounts} categories={categories} aiNote={aiNote}
-          onClose={() => { setModal(null); setAiNote(""); pendingUploadRef.current = null; }}
+          initial={modal} accounts={scopedAccounts} categories={categories} aiNote={aiNote} previewDoc={previewDoc}
+          onClose={() => { setModal(null); setAiNote(""); setPreviewDoc(null); pendingUploadRef.current = null; }}
           onSubmit={submit}
         />
       )}
@@ -3125,7 +3165,7 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
   );
 }
 
-function BankEntryModal({ initial, accounts, categories, suggestion, aiNote, onClose, onSubmit }) {
+function BankEntryModal({ initial, accounts, categories, suggestion, aiNote, previewDoc, onClose, onSubmit }) {
   const [form, setForm] = useState({
     data: todayISO(), contaId: accounts[0]?.id || "", tipo: "Saída", categoria: categories[0] || "",
     descricao: "", valor: "", ...initial,
@@ -3136,41 +3176,44 @@ function BankEntryModal({ initial, accounts, categories, suggestion, aiNote, onC
     onSubmit({ ...form, empresaId: acc?.empresaId || form.empresaId });
   };
   return (
-    <Modal title={initial.id ? "Editar lançamento" : "Novo lançamento bancário"} onClose={onClose}>
+    <Modal title={initial.id ? "Editar lançamento" : "Novo lançamento bancário"} onClose={onClose} wide={!previewDoc} xwide={!!previewDoc}>
       {aiNote && (
         <p className="text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: COLORS.greenSoft, color: COLORS.green }}>
           {aiNote}
         </p>
       )}
-      <div className="grid gap-3">
-        <Field label="Data"><TextInput type="date" value={form.data} onChange={(e) => setForm({ ...form, data: e.target.value })} /></Field>
-        <Field label="Conta">
-          <Select value={form.contaId} onChange={(e) => setForm({ ...form, contaId: e.target.value })}>
-            {accounts.length === 0 && <option value="">Cadastre uma conta primeiro</option>}
-            {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
-          </Select>
-        </Field>
-        <Field label="Tipo">
-          <Select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
-            <option>Entrada</option><option>Saída</option>
-          </Select>
-        </Field>
-        <Field label="Categoria">
-          <Select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
-            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-          </Select>
-        </Field>
-        {suggestion && form.categoria === suggestion.categoria && (
-          <p className="text-xs -mt-2" style={{ color: COLORS.green }}>
-            Categoria sugerida automaticamente, com base em lançamento parecido: “{suggestion.exemplo}”. Confira antes de salvar.
-          </p>
-        )}
-        <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} /></Field>
-        <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} /></Field>
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => valid && submit()} disabled={!valid}>Salvar</Button>
+      <div className={previewDoc ? "grid md:grid-cols-[1fr_300px] gap-4" : ""}>
+        <div className="grid gap-3">
+          <Field label="Data"><TextInput type="date" value={form.data} onChange={(e) => setForm({ ...form, data: e.target.value })} /></Field>
+          <Field label="Conta">
+            <Select value={form.contaId} onChange={(e) => setForm({ ...form, contaId: e.target.value })}>
+              {accounts.length === 0 && <option value="">Cadastre uma conta primeiro</option>}
+              {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+            </Select>
+          </Field>
+          <Field label="Tipo">
+            <Select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+              <option>Entrada</option><option>Saída</option>
+            </Select>
+          </Field>
+          <Field label="Categoria">
+            <Select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
+              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+            </Select>
+          </Field>
+          {suggestion && form.categoria === suggestion.categoria && (
+            <p className="text-xs -mt-2" style={{ color: COLORS.green }}>
+              Categoria sugerida automaticamente, com base em lançamento parecido: “{suggestion.exemplo}”. Confira antes de salvar.
+            </p>
+          )}
+          <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} /></Field>
+          <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} /></Field>
         </div>
+        <DocumentPreviewPanel doc={previewDoc} />
+      </div>
+      <div className="flex justify-end gap-2 pt-4">
+        <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+        <Button onClick={() => valid && submit()} disabled={!valid}>Salvar</Button>
       </div>
     </Modal>
   );

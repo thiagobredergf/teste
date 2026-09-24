@@ -43,6 +43,7 @@ const RESPONSE_SHAPE = `{
   "categoria_sugerida": string ou null,
   "tipo_documento": string,
   "tipo_lancamento": "Entrada" ou "Saida" ou null,
+  "numero_documento": string ou null,
   "parcelas": [
     { "numero": number ou null, "valor": number ou null, "vencimento": "AAAA-MM-DD" ou null, "descricao": string ou null }
   ]
@@ -59,6 +60,7 @@ Regras:
 - "categoria_sugerida": um palpite de categoria financeira de DESPESA (ex: "Aluguel", "Impostos e Taxas"), só se o documento deixar claro; senão null.
 - "tipo_lancamento": sempre null (não se aplica a conta a pagar).
 - "tipo_documento": "boleto", "nota_fiscal", "carne_parcelado" ou "outro".
+- "numero_documento": o número impresso no documento que identifica ele (nº da nota fiscal/NF-e, nosso número ou linha de referência do boleto, nº do carnê) — só se estiver visível; senão null.
 - "parcelas": UMA ENTRADA PRA CADA PARCELA IMPRESSA NO DOCUMENTO, com o valor e vencimento EXATOS de cada uma, lidos diretamente do documento.
   - Documentos de pagamento único (boleto normal, NF): "parcelas" tem só 1 item.
   - Documentos parcelados (ex: carnê de IPTU com várias cotas): liste TODAS as parcelas visíveis, cada uma com seu próprio valor e vencimento — os valores costumam ser DIFERENTES entre parcelas (ex: 1ª parcela com desconto, demais com juros), e os vencimentos são datas específicas, não um intervalo fixo de dias.
@@ -77,6 +79,7 @@ Regras:
 - "categoria_sugerida": um palpite de categoria financeira de RECEITA (ex: "Vendas de Produtos", "Prestação de Serviços"), só se o documento deixar claro; senão null.
 - "tipo_lancamento": sempre null (não se aplica a conta a receber).
 - "tipo_documento": "boleto", "nota_fiscal", "carne_parcelado" ou "outro".
+- "numero_documento": o número impresso no documento que identifica ele (nº da nota fiscal/NF-e, nosso número ou linha de referência do boleto, nº do carnê) — só se estiver visível; senão null.
 - "parcelas": UMA ENTRADA PRA CADA PARCELA IMPRESSA NO DOCUMENTO, com o valor e vencimento EXATOS de cada uma, lidos diretamente do documento.
   - Documentos de pagamento único (boleto normal, NF): "parcelas" tem só 1 item.
   - Documentos parcelados: liste TODAS as parcelas visíveis, cada uma com seu próprio valor e vencimento reais — nunca calculados por divisão ou soma de meses.
@@ -94,6 +97,7 @@ Regras:
 - "categoria_sugerida": um palpite de categoria financeira (ex: "Despesas Bancárias", "Juros Recebidos"), só se o documento deixar claro; senão null.
 - "tipo_documento": "comprovante_pix", "comprovante_ted", "tarifa_bancaria", "outro".
 - "tipo_lancamento": "Entrada" se o dinheiro ENTROU na conta do usuário, "Saida" se SAIU. Baseie-se no que o comprovante mostra (ex: "PIX enviado" = Saida, "PIX recebido" = Entrada, tarifa/juros pagos = Saida, rendimento recebido = Entrada).
+- "numero_documento": sempre null (não se aplica a lançamento bancário avulso).
 - "parcelas": comprovante bancário é SEMPRE um evento único — retorne exatamente 1 item no array, com o valor e a data exatos do comprovante (campo "vencimento" aqui representa a DATA DO MOVIMENTO, não um vencimento futuro).
 - "descricao" da parcela: breve, ex: "PIX enviado - <contraparte>" ou "Tarifa de manutenção de conta".
 - Se não tiver certeza de um campo, retorne null — nunca invente ou estime.`,
