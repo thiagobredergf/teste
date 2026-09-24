@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -3962,6 +3962,7 @@ const daysBetween = (isoFrom, isoTo) => {
 const REPORT_TABS = [
   { id: "dre", label: "DRE", Comp: DREReport },
   { id: "fluxo", label: "Fluxo Projetado", Comp: FluxoProjetadoReport },
+  { id: "ordem", label: "Ordem de Pagamento", Comp: PaymentOrderReport },
   { id: "aging", label: "Aging", Comp: AgingReport },
   { id: "comparativo", label: "Comparativo entre Empresas", Comp: ComparativoReport },
   { id: "extrato", label: "Extrato de Conta", Comp: ExtratoContaReport },
@@ -4250,6 +4251,66 @@ function FluxoProjetadoReport({ payables, receivables, fiscalObligations, accoun
         )}
       </ReportCard>
     </div>
+  );
+}
+
+const PAYMENT_ORDER_STATUS = ["Agendado", "Autorizado", "Pago"];
+
+// Relação de ordem de pagamento — a "prestação de contas" que o analista
+// mostra pro dono (o que foi proposto, o que ele já autorizou, o que já
+// foi de fato pago), despesa por despesa. Fica disponível pra consulta
+// e impressão a qualquer momento — usa o mesmo Exportar PDF de Relatórios.
+function PaymentOrderReport({ payables, accounts }) {
+  const items = payables
+    .filter((p) => PAYMENT_ORDER_STATUS.includes(p.status))
+    .sort((a, b) => (b.agendadoPara || b.dataPgto || b.vencimento || "").localeCompare(a.agendadoPara || a.dataPgto || a.vencimento || ""));
+  const total = items.reduce((s, p) => s + Number(p.valorPago || p.valor || 0), 0);
+
+  return (
+    <ReportCard title="Ordem de pagamento" subtitle="Pagamentos agendados, autorizados ou já pagos — despesa por despesa, pra apresentar ao dono, auditoria ou reunião.">
+      {items.length === 0 ? (
+        <EmptyState icon={ClipboardList} title="Nada agendado, autorizado ou pago ainda" subtitle="Assim que agendar um pagamento em Contas a Pagar, ele aparece aqui." />
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+              <th className="text-left font-medium px-2 py-2">Fornecedor</th>
+              <th className="text-left font-medium px-2 py-2">Vencimento</th>
+              <th className="text-left font-medium px-2 py-2">Data proposta/paga</th>
+              <th className="text-left font-medium px-2 py-2">Conta</th>
+              <th className="text-left font-medium px-2 py-2">Status</th>
+              <th className="text-left font-medium px-2 py-2">Autorizado por</th>
+              <th className="text-right font-medium px-2 py-2">Valor</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((p) => {
+              const contaId = p.status === "Pago" ? p.contaPgtoId : p.contaAgendadaId;
+              return (
+                <tr key={p.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                  <td className="px-2 py-2" style={{ color: COLORS.ink }}>
+                    <p className="font-medium">{p.fornecedor}</p>
+                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>{p.descricao}</p>
+                  </td>
+                  <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{fmtDate(p.vencimento)}</td>
+                  <td className="px-2 py-2" style={{ color: COLORS.ink }}>{fmtDate(p.status === "Pago" ? p.dataPgto : p.agendadoPara)}</td>
+                  <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{accounts.find((a) => a.id === contaId)?.nome || "—"}</td>
+                  <td className="px-2 py-2"><StatusBadge status={p.status} /></td>
+                  <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{p.autorizadoPor || "—"}</td>
+                  <td className="px-2 py-2 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(p.valorPago || p.valor)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr style={{ borderTop: `2px solid ${COLORS.border}` }}>
+              <td colSpan={6} className="px-2 py-2 text-right font-semibold" style={{ color: COLORS.ink }}>Total</td>
+              <td className="px-2 py-2 text-right tabular-nums font-semibold" style={{ color: COLORS.ink }}>{fmtBRL(total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      )}
+    </ReportCard>
   );
 }
 
