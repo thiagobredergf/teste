@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -154,6 +154,17 @@ async function callExtractDocument(fileBase64, mediaType, context) {
   return data.extracted || {};
 }
 
+// Abre o WhatsApp Web/app com uma mensagem pronta pro celular cadastrado
+// — sem precisar de API/credenciais do WhatsApp Business, é só o link
+// público wa.me. Assume DDI 55 (Brasil) quando o número não vier com um.
+function openWhatsApp(celular, message) {
+  const digits = (celular || "").replace(/\D/g, "");
+  if (!digits) return false;
+  const phone = digits.length > 11 ? digits : `55${digits}`;
+  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank");
+  return true;
+}
+
 // Log de auditoria (dar baixa / cancelar baixa) — insert direto, fora do
 // storageGet/storageSet genérico: esse log é só-inserção (a policy de RLS
 // nem tem update/delete), então não pode passar pelo diff "apaga o que
@@ -167,6 +178,17 @@ async function logAudit(empresaId, entity, entityId, action, detail, userEmail) 
 
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+// Sufixo textual com a quebra de juros/multa/desconto de uma baixa, pra
+// descrições de extrato/relatório — "" quando não há nenhum dos três.
+function fmtAdjustments(item) {
+  const parts = [
+    item.juros ? `juros ${fmtBRL(item.juros)}` : null,
+    item.multa ? `multa ${fmtBRL(item.multa)}` : null,
+    item.desconto ? `desconto ${fmtBRL(item.desconto)}` : null,
+  ].filter(Boolean);
+  return parts.length ? ` (${parts.join(" · ")})` : "";
+}
 
 const fmtDate = (iso) => {
   if (!iso) return "—";
@@ -593,7 +615,12 @@ function FinanceiroApp({ userEmail, onLogout }) {
     payablesF.forEach((p) => {
       if (p.status !== "Pago") return;
       map[p.categoria] = map[p.categoria] || { pago: 0, aPagar: 0 };
-      map[p.categoria].pago += Number(p.valorPago || p.valor || 0);
+      // Valor principal só — tira juros/multa/desconto do que foi de fato
+      // pago, porque esses entram à parte no Resultado Financeiro do DRE
+      // (não misturar custo financeiro dentro da categoria operacional).
+      // Se "valor pago" tiver sido editado na mão além do que os 3 campos
+      // calculariam, a diferença residual fica aqui mesmo — nunca some.
+      map[p.categoria].pago += Number(p.valorPago ?? p.valor ?? 0) - Number(p.juros || 0) - Number(p.multa || 0) + Number(p.desconto || 0);
     });
     payablesF.forEach((p) => {
       if (p.status === "Pago") return;
@@ -608,7 +635,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     receivablesF.forEach((r) => {
       if (r.status !== "Recebido") return;
       map[r.categoria] = map[r.categoria] || { recebido: 0, aReceber: 0 };
-      map[r.categoria].recebido += Number(r.valorRecebido || r.valor || 0);
+      map[r.categoria].recebido += Number(r.valorRecebido ?? r.valor ?? 0) - Number(r.juros || 0) - Number(r.multa || 0) + Number(r.desconto || 0);
     });
     receivablesF.forEach((r) => {
       if (r.status === "Recebido") return;
@@ -617,6 +644,23 @@ function FinanceiroApp({ userEmail, onLogout }) {
     });
     return map;
   }, [receivablesF]);
+
+  // Resultado financeiro do período — juros/multa pagos e descontos
+  // concedidos são custo financeiro; juros/multa recebidos e descontos
+  // obtidos de fornecedor são ganho financeiro. Fica de fora do
+  // categoryBreakdown/receivableBreakdown de propósito (ver acima), pra
+  // aparecer como linha própria no DRE, igual um contador faria.
+  const financialAdjustments = useMemo(() => {
+    const paidPayables = payablesF.filter((p) => p.status === "Pago");
+    const receivedReceivables = receivablesF.filter((r) => r.status === "Recebido");
+    const despesas =
+      paidPayables.reduce((s, p) => s + Number(p.juros || 0) + Number(p.multa || 0), 0) +
+      receivedReceivables.reduce((s, r) => s + Number(r.desconto || 0), 0);
+    const receitas =
+      receivedReceivables.reduce((s, r) => s + Number(r.juros || 0) + Number(r.multa || 0), 0) +
+      paidPayables.reduce((s, p) => s + Number(p.desconto || 0), 0);
+    return { despesas, receitas, resultado: receitas - despesas };
+  }, [payablesF, receivablesF]);
 
   const upcomingPayables = useMemo(
     () =>
@@ -1073,6 +1117,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 selectedEmpresa={selectedEmpresa}
                 categoryBreakdown={categoryBreakdown}
                 receivableBreakdown={receivableBreakdown}
+                financialAdjustments={financialAdjustments}
                 empresaBreakdown={empresaBreakdown}
                 accountBalance={accountBalance}
                 totals={totals}
@@ -2077,7 +2122,7 @@ function StatusSummary({ items, statuses }) {
 /*  Contas a Pagar                                                         */
 /* ---------------------------------------------------------------------- */
 function PayablesView({
-  payables, accounts, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
+  payables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
   pendingImport, onImportProcessed, userEmail,
 }) {
   const [modal, setModal] = useState(null);
@@ -2127,6 +2172,7 @@ function PayablesView({
         dataLanc: todayISO(),
         descricao: p.descricao || "",
         numeroDocumento: ex.numero_documento || "",
+        documento: ex.documento_contraparte || "",
         ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
       });
     }
@@ -2224,9 +2270,13 @@ function PayablesView({
     onSave(payables.map((p) => (p.id === id ? { ...p, deletedAt: new Date().toISOString() } : p)));
   };
 
-  const confirmPayment = (id, dataPgto, valorPago, contaPgtoId) => {
-    onSave(payables.map((p) => (p.id === id ? { ...p, status: "Pago", dataPgto, valorPago, contaPgtoId } : p)));
-    logAudit(selectedEmpresa, "payable", id, "baixa", `Dar baixa — ${fmtBRL(valorPago)} em ${fmtDate(dataPgto)}`, userEmail);
+  const confirmPayment = (id, dataPgto, valorPago, contaPgtoId, adj) => {
+    const { juros = 0, multa = 0, desconto = 0 } = adj || {};
+    onSave(payables.map((p) => (p.id === id ? { ...p, status: "Pago", dataPgto, valorPago, contaPgtoId, juros, multa, desconto } : p)));
+    const detalheAdj = (juros || multa || desconto)
+      ? ` (juros ${fmtBRL(juros)}, multa ${fmtBRL(multa)}, desconto ${fmtBRL(desconto)})`
+      : "";
+    logAudit(selectedEmpresa, "payable", id, "baixa", `Dar baixa — ${fmtBRL(valorPago)} em ${fmtDate(dataPgto)}${detalheAdj}`, userEmail);
     setPayModal(null);
   };
 
@@ -2262,6 +2312,24 @@ function PayablesView({
   };
 
   const total = filtered.reduce((s, p) => s + Number(p.valor || 0), 0);
+  const empresa = empresas.find((e) => e.id === selectedEmpresa);
+  const agendados = withDerived.filter((p) => p.status === "Agendado");
+
+  const notifyOwner = () => {
+    const linhas = agendados.map((p) => `• ${p.fornecedor} — ${fmtBRL(p.valor)} — proposto pra ${fmtDate(p.agendadoPara)}`);
+    const mensagem = [
+      `Olá! Segue a relação de pagamentos aguardando sua autorização${empresa ? ` (${empresa.nome})` : ""}:`,
+      "",
+      ...linhas,
+      "",
+      `Total: ${fmtBRL(agendados.reduce((s, p) => s + Number(p.valor || 0), 0))}`,
+      "",
+      "Pode confirmar a autorização e/ou efetivação desses pagamentos?",
+    ].join("\n");
+    if (!openWhatsApp(empresa?.contatoCelular, mensagem)) {
+      alert("Cadastre o celular do dono em Cadastros → Editar empresa antes de notificar.");
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -2276,6 +2344,11 @@ function PayablesView({
         <Button variant="ghost" onClick={() => setScheduleModal(true)}>
           <CalendarClock size={15} /> Agendar pagamentos
         </Button>
+        {agendados.length > 0 && (
+          <Button variant="ghost" onClick={notifyOwner} title="Abre o WhatsApp com uma mensagem pronta, listando os pagamentos agendados que aguardam autorização">
+            <MessageCircle size={15} /> Notificar dono ({agendados.length})
+          </Button>
+        )}
         <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa }); }}>
           <Plus size={15} /> Novo lançamento
         </Button>
@@ -2286,15 +2359,15 @@ function PayablesView({
         </div>
       )}
       <StatusSummary items={withDerived} statuses={[
-        { key: "A Pagar", label: "A pagar", tone: "neutral" },
-        { key: "Próximo", label: "Próximo (10 dias)", tone: "amber" },
         { key: "Atrasado", label: "Atrasado", tone: "red" },
+        { key: "Próximo", label: "Próximo (10 dias)", tone: "amber" },
         { key: "Agendado", label: "Agendado", tone: "gold" },
         { key: "Autorizado", label: "Autorizado", tone: "blue" },
+        { key: "A Pagar", label: "A pagar", tone: "neutral" },
         { key: "Pago", label: "Pago", tone: "green" },
       ]} />
       <FilterBar search={search} setSearch={setSearch} status={status} setStatus={setStatus}
-        statusOptions={["A Pagar", "Próximo", "Atrasado", "Agendado", "Autorizado", "Pago"]} placeholder="Buscar fornecedor, descrição..."
+        statusOptions={["Atrasado", "Próximo", "Agendado", "Autorizado", "A Pagar", "Pago"]} placeholder="Buscar fornecedor, descrição..."
         dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} />
 
       <Card className="overflow-x-auto">
@@ -2323,7 +2396,14 @@ function PayablesView({
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>{p.descricao}</p>
                   </td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{p.categoria}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(p.valor)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>
+                    {fmtBRL(p.valor)}
+                    {p.status === "Pago" && (p.juros || p.multa || p.desconto) ? (
+                      <p className="text-[11px] font-normal" style={{ color: COLORS.inkSoft }}>
+                        {[p.juros ? `+${fmtBRL(p.juros)} juros` : null, p.multa ? `+${fmtBRL(p.multa)} multa` : null, p.desconto ? `−${fmtBRL(p.desconto)} desc.` : null].filter(Boolean).join(" · ")}
+                      </p>
+                    ) : null}
+                  </td>
                   <td className="px-4 py-2.5">
                     <StatusBadge status={p.statusDisplay} />
                     {(p.status === "Agendado" || p.status === "Autorizado") && (
@@ -2407,8 +2487,9 @@ function PayablesView({
           accountLabel="Conta de pagamento"
           item={payModal}
           accounts={accounts.filter((a) => a.empresaId === payModal.empresaId)}
+          showAdjustments
           onClose={() => setPayModal(null)}
-          onConfirm={(data, valor, contaId) => confirmPayment(payModal.id, data, valor, contaId)}
+          onConfirm={(data, valor, contaId, adj) => confirmPayment(payModal.id, data, valor, contaId, adj)}
         />
       )}
       {scheduleModal && (
@@ -2646,13 +2727,24 @@ function InstallmentsReviewModal({ review, categories, partyLabel = "Fornecedor"
   );
 }
 
-function SettleModal({ title, label, dateLabel, accountLabel, item, accounts, onClose, onConfirm }) {
+function SettleModal({ title, label, dateLabel, accountLabel, item, accounts, showAdjustments, onClose, onConfirm }) {
   // Se o item já tinha sido agendado (ordem de pagamento), a baixa parte
   // da data/conta propostas — desde que a data não seja futura, já que
   // baixa nunca pode ser.
   const [data, setData] = useState(item.agendadoPara && item.agendadoPara <= todayISO() ? item.agendadoPara : todayISO());
   const [valor, setValor] = useState(item.valor);
   const [contaId, setContaId] = useState(item.contaAgendadaId || accounts[0]?.id || "");
+  const [juros, setJuros] = useState(item.juros || "");
+  const [multa, setMulta] = useState(item.multa || "");
+  const [desconto, setDesconto] = useState(item.desconto || "");
+
+  // Juros/multa somam, desconto diminui — sempre recalculado a partir do
+  // valor original do lançamento, nunca do que já estiver digitado em
+  // "valor" (senão editar um dos 3 campos duas vezes acumularia errado).
+  const recalc = (j, m, d) => {
+    setValor(String(Number(item.valor || 0) + (Number(j) || 0) + (Number(m) || 0) - (Number(d) || 0)));
+  };
+
   return (
     <Modal title={title} onClose={onClose}>
       <div className="grid gap-3">
@@ -2660,7 +2752,23 @@ function SettleModal({ title, label, dateLabel, accountLabel, item, accounts, on
           <TextInput type="date" value={data} max={todayISO()} onChange={(e) => setData(e.target.value)} />
           <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Baixa registra um pagamento que já aconteceu — não é possível dar baixa numa data futura.</p>
         </Field>
-        <Field label={label}><TextInput type="number" step="0.01" value={valor} onChange={(e) => setValor(e.target.value)} /></Field>
+        {showAdjustments && (
+          <div className="grid grid-cols-3 gap-2">
+            <Field label="Juros">
+              <TextInput type="number" step="0.01" value={juros} onChange={(e) => { setJuros(e.target.value); recalc(e.target.value, multa, desconto); }} placeholder="0,00" />
+            </Field>
+            <Field label="Multa">
+              <TextInput type="number" step="0.01" value={multa} onChange={(e) => { setMulta(e.target.value); recalc(juros, e.target.value, desconto); }} placeholder="0,00" />
+            </Field>
+            <Field label="Desconto">
+              <TextInput type="number" step="0.01" value={desconto} onChange={(e) => { setDesconto(e.target.value); recalc(juros, multa, e.target.value); }} placeholder="0,00" />
+            </Field>
+          </div>
+        )}
+        <Field label={label}>
+          <TextInput type="number" step="0.01" value={valor} onChange={(e) => setValor(e.target.value)} />
+          {showAdjustments && <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Recalculado a partir do valor original + juros/multa − desconto — pode ajustar na mão se precisar.</p>}
+        </Field>
         <Field label={accountLabel}>
           <Select value={contaId} onChange={(e) => setContaId(e.target.value)}>
             {accounts.length === 0 && <option value="">Cadastre uma conta primeiro</option>}
@@ -2669,7 +2777,12 @@ function SettleModal({ title, label, dateLabel, accountLabel, item, accounts, on
         </Field>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => onConfirm(data, valor, contaId)} disabled={!contaId}>Confirmar baixa</Button>
+          <Button
+            onClick={() => onConfirm(data, valor, contaId, showAdjustments ? { juros: Number(juros) || 0, multa: Number(multa) || 0, desconto: Number(desconto) || 0 } : undefined)}
+            disabled={!contaId}
+          >
+            Confirmar baixa
+          </Button>
         </div>
       </div>
     </Modal>
@@ -2813,6 +2926,7 @@ function ReceivablesView({
         dataLanc: todayISO(),
         descricao: p.descricao || "",
         numeroDocumento: ex.numero_documento || "",
+        documento: ex.documento_contraparte || "",
         ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
       });
     }
@@ -2898,9 +3012,13 @@ function ReceivablesView({
     if (!confirmDelete("Mover esta conta a receber pra lixeira? Você pode restaurar depois, em Lixeira.")) return;
     onSave(receivables.map((r) => (r.id === id ? { ...r, deletedAt: new Date().toISOString() } : r)));
   };
-  const confirmReceipt = (id, dataReceb, valorRecebido, contaRecebId) => {
-    onSave(receivables.map((r) => (r.id === id ? { ...r, status: "Recebido", dataReceb, valorRecebido, contaRecebId } : r)));
-    logAudit(selectedEmpresa, "receivable", id, "baixa", `Dar baixa — ${fmtBRL(valorRecebido)} em ${fmtDate(dataReceb)}`, userEmail);
+  const confirmReceipt = (id, dataReceb, valorRecebido, contaRecebId, adj) => {
+    const { juros = 0, multa = 0, desconto = 0 } = adj || {};
+    onSave(receivables.map((r) => (r.id === id ? { ...r, status: "Recebido", dataReceb, valorRecebido, contaRecebId, juros, multa, desconto } : r)));
+    const detalheAdj = (juros || multa || desconto)
+      ? ` (juros ${fmtBRL(juros)}, multa ${fmtBRL(multa)}, desconto ${fmtBRL(desconto)})`
+      : "";
+    logAudit(selectedEmpresa, "receivable", id, "baixa", `Dar baixa — ${fmtBRL(valorRecebido)} em ${fmtDate(dataReceb)}${detalheAdj}`, userEmail);
     setRecModal(null);
   };
   const cancelReceipt = (r) => {
@@ -2966,7 +3084,14 @@ function ReceivablesView({
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>{r.descricao}</p>
                   </td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{r.categoria}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(r.valor)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>
+                    {fmtBRL(r.valor)}
+                    {r.status === "Recebido" && (r.juros || r.multa || r.desconto) ? (
+                      <p className="text-[11px] font-normal" style={{ color: COLORS.inkSoft }}>
+                        {[r.juros ? `+${fmtBRL(r.juros)} juros` : null, r.multa ? `+${fmtBRL(r.multa)} multa` : null, r.desconto ? `−${fmtBRL(r.desconto)} desc.` : null].filter(Boolean).join(" · ")}
+                      </p>
+                    ) : null}
+                  </td>
                   <td className="px-4 py-2.5"><StatusBadge status={r.statusDisplay} /></td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
@@ -3033,8 +3158,9 @@ function ReceivablesView({
           accountLabel="Conta de recebimento"
           item={recModal}
           accounts={accounts.filter((a) => a.empresaId === recModal.empresaId)}
+          showAdjustments
           onClose={() => setRecModal(null)}
-          onConfirm={(data, valor, contaId) => confirmReceipt(recModal.id, data, valor, contaId)}
+          onConfirm={(data, valor, contaId, adj) => confirmReceipt(recModal.id, data, valor, contaId, adj)}
         />
       )}
     </div>
@@ -3935,7 +4061,7 @@ function ReportCard({ title, subtitle, children }) {
 }
 
 /* --- DRE (Demonstrativo de Resultado) --- */
-function DREReport({ year, categoryBreakdown, receivableBreakdown, totals }) {
+function DREReport({ year, categoryBreakdown, receivableBreakdown, financialAdjustments, totals }) {
   const receitas = Object.entries(receivableBreakdown)
     .map(([nome, v]) => ({ nome, valor: v.recebido }))
     .filter((r) => r.valor > 0)
@@ -3946,7 +4072,8 @@ function DREReport({ year, categoryBreakdown, receivableBreakdown, totals }) {
     .sort((a, b) => b.valor - a.valor);
   const totalReceitas = receitas.reduce((s, r) => s + r.valor, 0);
   const totalDespesas = despesas.reduce((s, d) => s + d.valor, 0);
-  const resultado = totalReceitas - totalDespesas;
+  const resultadoOperacional = totalReceitas - totalDespesas;
+  const resultado = resultadoOperacional + (financialAdjustments?.resultado || 0);
 
   return (
     <div className="space-y-4">
@@ -3992,6 +4119,26 @@ function DREReport({ year, categoryBreakdown, receivableBreakdown, totals }) {
           </div>
         </div>
       </ReportCard>
+
+      {financialAdjustments && (financialAdjustments.receitas > 0 || financialAdjustments.despesas > 0) && (
+        <ReportCard title="Resultado financeiro" subtitle="Juros e multas pagos/recebidos, e descontos concedidos/obtidos em baixas — separado do operacional de propósito.">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex justify-between text-sm">
+              <span style={{ color: COLORS.ink }}>Receitas financeiras</span>
+              <span className="tabular-nums font-medium" style={{ color: COLORS.green }}>{fmtBRL(financialAdjustments.receitas)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span style={{ color: COLORS.ink }}>Despesas financeiras</span>
+              <span className="tabular-nums font-medium" style={{ color: COLORS.red }}>{fmtBRL(financialAdjustments.despesas)}</span>
+            </div>
+          </div>
+          <div className="flex justify-between text-sm pt-2 mt-2 font-semibold" style={{ borderTop: `1px solid ${COLORS.border}`, color: COLORS.ink }}>
+            <span>Resultado financeiro</span>
+            <span className="tabular-nums" style={{ color: financialAdjustments.resultado >= 0 ? COLORS.green : COLORS.red }}>{fmtBRL(financialAdjustments.resultado)}</span>
+          </div>
+        </ReportCard>
+      )}
+
       <Card className="p-4 flex items-center justify-between">
         <span className="text-sm font-semibold" style={{ color: COLORS.ink }}>Resultado líquido do período</span>
         <span className="text-lg font-semibold tabular-nums" style={{ color: resultado >= 0 ? COLORS.green : COLORS.red }}>
@@ -4284,10 +4431,10 @@ function ExtratoContaReport({ accounts, payables, receivables, bankEntries, tran
     movs.push({ id: `bk-${b.id}`, data: b.data, tipo: b.tipo, valor: Number(b.valor || 0), descricao: `${b.categoria} — ${b.descricao || ""}` });
   });
   payables.filter((p) => p.status === "Pago" && p.contaPgtoId === contaId).forEach((p) => {
-    movs.push({ id: `pg-${p.id}`, data: p.dataPgto, tipo: "Saída", valor: Number(p.valorPago || p.valor || 0), descricao: `Pagamento — ${p.fornecedor}` });
+    movs.push({ id: `pg-${p.id}`, data: p.dataPgto, tipo: "Saída", valor: Number(p.valorPago || p.valor || 0), descricao: `Pagamento — ${p.fornecedor}${fmtAdjustments(p)}` });
   });
   receivables.filter((r) => r.status === "Recebido" && r.contaRecebId === contaId).forEach((r) => {
-    movs.push({ id: `rc-${r.id}`, data: r.dataReceb, tipo: "Entrada", valor: Number(r.valorRecebido || r.valor || 0), descricao: `Recebimento — ${r.cliente}` });
+    movs.push({ id: `rc-${r.id}`, data: r.dataReceb, tipo: "Entrada", valor: Number(r.valorRecebido || r.valor || 0), descricao: `Recebimento — ${r.cliente}${fmtAdjustments(r)}` });
   });
   transfers.filter((t) => t.contaOrigemId === contaId).forEach((t) => {
     movs.push({ id: `to-${t.id}`, data: t.data, tipo: "Saída", valor: Number(t.valor || 0), descricao: `Transferência enviada — ${t.descricao || ""}` });
@@ -4529,10 +4676,10 @@ function buildAccountMovements(contaId, payables, receivables, bankEntries, tran
     movs.push({ key: `bank-${b.id}`, source: "bank", id: b.id, data: b.data, tipo: b.tipo, valor: Number(b.valor || 0), descricao: `${b.categoria} — ${b.descricao || ""}`, conciliado: !!b.conciliado });
   });
   payables.filter((p) => !p.deletedAt && p.status === "Pago" && p.contaPgtoId === contaId).forEach((p) => {
-    movs.push({ key: `pay-${p.id}`, source: "payable", id: p.id, data: p.dataPgto, tipo: "Saída", valor: Number(p.valorPago || p.valor || 0), descricao: `Pagamento — ${p.fornecedor}`, conciliado: !!p.conciliado });
+    movs.push({ key: `pay-${p.id}`, source: "payable", id: p.id, data: p.dataPgto, tipo: "Saída", valor: Number(p.valorPago || p.valor || 0), descricao: `Pagamento — ${p.fornecedor}${fmtAdjustments(p)}`, conciliado: !!p.conciliado });
   });
   receivables.filter((r) => !r.deletedAt && r.status === "Recebido" && r.contaRecebId === contaId).forEach((r) => {
-    movs.push({ key: `rec-${r.id}`, source: "receivable", id: r.id, data: r.dataReceb, tipo: "Entrada", valor: Number(r.valorRecebido || r.valor || 0), descricao: `Recebimento — ${r.cliente}`, conciliado: !!r.conciliado });
+    movs.push({ key: `rec-${r.id}`, source: "receivable", id: r.id, data: r.dataReceb, tipo: "Entrada", valor: Number(r.valorRecebido || r.valor || 0), descricao: `Recebimento — ${r.cliente}${fmtAdjustments(r)}`, conciliado: !!r.conciliado });
   });
   transfers.filter((t) => !t.deletedAt && t.contaOrigemId === contaId).forEach((t) => {
     movs.push({ key: `trfo-${t.id}`, source: "transfer", id: t.id, data: t.data, tipo: "Saída", valor: Number(t.valor || 0), descricao: `Transferência enviada — ${t.descricao || ""}`, conciliado: !!t.conciliado });

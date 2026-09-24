@@ -40,6 +40,7 @@ const MAX_BASE64_LENGTH = 15_000_000;
 
 const RESPONSE_SHAPE = `{
   "contraparte": string ou null,
+  "documento_contraparte": string ou null,
   "categoria_sugerida": string ou null,
   "tipo_documento": string,
   "tipo_lancamento": "Entrada" ou "Saida" ou null,
@@ -57,10 +58,11 @@ ${RESPONSE_SHAPE}
 
 Regras:
 - "contraparte": nome do beneficiário/cedente (boleto) ou emitente (NF) — pra quem o usuário vai pagar. Comum a todas as parcelas.
+- "documento_contraparte": o CPF ou CNPJ do beneficiário/emitente (pra quem o usuário vai pagar), exatamente como aparece no documento (com ou sem pontuação); senão null. NUNCA ponha um CPF/CNPJ em "numero_documento" — é sempre aqui.
 - "categoria_sugerida": um palpite de categoria financeira de DESPESA (ex: "Aluguel", "Impostos e Taxas"), só se o documento deixar claro; senão null.
 - "tipo_lancamento": sempre null (não se aplica a conta a pagar).
 - "tipo_documento": "boleto", "nota_fiscal", "carne_parcelado" ou "outro".
-- "numero_documento": o número impresso no documento que identifica ele (nº da nota fiscal/NF-e, nosso número ou linha de referência do boleto, nº do carnê) — só se estiver visível; senão null.
+- "numero_documento": o número que identifica o documento em si — nº da nota fiscal/NF-e/cupom fiscal, nosso número ou linha digitável do boleto, nº do carnê. NUNCA um CPF/CNPJ (isso vai em "documento_contraparte") — se o único identificador visível for uma Inscrição Estadual (IE), use ela só como último recurso; senão null.
 - "parcelas": UMA ENTRADA PRA CADA PARCELA IMPRESSA NO DOCUMENTO, com o valor e vencimento EXATOS de cada uma, lidos diretamente do documento.
   - Documentos de pagamento único (boleto normal, NF): "parcelas" tem só 1 item.
   - Documentos parcelados (ex: carnê de IPTU com várias cotas): liste TODAS as parcelas visíveis, cada uma com seu próprio valor e vencimento — os valores costumam ser DIFERENTES entre parcelas (ex: 1ª parcela com desconto, demais com juros), e os vencimentos são datas específicas, não um intervalo fixo de dias.
@@ -76,10 +78,11 @@ ${RESPONSE_SHAPE}
 
 Regras:
 - "contraparte": nome do pagador/sacado (boleto) ou destinatário/cliente (NF) — de quem o usuário vai receber. Comum a todas as parcelas.
+- "documento_contraparte": o CPF ou CNPJ do pagador/destinatário (de quem o usuário vai receber), exatamente como aparece no documento (com ou sem pontuação); senão null. NUNCA ponha um CPF/CNPJ em "numero_documento" — é sempre aqui.
 - "categoria_sugerida": um palpite de categoria financeira de RECEITA (ex: "Vendas de Produtos", "Prestação de Serviços"), só se o documento deixar claro; senão null.
 - "tipo_lancamento": sempre null (não se aplica a conta a receber).
 - "tipo_documento": "boleto", "nota_fiscal", "carne_parcelado" ou "outro".
-- "numero_documento": o número impresso no documento que identifica ele (nº da nota fiscal/NF-e, nosso número ou linha de referência do boleto, nº do carnê) — só se estiver visível; senão null.
+- "numero_documento": o número que identifica o documento em si — nº da nota fiscal/NF-e/cupom fiscal, nosso número ou linha digitável do boleto, nº do carnê. NUNCA um CPF/CNPJ (isso vai em "documento_contraparte") — se o único identificador visível for uma Inscrição Estadual (IE), use ela só como último recurso; senão null.
 - "parcelas": UMA ENTRADA PRA CADA PARCELA IMPRESSA NO DOCUMENTO, com o valor e vencimento EXATOS de cada uma, lidos diretamente do documento.
   - Documentos de pagamento único (boleto normal, NF): "parcelas" tem só 1 item.
   - Documentos parcelados: liste TODAS as parcelas visíveis, cada uma com seu próprio valor e vencimento reais — nunca calculados por divisão ou soma de meses.
@@ -94,6 +97,7 @@ ${RESPONSE_SHAPE}
 
 Regras:
 - "contraparte": nome de quem enviou ou recebeu o valor, se aparecer no comprovante (ex: nome do favorecido de um PIX); senão null.
+- "documento_contraparte": sempre null (não se aplica a lançamento bancário avulso).
 - "categoria_sugerida": um palpite de categoria financeira (ex: "Despesas Bancárias", "Juros Recebidos"), só se o documento deixar claro; senão null.
 - "tipo_documento": "comprovante_pix", "comprovante_ted", "tarifa_bancaria", "outro".
 - "tipo_lancamento": "Entrada" se o dinheiro ENTROU na conta do usuário, "Saida" se SAIU. Baseie-se no que o comprovante mostra (ex: "PIX enviado" = Saida, "PIX recebido" = Entrada, tarifa/juros pagos = Saida, rendimento recebido = Entrada).
