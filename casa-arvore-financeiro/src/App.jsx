@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -2572,7 +2572,7 @@ function StatusBadge({ status }) {
   if (status === "Pago" || status === "Recebido") return <Badge tone="green">{status}</Badge>;
   if (status === "Atrasado" || status === "Inadimplente") return <Badge tone="red">{status}</Badge>;
   if (status === "Próximo") return <Badge tone="amber">{status}</Badge>;
-  if (status === "Agendado") return <Badge tone="gold">{status}</Badge>;
+  if (status === "Agendado" || status === "Antecipado") return <Badge tone="gold">{status}</Badge>;
   if (status === "Autorizado") return <Badge tone="blue">{status}</Badge>;
   return <Badge tone="neutral">{status}</Badge>;
 }
@@ -2878,6 +2878,40 @@ function ScheduleModal({ title, items, nameField, accounts, onClose, onConfirm }
   );
 }
 
+// Marcar um recebível como "em antecipação" (cartão, duplicata...) — igual
+// "Agendar pagamentos", isso NÃO é baixa: só sinaliza a data/conta
+// prevista, pra sair de "A Receber"/"Próximo" sem já contar como
+// recebido. Reaproveita os mesmos nomes de campo do agendamento de
+// pagamentos (agendadoPara/contaAgendadaId) pra herdar o pré-preenchimento
+// que o SettleModal já faz na hora da baixa de verdade — é ali que entra
+// o deságio da antecipação, no campo Desconto que já existe.
+function AnticipateModal({ item, accounts, onClose, onConfirm }) {
+  const [data, setData] = useState(item.agendadoPara || todayISO());
+  const [contaId, setContaId] = useState(item.contaAgendadaId || accounts[0]?.id || "");
+  return (
+    <Modal title={`Antecipar recebível — ${item.cliente}`} onClose={onClose}>
+      <div className="grid gap-3">
+        <p className="text-xs px-3 py-2 rounded-lg" style={{ background: COLORS.goldSoft, color: COLORS.gold }}>
+          Isso não é baixa — só sinaliza que esse valor está em processo de antecipação. Quando o crédito cair de fato na conta (normalmente com deságio), dê baixa e preencha o desconto.
+        </p>
+        <Field label="Data prevista do crédito">
+          <TextInput type="date" value={data} onChange={(e) => setData(e.target.value)} />
+        </Field>
+        <Field label="Conta que vai receber">
+          <Select value={contaId} onChange={(e) => setContaId(e.target.value)}>
+            {accounts.length === 0 && <option value="">Cadastre uma conta primeiro</option>}
+            {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+          </Select>
+        </Field>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => onConfirm(data, contaId)} disabled={!contaId}>Marcar como antecipado</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 /* ---------------------------------------------------------------------- */
 /*  Contas a Receber                                                       */
 /* ---------------------------------------------------------------------- */
@@ -2897,6 +2931,7 @@ function ReceivablesView({
   const [installmentsReview, setInstallmentsReview] = useState(null);
   const [previewDoc, setPreviewDoc] = useState(null);
   const [cobrancas, setCobrancas] = useState({}); // { receivableId: created_at da última cobrança enviada }
+  const [anticipateModal, setAnticipateModal] = useState(null);
 
   // Régua de cobrança: quando cada conta a receber foi cobrada por
   // último — não guarda estado próprio, só lê do mesmo log de auditoria
@@ -3006,9 +3041,11 @@ function ReceivablesView({
   const withDerived = receivables
     .filter((r) => !r.deletedAt && r.empresaId === selectedEmpresa)
     .map((r) => {
+      // Inadimplente/Próximo só valem pra quem ainda está parado em "A
+      // Receber" puro — uma vez antecipado, mostra o status dele mesmo.
       let statusDisplay = r.status;
-      if (r.status !== "Recebido" && r.vencimento < todayISO()) statusDisplay = "Inadimplente";
-      else if (r.status !== "Recebido" && daysUntil(r.vencimento) <= 10) statusDisplay = "Próximo";
+      if (r.status === "A Receber" && r.vencimento < todayISO()) statusDisplay = "Inadimplente";
+      else if (r.status === "A Receber" && daysUntil(r.vencimento) <= 10) statusDisplay = "Próximo";
       return { ...r, statusDisplay };
     });
 
@@ -3058,9 +3095,21 @@ function ReceivablesView({
     setRecModal(null);
   };
   const cancelReceipt = (r) => {
-    if (!confirmDelete(`Cancelar o recebimento de "${r.cliente}"? Ele volta pra "A Receber".`)) return;
-    onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: "A Receber", dataReceb: null, valorRecebido: null, contaRecebId: null } : x)));
+    const revertStatus = r.agendadoPara ? "Antecipado" : "A Receber";
+    if (!confirmDelete(`Cancelar o recebimento de "${r.cliente}"? Ele volta pra "${revertStatus}".`)) return;
+    onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: revertStatus, dataReceb: null, valorRecebido: null, contaRecebId: null } : x)));
     logAudit(selectedEmpresa, "receivable", r.id, "cancelar_baixa", `Cancelou recebimento de ${fmtBRL(r.valorRecebido || r.valor)}`, userEmail);
+  };
+  const anticipateReceivable = (data, contaId) => {
+    const r = anticipateModal;
+    onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: "Antecipado", agendadoPara: data, contaAgendadaId: contaId } : x)));
+    logAudit(selectedEmpresa, "receivable", r.id, "antecipar", `Marcado como antecipação — previsto pra ${fmtDate(data)}`, userEmail);
+    setAnticipateModal(null);
+  };
+  const cancelAnticipation = (r) => {
+    if (!confirmDelete(`Cancelar a antecipação de "${r.cliente}"? Ele volta pra "A Receber".`)) return;
+    onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: "A Receber", agendadoPara: null, contaAgendadaId: null } : x)));
+    logAudit(selectedEmpresa, "receivable", r.id, "cancelar_antecipacao", `Cancelou antecipação de ${fmtBRL(r.valor)}`, userEmail);
   };
 
   const total = filtered.reduce((s, r) => s + Number(r.valor || 0), 0);
@@ -3085,13 +3134,14 @@ function ReceivablesView({
         </div>
       )}
       <StatusSummary items={withDerived} statuses={[
-        { key: "A Receber", label: "A receber", tone: "neutral" },
-        { key: "Próximo", label: "Próximo (10 dias)", tone: "amber" },
         { key: "Inadimplente", label: "Inadimplente", tone: "red" },
+        { key: "Próximo", label: "Próximo (10 dias)", tone: "amber" },
+        { key: "Antecipado", label: "Antecipado", tone: "gold" },
+        { key: "A Receber", label: "A receber", tone: "neutral" },
         { key: "Recebido", label: "Recebido", tone: "green" },
       ]} />
       <FilterBar search={search} setSearch={setSearch} status={status} setStatus={setStatus}
-        statusOptions={["A Receber", "Próximo", "Recebido", "Inadimplente"]} placeholder="Buscar cliente, descrição..."
+        statusOptions={["Inadimplente", "Próximo", "Antecipado", "A Receber", "Recebido"]} placeholder="Buscar cliente, descrição..."
         dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} />
 
       <Card className="overflow-x-auto">
@@ -3130,19 +3180,30 @@ function ReceivablesView({
                   </td>
                   <td className="px-4 py-2.5">
                     <StatusBadge status={r.statusDisplay} />
-                    {cobrancas[r.id] && r.status !== "Recebido" && (
+                    {r.status === "Antecipado" && (
+                      <p className="text-[11px] mt-0.5" style={{ color: COLORS.inkSoft }}>
+                        {fmtDate(r.agendadoPara)} · {accounts.find((a) => a.id === r.contaAgendadaId)?.nome || "—"}
+                      </p>
+                    )}
+                    {cobrancas[r.id] && r.status === "A Receber" && (
                       <p className="text-[11px] mt-0.5" style={{ color: COLORS.inkSoft }}>Cobrado {timeAgo(cobrancas[r.id])}</p>
                     )}
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
-                      {r.status !== "Recebido" ? (
+                      {r.status === "Recebido" ? (
+                        <button onClick={() => cancelReceipt(r)} title="Cancelar recebimento" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
+                      ) : r.status === "Antecipado" ? (
+                        <>
+                          <Button variant="subtle" onClick={() => setRecModal(r)}><Check size={13} /> Dar baixa</Button>
+                          <button onClick={() => cancelAnticipation(r)} title="Cancelar antecipação (volta pra A Receber)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
+                        </>
+                      ) : (
                         <>
                           <Button variant="subtle" onClick={() => setRecModal(r)}><Check size={13} /> Dar baixa</Button>
                           <button onClick={() => notifyClient(r)} title="Cobrar cliente via WhatsApp" className="p-1.5 rounded-md hover:bg-black/5"><MessageCircle size={14} color={COLORS.primary} /></button>
+                          <button onClick={() => setAnticipateModal(r)} title="Marcar como em processo de antecipação" className="p-1.5 rounded-md hover:bg-black/5"><Zap size={14} color={COLORS.gold} /></button>
                         </>
-                      ) : (
-                        <button onClick={() => cancelReceipt(r)} title="Cancelar recebimento (volta pra A Receber)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                       )}
                       <button onClick={() => setModal(r)} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
                       <button onClick={() => remove(r.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
@@ -3205,6 +3266,14 @@ function ReceivablesView({
           showAdjustments
           onClose={() => setRecModal(null)}
           onConfirm={(data, valor, contaId, adj) => confirmReceipt(recModal.id, data, valor, contaId, adj)}
+        />
+      )}
+      {anticipateModal && (
+        <AnticipateModal
+          item={anticipateModal}
+          accounts={accounts.filter((a) => a.empresaId === anticipateModal.empresaId)}
+          onClose={() => setAnticipateModal(null)}
+          onConfirm={anticipateReceivable}
         />
       )}
     </div>
@@ -4368,8 +4437,8 @@ function CollectionsReport({ receivables, contacts }) {
     .filter((r) => r.status !== "Recebido")
     .map((r) => {
       let statusDisplay = r.status;
-      if (r.vencimento < today) statusDisplay = "Inadimplente";
-      else if (daysUntil(r.vencimento) <= 10) statusDisplay = "Próximo";
+      if (r.status === "A Receber" && r.vencimento < today) statusDisplay = "Inadimplente";
+      else if (r.status === "A Receber" && daysUntil(r.vencimento) <= 10) statusDisplay = "Próximo";
       return { ...r, statusDisplay, contato: contacts.find((c) => c.id === r.contactId)?.contato || "" };
     })
     .sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""));
@@ -4674,6 +4743,8 @@ const AUDIT_ACTION_LABEL = {
   autorizar: "Autorizar pagamento",
   cancelar_agendamento: "Cancelar agendamento",
   cobranca: "Cobrança enviada",
+  antecipar: "Marcar antecipação",
+  cancelar_antecipacao: "Cancelar antecipação",
 };
 const AUDIT_ACTION_TONE = {
   baixa: "green",
@@ -4682,6 +4753,8 @@ const AUDIT_ACTION_TONE = {
   autorizar: "blue",
   cancelar_agendamento: "amber",
   cobranca: "neutral",
+  antecipar: "gold",
+  cancelar_antecipacao: "amber",
 };
 
 function fmtDateTime(iso) {
