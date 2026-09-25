@@ -1256,6 +1256,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 categories={allCategoryNames}
                 despesaCategorias={despesasF}
                 receitaCategorias={receitasF}
+                contacts={contacts}
+                onSaveContacts={(v) => persist("contacts", v, setContacts)}
                 onSavePayables={(v) => persist("payables", v, setPayables)}
                 onSaveReceivables={(v) => persist("receivables", v, setReceivables)}
                 onSaveBankEntries={(v) => persist("bankEntries", v, setBankEntries)}
@@ -5841,6 +5843,35 @@ function suggestCategoria(descricao, empresaId, bankEntries) {
   return null;
 }
 
+// Banco brasileiro costuma embutir o nome de quem enviou/recebeu bem depois
+// de um prefixo fixo ("Pix Enviado NOME", "Ted Recebido de NOME"...) — em
+// vez de deixar o operador digitar de novo um nome que já está na tela,
+// tenta extrair direto da descrição do extrato. "Pagamento de Título" ou
+// "Pgto Fornecedores" (boleto) não carregam nome nenhum no extrato — nesses
+// casos não tem o que adivinhar, mesmo, o operador digita na mão.
+function guessContraparteFromDescricao(descricao) {
+  const s = (descricao || "").trim();
+  const patterns = [
+    /^pix\s+enviado\s+(?:para\s+)?(.+)$/i,
+    /^pix\s+recebido\s+(?:de\s+)?(.+)$/i,
+    /^ted\s+enviad[ao]\s+(?:para\s+)?(.+)$/i,
+    /^ted\s+recebid[ao]\s+(?:de\s+)?(.+)$/i,
+    /^doc\s+enviad[ao]\s+(?:para\s+)?(.+)$/i,
+    /^doc\s+recebid[ao]\s+(?:de\s+)?(.+)$/i,
+    /^transfer[êe]ncia\s+enviada\s+(?:para\s+)?(.+)$/i,
+    /^transfer[êe]ncia\s+recebida\s+(?:de\s+)?(.+)$/i,
+  ];
+  for (const re of patterns) {
+    const m = s.match(re);
+    if (!m) continue;
+    const nome = m[1].trim().replace(/\s+/g, " ");
+    // Descarta se for só número/código (id de transação, CPF/CNPJ solto) —
+    // isso não é nome de gente/empresa.
+    if (nome && !/^[\d.\-/]+$/.test(nome)) return nome;
+  }
+  return "";
+}
+
 function matchStatement(systemMovs, statementLines, toleranceDays = 3) {
   const usedSys = new Set();
   const usedStmt = new Set();
@@ -5926,7 +5957,7 @@ function detectTransferSuggestion(line, contaId, accounts, payables, receivables
   return null;
 }
 
-function ReconciliationView({ accounts, payables, receivables, bankEntries, transfers, categories, despesaCategorias, receitaCategorias, onSavePayables, onSaveReceivables, onSaveBankEntries, onSaveTransfers }) {
+function ReconciliationView({ accounts, payables, receivables, bankEntries, transfers, categories, despesaCategorias, receitaCategorias, contacts, onSaveContacts, onSavePayables, onSaveReceivables, onSaveBankEntries, onSaveTransfers }) {
   const [contaId, setContaId] = useState(accounts[0]?.id || "");
   const [draftModal, setDraftModal] = useState(null); // { line, idx, suggestion }
   const [transferDraft, setTransferDraft] = useState(null); // { line, idx, suggestion }
@@ -6051,16 +6082,28 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
   // "Só no extrato" às vezes não é um lançamento avulso — é uma conta a
   // pagar/receber que nunca chegou a ser cadastrada (o boleto foi pago
   // fora do sistema, por exemplo). Em vez de forçar tudo pra Lançamento
-  // Bancário, oferece lançar direto como Pago/Recebido + já conciliado.
-  const openLancarModal = (tipo, line, idx) => setLancarModal({ tipo, line, idx });
+  // Bancário, oferece lançar direto como Pago/Recebido + já conciliado —
+  // já tentando adivinhar o fornecedor/cliente a partir da descrição do
+  // próprio extrato, pra não digitar de novo um nome que já está na tela.
+  const openLancarModal = (tipo, line, idx) => {
+    setLancarModal({ tipo, line, idx, contraparteSugerida: guessContraparteFromDescricao(line.descricao) });
+  };
 
   const submitLancar = (form) => {
     const acc = accounts.find((a) => a.id === contaId);
+    const empresaId = acc?.empresaId;
+    const nomeContraparte = form.fornecedor || form.cliente;
+    let contactId;
+    if (nomeContraparte && empresaId) {
+      const { contacts: nextContacts, contact } = resolveContact(contacts, { nome: nomeContraparte, empresaId });
+      onSaveContacts(nextContacts);
+      contactId = contact?.id;
+    }
     if (lancarModal.tipo === "payable") {
-      const novo = { ...form, id: uid(), empresaId: acc?.empresaId, contaPgtoId: contaId, conciliado: true };
+      const novo = { ...form, id: uid(), empresaId, contaPgtoId: contaId, conciliado: true, ...(contactId ? { contactId } : {}) };
       onSavePayables([...payables, novo]);
     } else {
-      const novo = { ...form, id: uid(), empresaId: acc?.empresaId, contaRecebId: contaId, conciliado: true };
+      const novo = { ...form, id: uid(), empresaId, contaRecebId: contaId, conciliado: true, ...(contactId ? { contactId } : {}) };
       onSaveReceivables([...receivables, novo]);
     }
     setStatementLines((prev) => prev.filter((_, i) => i !== lancarModal.idx));
@@ -6318,6 +6361,7 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
         <LancarNoSistemaModal
           tipo={lancarModal.tipo}
           line={lancarModal.line}
+          initialContraparte={lancarModal.contraparteSugerida}
           categorias={lancarModal.tipo === "payable" ? despesaCategorias : receitaCategorias}
           onClose={() => setLancarModal(null)}
           onSubmit={submitLancar}
@@ -6331,9 +6375,9 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
 // sistema — em vez de forçar tudo pra um Lançamento Bancário avulso (que
 // perde o rastro de fornecedor/cliente), essa opção já cria o lançamento
 // PAGO/RECEBIDO e conciliado, do jeito que ele já aconteceu de verdade.
-function LancarNoSistemaModal({ tipo, line, categorias, onClose, onSubmit }) {
+function LancarNoSistemaModal({ tipo, line, initialContraparte, categorias, onClose, onSubmit }) {
   const isPayable = tipo === "payable";
-  const [contraparte, setContraparte] = useState("");
+  const [contraparte, setContraparte] = useState(initialContraparte || "");
   const [categoria, setCategoria] = useState(categorias[0] || "");
   const [descricao, setDescricao] = useState(line.descricao || "");
   const [valor, setValor] = useState(String(line.valor ?? ""));
@@ -6362,6 +6406,11 @@ function LancarNoSistemaModal({ tipo, line, categorias, onClose, onSubmit }) {
         <Field label={isPayable ? "Fornecedor" : "Cliente"}>
           <TextInput value={contraparte} onChange={(e) => setContraparte(e.target.value)} autoFocus />
         </Field>
+        {initialContraparte && contraparte === initialContraparte && (
+          <p className="text-xs -mt-2" style={{ color: COLORS.green }}>
+            Sugerido a partir da descrição do extrato — confira antes de lançar.
+          </p>
+        )}
         <Field label="Categoria">
           <Select value={categoria} onChange={(e) => setCategoria(e.target.value)}>
             {categorias.map((c) => <option key={c.codigo} value={c.nome}>{c.nome}</option>)}
