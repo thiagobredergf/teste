@@ -4,9 +4,7 @@
 // operador confirmar no modal de "Novo lançamento" — nunca cria o
 // lançamento sozinha.
 //
-// Usada em quatro contextos (parâmetro "context" no corpo da requisição), que
-// mudam só o que a IA deve procurar no documento — o formato de resposta é
-// o mesmo nos quatro:
+// Usada em cinco contextos (parâmetro "context" no corpo da requisição):
 //   - "payable"    (Contas a Pagar): contraparte = fornecedor/beneficiário.
 //   - "receivable" (Contas a Receber): contraparte = cliente/pagador.
 //   - "bankEntry"  (Lançamentos Bancários): comprovante de um movimento só
@@ -15,6 +13,13 @@
 //   - "transfer"   (Transferências): comprovante de TED/PIX entre duas
 //     contas da própria empresa — sem contraparte/categoria, só valor,
 //     data e uma descrição citando os bancos de origem/destino.
+// Os quatro acima usam o mesmo formato de resposta (RESPONSE_SHAPE, um
+// documento = "parcelas"). O quinto é diferente:
+//   - "statement"  (Conciliação Bancária): extrato/fatura/relatório de
+//     maquininha com VÁRIAS linhas de movimento — não é "um documento, uma
+//     ou mais parcelas", é uma lista solta de lançamentos (STATEMENT_SHAPE),
+//     usada quando o arquivo não é CSV/OFX (que já são lidos sem IA, de
+//     graça, no próprio navegador) e sim PDF/imagem.
 //
 // Exige login no ESEK (verify_jwt padrão do Supabase) — não tem segredo
 // próprio como a crm-integration, porque quem chama é sempre um usuário
@@ -126,6 +131,27 @@ Regras:
 - Se não tiver certeza de um campo, retorne null — nunca invente ou estime.`,
 };
 
+const STATEMENT_RESPONSE_SHAPE = `{
+  "linhas": [
+    { "data": "AAAA-MM-DD", "descricao": string, "valor": number, "tipo": "Entrada" ou "Saida" }
+  ]
+}`;
+
+const STATEMENT_SYSTEM_PROMPT = `Você lê um extrato bancário, fatura de cartão de crédito ou relatório de repasse de maquininha/plataforma de delivery (em PDF, imagem ou tabela) e extrai TODAS as linhas de movimento que conseguir identificar com confiança.
+
+Responda APENAS com um objeto JSON, sem markdown, sem explicação, no formato exato:
+${STATEMENT_RESPONSE_SHAPE}
+
+Regras:
+- Uma entrada em "linhas" pra CADA movimento do documento — não pule, não resuma, não agrupe linhas parecidas em uma só.
+- "data": a data do movimento, sempre no formato AAAA-MM-DD.
+- "valor": sempre um número POSITIVO — o sentido (entrada/saída) vai só no campo "tipo", nunca use sinal negativo aqui.
+- "tipo": "Entrada" se o dinheiro entrou na conta/recebível, "Saida" se saiu.
+- "descricao": o texto da linha como aparece no documento (histórico, favorecido, nome do produto/pedido), breve.
+- NUNCA inclua linha de saldo (saldo anterior, saldo do dia, saldo final, total) — isso não é um movimento, é um resumo.
+- Documento com muitas páginas ou centenas de linhas: extraia o máximo que conseguir ler com confiança, mesmo que não seja tudo.
+- Se não tiver certeza da data ou do valor de uma linha específica, PULE essa linha em vez de adivinhar — é melhor faltar uma linha do que inventar um valor errado.`;
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
@@ -176,7 +202,8 @@ Deno.serve(async (req) => {
     });
   }
 
-  const systemPrompt = CONTEXT_PROMPTS[context || "payable"] || CONTEXT_PROMPTS.payable;
+  const isStatement = context === "statement";
+  const systemPrompt = isStatement ? STATEMENT_SYSTEM_PROMPT : (CONTEXT_PROMPTS[context || "payable"] || CONTEXT_PROMPTS.payable);
 
   const documentBlock = mediaType === "application/pdf"
     ? { type: "document" as const, source: { type: "base64" as const, media_type: "application/pdf" as const, data: fileBase64 } }
@@ -184,11 +211,13 @@ Deno.serve(async (req) => {
 
   const client = new Anthropic({ apiKey });
 
+  // Extrato pode ter dezenas/centenas de linhas — um boleto/comprovante
+  // normal cabe folgado em 2048 tokens de resposta, uma fatura inteira não.
   let response;
   try {
     response = await client.messages.create({
       model: "claude-haiku-4-5",
-      max_tokens: 2048,
+      max_tokens: isStatement ? 8192 : 2048,
       system: systemPrompt,
       messages: [
         {

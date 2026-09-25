@@ -1251,6 +1251,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 bankEntries={bankEntries}
                 transfers={transfers}
                 categories={allCategoryNames}
+                despesaCategorias={despesasF}
+                receitaCategorias={receitasF}
                 onSavePayables={(v) => persist("payables", v, setPayables)}
                 onSaveReceivables={(v) => persist("receivables", v, setReceivables)}
                 onSaveBankEntries={(v) => persist("bankEntries", v, setBankEntries)}
@@ -5921,7 +5923,7 @@ function detectTransferSuggestion(line, contaId, accounts, payables, receivables
   return null;
 }
 
-function ReconciliationView({ accounts, payables, receivables, bankEntries, transfers, categories, onSavePayables, onSaveReceivables, onSaveBankEntries, onSaveTransfers }) {
+function ReconciliationView({ accounts, payables, receivables, bankEntries, transfers, categories, despesaCategorias, receitaCategorias, onSavePayables, onSaveReceivables, onSaveBankEntries, onSaveTransfers }) {
   const [contaId, setContaId] = useState(accounts[0]?.id || "");
   const [draftModal, setDraftModal] = useState(null); // { line, idx, suggestion }
   const [transferDraft, setTransferDraft] = useState(null); // { line, idx, suggestion }
@@ -5932,12 +5934,41 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
   const [fileName, setFileName] = useState("");
   const [statementLines, setStatementLines] = useState(null);
   const [parseError, setParseError] = useState("");
+  const [extracting, setExtracting] = useState(false);
+  const [lancarModal, setLancarModal] = useState(null); // { tipo: "payable"|"receivable", line, idx }
 
+  // CSV/OFX é lido no próprio navegador, sem custo — mas boleto de banco,
+  // fatura de cartão e relatório de maquininha às vezes só saem em PDF ou
+  // foto. Nesses casos reaproveita a mesma IA que já lê boleto/comprovante
+  // (extract-document, contexto "statement"), sem contratar Open Finance.
   const handleFile = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setParseError("");
     setFileName(file.name);
+    const isPdfOrImage = /\.(pdf|jpe?g|png|webp)$/i.test(file.name) || /^(application\/pdf|image\/)/.test(file.type || "");
+    if (isPdfOrImage) {
+      setStatementLines(null);
+      setExtracting(true);
+      (async () => {
+        try {
+          const fileBase64 = await fileToBase64(file);
+          const mediaType = file.type || (/\.pdf$/i.test(file.name) ? "application/pdf" : "image/jpeg");
+          const ex = await callExtractDocument(fileBase64, mediaType, "statement");
+          const lines = (Array.isArray(ex.linhas) ? ex.linhas : [])
+            .filter((l) => l.data && l.valor != null)
+            .map((l) => ({ data: l.data, valor: Math.abs(Number(l.valor) || 0), tipo: l.tipo === "Entrada" ? "Entrada" : "Saída", descricao: l.descricao || "" }));
+          if (lines.length === 0) setParseError("A IA não encontrou nenhum movimento reconhecível nesse arquivo — confira se é um extrato/relatório com uma tabela de lançamentos.");
+          setStatementLines(lines);
+        } catch (err) {
+          setParseError(err?.message || "Erro ao ler o arquivo com IA.");
+          setStatementLines(null);
+        } finally {
+          setExtracting(false);
+        }
+      })();
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -6010,13 +6041,32 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
     setTransferDraft(null);
   };
 
+  // "Só no extrato" às vezes não é um lançamento avulso — é uma conta a
+  // pagar/receber que nunca chegou a ser cadastrada (o boleto foi pago
+  // fora do sistema, por exemplo). Em vez de forçar tudo pra Lançamento
+  // Bancário, oferece lançar direto como Pago/Recebido + já conciliado.
+  const openLancarModal = (tipo, line, idx) => setLancarModal({ tipo, line, idx });
+
+  const submitLancar = (form) => {
+    const acc = accounts.find((a) => a.id === contaId);
+    if (lancarModal.tipo === "payable") {
+      const novo = { ...form, id: uid(), empresaId: acc?.empresaId, contaPgtoId: contaId, conciliado: true };
+      onSavePayables([...payables, novo]);
+    } else {
+      const novo = { ...form, id: uid(), empresaId: acc?.empresaId, contaRecebId: contaId, conciliado: true };
+      onSaveReceivables([...receivables, novo]);
+    }
+    setStatementLines((prev) => prev.filter((_, i) => i !== lancarModal.idx));
+    setLancarModal(null);
+  };
+
   if (accounts.length === 0) {
     return <EmptyState icon={Landmark} title="Nenhuma conta cadastrada" subtitle="Cadastre uma conta para conciliar o extrato bancário." />;
   }
 
   return (
     <div className="space-y-4">
-      <Header title="Conciliação Bancária" subtitle="Importe o extrato do banco (CSV ou OFX) e cruze automaticamente com os lançamentos do sistema." />
+      <Header title="Conciliação Bancária" subtitle="Importe o extrato do banco (CSV, OFX, PDF ou foto) e cruze automaticamente com os lançamentos do sistema." />
 
       <Card className="p-4 space-y-3">
         <div className="flex items-end gap-3 flex-wrap">
@@ -6025,13 +6075,13 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
             </Select>
           </Field>
-          <Field label="Extrato do banco (.csv ou .ofx)">
+          <Field label="Extrato do banco (.csv, .ofx, .pdf ou foto)">
             <label
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer"
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer disabled:opacity-40"
               style={{ background: COLORS.primary, color: "#fff" }}
             >
-              <Upload size={15} /> {fileName || "Escolher arquivo"}
-              <input type="file" accept=".csv,.ofx,.txt" className="hidden" onChange={handleFile} />
+              <Upload size={15} /> {extracting ? "Lendo com IA…" : (fileName || "Escolher arquivo")}
+              <input type="file" accept=".csv,.ofx,.txt,.pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleFile} disabled={extracting} />
             </label>
           </Field>
           {result && (
@@ -6047,7 +6097,7 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
         )}
         <div className="flex items-start gap-2 text-xs" style={{ color: COLORS.inkSoft }}>
           <HelpCircle size={14} className="shrink-0 mt-0.5" />
-          <span>Aceita OFX exportado do internet banking, ou CSV com colunas de data e valor (com ou sem cabeçalho) — serve pra extrato de banco, fatura de cartão de crédito, relatório de repasse de maquininha ou de delivery, desde que a compra/venda esteja lançada com essa mesma conta. O sistema casa cada linha do extrato com um lançamento já cadastrado pelo mesmo valor, em até 3 dias de diferença.</span>
+          <span>Aceita OFX exportado do internet banking, CSV com colunas de data e valor (com ou sem cabeçalho), ou PDF/foto — nesse caso uma IA lê a tabela de movimentos pra você. Serve pra extrato de banco, fatura de cartão de crédito, relatório de repasse de maquininha ou de delivery, desde que a compra/venda esteja lançada com essa mesma conta. O sistema casa cada linha do extrato com um lançamento já cadastrado pelo mesmo valor, em até 3 dias de diferença.</span>
         </div>
       </Card>
 
@@ -6179,7 +6229,7 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
                           {line.tipo === "Entrada" ? "+" : "−"}{fmtBRL(line.valor)}
                         </td>
                         <td className="px-2 py-1.5 text-right">
-                          <div className="flex justify-end gap-1.5">
+                          <div className="flex justify-end gap-1.5 flex-wrap">
                             {transferSuggestion && otherAcc && (
                               <button
                                 onClick={() => openTransferDraft(line, idx, transferSuggestion)}
@@ -6189,8 +6239,17 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
                                 <ArrowLeftRight size={12} /> Confirmar transferência
                               </button>
                             )}
+                            <button
+                              onClick={() => openLancarModal(line.tipo === "Saída" ? "payable" : "receivable", line, idx)}
+                              className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full"
+                              style={line.tipo === "Saída" ? { background: COLORS.redSoft, color: COLORS.red } : { background: COLORS.greenSoft, color: COLORS.green }}
+                              title={line.tipo === "Saída" ? "Registrar como uma conta a pagar que já foi paga (esqueceu de lançar)" : "Registrar como uma conta a receber que já foi recebida (esqueceu de lançar)"}
+                            >
+                              {line.tipo === "Saída" ? <ArrowUpCircle size={12} /> : <ArrowDownCircle size={12} />}
+                              Lançar como {line.tipo === "Saída" ? "Conta a Pagar" : "Conta a Receber"}
+                            </button>
                             <button onClick={() => openDraftModal(line, idx)} className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
-                              <Plus size={12} /> Lançar e conciliar
+                              <Plus size={12} /> Lançar avulso
                             </button>
                           </div>
                         </td>
@@ -6241,7 +6300,71 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
           />
         );
       })()}
+      {lancarModal && (
+        <LancarNoSistemaModal
+          tipo={lancarModal.tipo}
+          line={lancarModal.line}
+          categorias={lancarModal.tipo === "payable" ? despesaCategorias : receitaCategorias}
+          onClose={() => setLancarModal(null)}
+          onSubmit={submitLancar}
+        />
+      )}
     </div>
+  );
+}
+
+// "Só no extrato" pode ser algo que nunca virou conta a pagar/receber no
+// sistema — em vez de forçar tudo pra um Lançamento Bancário avulso (que
+// perde o rastro de fornecedor/cliente), essa opção já cria o lançamento
+// PAGO/RECEBIDO e conciliado, do jeito que ele já aconteceu de verdade.
+function LancarNoSistemaModal({ tipo, line, categorias, onClose, onSubmit }) {
+  const isPayable = tipo === "payable";
+  const [contraparte, setContraparte] = useState("");
+  const [categoria, setCategoria] = useState(categorias[0] || "");
+  const [descricao, setDescricao] = useState(line.descricao || "");
+  const [valor, setValor] = useState(String(line.valor ?? ""));
+  const [data, setData] = useState(line.data || todayISO());
+  const valid = contraparte.trim() && Number(valor) > 0;
+
+  const submit = () => {
+    const valorNum = Number(valor) || 0;
+    onSubmit({
+      [isPayable ? "fornecedor" : "cliente"]: contraparte.trim(),
+      categoria,
+      descricao,
+      valor: valorNum,
+      dataLanc: data,
+      vencimento: data,
+      status: isPayable ? "Pago" : "Recebido",
+      ...(isPayable
+        ? { dataPgto: data, valorPago: valorNum }
+        : { dataReceb: data, valorRecebido: valorNum }),
+    });
+  };
+
+  return (
+    <Modal title={isPayable ? "Lançar como Conta a Pagar (já paga)" : "Lançar como Conta a Receber (já recebida)"} onClose={onClose}>
+      <div className="grid gap-3">
+        <Field label={isPayable ? "Fornecedor" : "Cliente"}>
+          <TextInput value={contraparte} onChange={(e) => setContraparte(e.target.value)} autoFocus />
+        </Field>
+        <Field label="Categoria">
+          <Select value={categoria} onChange={(e) => setCategoria(e.target.value)}>
+            {categorias.map((c) => <option key={c.codigo} value={c.nome}>{c.nome}</option>)}
+          </Select>
+        </Field>
+        <Field label="Descrição"><TextInput value={descricao} onChange={(e) => setDescricao(e.target.value)} /></Field>
+        <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={valor} onChange={(e) => setValor(e.target.value)} /></Field>
+        <Field label="Data"><TextInput type="date" value={data} max={todayISO()} onChange={(e) => setData(e.target.value)} /></Field>
+        <p className="text-xs" style={{ color: COLORS.inkSoft }}>
+          Já entra como {isPayable ? "paga" : "recebida"} e conciliada nesta conta — é pra registrar algo que já aconteceu e só não tinha sido lançado ainda.
+        </p>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => valid && submit()} disabled={!valid}>Lançar</Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
