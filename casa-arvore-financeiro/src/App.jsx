@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -2129,6 +2129,7 @@ function PayablesView({
   const [modal, setModal] = useState(null);
   const [payModal, setPayModal] = useState(null);
   const [scheduleModal, setScheduleModal] = useState(false);
+  const [batchSettleModal, setBatchSettleModal] = useState(false);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -2293,6 +2294,13 @@ function PayablesView({
     setScheduleModal(false);
   };
 
+  const confirmBatchPayment = (items, dataPgto, contaPgtoId) => {
+    const valores = new Map(items.map((i) => [i.id, i.valor]));
+    onSave(payables.map((p) => (valores.has(p.id) ? { ...p, status: "Pago", dataPgto, valorPago: valores.get(p.id), contaPgtoId } : p)));
+    items.forEach((i) => logAudit(selectedEmpresa, "payable", i.id, "baixa", `Dar baixa em lote — ${fmtBRL(i.valor)} em ${fmtDate(dataPgto)}`, userEmail));
+    setBatchSettleModal(false);
+  };
+
   const authorizePayment = (p) => {
     if (!confirmDelete(`Autorizar o pagamento de "${p.fornecedor}" (${fmtBRL(p.valor)}, proposto pra ${fmtDate(p.agendadoPara)})?`)) return;
     onSave(payables.map((x) => (x.id === p.id ? { ...x, status: "Autorizado", autorizadoPor: userEmail, autorizadoEm: new Date().toISOString() } : x)));
@@ -2344,6 +2352,9 @@ function PayablesView({
         </label>
         <Button variant="ghost" onClick={() => setScheduleModal(true)}>
           <CalendarClock size={15} /> Agendar pagamentos
+        </Button>
+        <Button variant="ghost" onClick={() => setBatchSettleModal(true)}>
+          <CheckCheck size={15} /> Dar baixa em lote
         </Button>
         {agendados.length > 0 && (
           <Button variant="ghost" onClick={notifyOwner} title="Abre o WhatsApp com uma mensagem pronta, listando os pagamentos agendados que aguardam autorização">
@@ -2501,6 +2512,19 @@ function PayablesView({
           accounts={accounts.filter((a) => a.empresaId === selectedEmpresa)}
           onClose={() => setScheduleModal(false)}
           onConfirm={confirmSchedule}
+        />
+      )}
+      {batchSettleModal && (
+        <BatchSettleModal
+          title="Dar baixa em lote — Contas a Pagar"
+          nameField="fornecedor"
+          valueLabel="Valor pago"
+          dateLabel="Data do pagamento"
+          accountLabel="Conta de pagamento"
+          items={payables.filter((p) => p.status !== "Pago" && p.empresaId === selectedEmpresa)}
+          accounts={accounts.filter((a) => a.empresaId === selectedEmpresa)}
+          onClose={() => setBatchSettleModal(false)}
+          onConfirm={confirmBatchPayment}
         />
       )}
     </div>
@@ -2912,6 +2936,108 @@ function AnticipateModal({ item, accounts, onClose, onConfirm }) {
   );
 }
 
+// Dar baixa em vários lançamentos de uma vez — conta e data são únicas pro
+// lote (dá pra ajustar o valor linha a linha antes de confirmar), mas fica
+// de fora daqui o que precisa de juros/multa/desconto: pra isso, baixa
+// individual, que já suporta. É o equivalente do "Dar baixa" de sempre,
+// só que pra várias contas ao mesmo tempo.
+function BatchSettleModal({ title, items, nameField, valueLabel, dateLabel, accountLabel, accounts, onClose, onConfirm }) {
+  const [contaId, setContaId] = useState("");
+  const [data, setData] = useState(todayISO());
+  const [checked, setChecked] = useState({});
+  const [valores, setValores] = useState({}); // overrides pontuais { id: "123.45" }
+
+  const conta = accounts.find((a) => a.id === contaId);
+  const candidatos = conta ? items.filter((i) => i.empresaId === conta.empresaId) : [];
+  const selecionados = candidatos.filter((i) => checked[i.id]);
+  const valorDe = (i) => (valores[i.id] !== undefined ? valores[i.id] : String(i.valor ?? ""));
+  const totalSelecionado = selecionados.reduce((s, i) => s + (Number(valorDe(i)) || 0), 0);
+
+  const toggle = (id) => setChecked((c) => ({ ...c, [id]: !c[id] }));
+  const toggleAll = () => {
+    const allOn = candidatos.length > 0 && candidatos.every((i) => checked[i.id]);
+    const next = {};
+    candidatos.forEach((i) => { next[i.id] = !allOn; });
+    setChecked(next);
+  };
+
+  const confirmar = () => {
+    onConfirm(selecionados.map((i) => ({ id: i.id, valor: Number(valorDe(i)) || 0 })), data, contaId);
+  };
+
+  return (
+    <Modal title={title} onClose={onClose} wide>
+      <div className="grid gap-3">
+        <div className="grid md:grid-cols-2 gap-3">
+          <Field label={accountLabel}>
+            <Select value={contaId} onChange={(e) => { setContaId(e.target.value); setChecked({}); }}>
+              <option value="">Selecione uma conta</option>
+              {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+            </Select>
+          </Field>
+          <Field label={dateLabel}>
+            <TextInput type="date" value={data} max={todayISO()} onChange={(e) => setData(e.target.value)} />
+          </Field>
+        </div>
+        <p className="text-xs -mt-1" style={{ color: COLORS.inkSoft }}>
+          Baixa em lote é pro caso simples (valor cheio, mesma conta e data pra todo mundo). Precisa de juros, multa ou desconto em algum? Dá baixa nele individualmente, na tabela.
+        </p>
+
+        {!contaId ? (
+          <p className="text-sm py-6 text-center" style={{ color: COLORS.inkSoft }}>Escolha a conta pra ver os lançamentos em aberto dela.</p>
+        ) : candidatos.length === 0 ? (
+          <p className="text-sm py-6 text-center" style={{ color: COLORS.inkSoft }}>Nada em aberto pra essa empresa.</p>
+        ) : (
+          <div className="rounded-lg border max-h-80 overflow-y-auto" style={{ borderColor: COLORS.border }}>
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}`, background: "#FAFAF7" }}>
+                  <th className="text-left font-medium px-3 py-2">
+                    <input type="checkbox" checked={candidatos.length > 0 && candidatos.every((i) => checked[i.id])} onChange={toggleAll} />
+                  </th>
+                  <th className="text-left font-medium px-3 py-2">Vencimento</th>
+                  <th className="text-left font-medium px-3 py-2">{nameField === "fornecedor" ? "Fornecedor" : "Cliente"}</th>
+                  <th className="text-left font-medium px-3 py-2">Status</th>
+                  <th className="text-right font-medium px-3 py-2">{valueLabel}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {candidatos.map((i) => (
+                  <tr key={i.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <td className="px-3 py-2"><input type="checkbox" checked={!!checked[i.id]} onChange={() => toggle(i.id)} /></td>
+                    <td className="px-3 py-2" style={{ color: COLORS.ink }}>{fmtDate(i.vencimento)}</td>
+                    <td className="px-3 py-2" style={{ color: COLORS.ink }}>{i[nameField]}</td>
+                    <td className="px-3 py-2"><StatusBadge status={i.status} /></td>
+                    <td className="px-3 py-2 text-right">
+                      <TextInput
+                        type="number" step="0.01" value={valorDe(i)}
+                        onChange={(e) => setValores((v) => ({ ...v, [i.id]: e.target.value }))}
+                        className="w-28 text-right" style={{ height: 32 }}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-1">
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>
+            {selecionados.length} selecionado(s) · <span className="font-semibold" style={{ color: COLORS.ink }}>{fmtBRL(totalSelecionado)}</span>
+          </p>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+            <Button onClick={confirmar} disabled={selecionados.length === 0}>
+              Dar baixa {selecionados.length > 0 ? `(${selecionados.length})` : ""}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 /* ---------------------------------------------------------------------- */
 /*  Contas a Receber                                                       */
 /* ---------------------------------------------------------------------- */
@@ -2921,6 +3047,7 @@ function ReceivablesView({
 }) {
   const [modal, setModal] = useState(null);
   const [recModal, setRecModal] = useState(null);
+  const [batchSettleModal, setBatchSettleModal] = useState(false);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -3094,6 +3221,12 @@ function ReceivablesView({
     logAudit(selectedEmpresa, "receivable", id, "baixa", `Dar baixa — ${fmtBRL(valorRecebido)} em ${fmtDate(dataReceb)}${detalheAdj}`, userEmail);
     setRecModal(null);
   };
+  const confirmBatchReceipt = (items, dataReceb, contaRecebId) => {
+    const valores = new Map(items.map((i) => [i.id, i.valor]));
+    onSave(receivables.map((r) => (valores.has(r.id) ? { ...r, status: "Recebido", dataReceb, valorRecebido: valores.get(r.id), contaRecebId } : r)));
+    items.forEach((i) => logAudit(selectedEmpresa, "receivable", i.id, "baixa", `Dar baixa em lote — ${fmtBRL(i.valor)} em ${fmtDate(dataReceb)}`, userEmail));
+    setBatchSettleModal(false);
+  };
   const cancelReceipt = (r) => {
     const revertStatus = r.agendadoPara ? "Antecipado" : "A Receber";
     if (!confirmDelete(`Cancelar o recebimento de "${r.cliente}"? Ele volta pra "${revertStatus}".`)) return;
@@ -3124,6 +3257,9 @@ function ReceivablesView({
           <Upload size={15} /> {importing ? "Lendo documento…" : "Importar documento"}
           <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing} />
         </label>
+        <Button variant="ghost" onClick={() => setBatchSettleModal(true)}>
+          <CheckCheck size={15} /> Dar baixa em lote
+        </Button>
         <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa }); }}>
           <Plus size={15} /> Novo lançamento
         </Button>
@@ -3274,6 +3410,19 @@ function ReceivablesView({
           accounts={accounts.filter((a) => a.empresaId === anticipateModal.empresaId)}
           onClose={() => setAnticipateModal(null)}
           onConfirm={anticipateReceivable}
+        />
+      )}
+      {batchSettleModal && (
+        <BatchSettleModal
+          title="Dar baixa em lote — Contas a Receber"
+          nameField="cliente"
+          valueLabel="Valor recebido"
+          dateLabel="Data do recebimento"
+          accountLabel="Conta de recebimento"
+          items={receivables.filter((r) => r.status !== "Recebido" && r.empresaId === selectedEmpresa)}
+          accounts={accounts.filter((a) => a.empresaId === selectedEmpresa)}
+          onClose={() => setBatchSettleModal(false)}
+          onConfirm={confirmBatchReceipt}
         />
       )}
     </div>
