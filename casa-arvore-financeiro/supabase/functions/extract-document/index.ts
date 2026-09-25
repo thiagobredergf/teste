@@ -152,6 +152,32 @@ Regras:
 - Documento com muitas páginas ou centenas de linhas: extraia o máximo que conseguir ler com confiança, mesmo que não seja tudo.
 - Se não tiver certeza da data ou do valor de uma linha específica, PULE essa linha em vez de adivinhar — é melhor faltar uma linha do que inventar um valor errado.`;
 
+// Extrato grande demais corta o JSON no meio (max_tokens estourado) antes
+// de fechar o array "linhas" — em vez de jogar tudo fora, varre o texto a
+// partir do "[" contando chaves e recorta só os objetos que fecharam por
+// completo, descartando o último (que ficou pela metade). Cada "linha" é
+// sempre um objeto raso (sem aninhamento), então contar chaves é seguro.
+function salvageStatementLines(text: string): unknown[] | null {
+  const arrStart = text.indexOf("[");
+  if (arrStart === -1) return null;
+  let depth = 0;
+  let lastCompleteEnd = -1;
+  for (let i = arrStart; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) lastCompleteEnd = i;
+    }
+  }
+  if (lastCompleteEnd === -1) return null;
+  try {
+    return JSON.parse(text.slice(arrStart, lastCompleteEnd + 1) + "]");
+  } catch {
+    return null;
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
@@ -252,19 +278,30 @@ Deno.serve(async (req) => {
   }
 
   let extracted: unknown;
+  let truncated = false;
   try {
     // A IA às vezes envolve o JSON em ```json ... ``` mesmo quando instruída a
     // não fazer isso — tira a cerca de código antes de tentar parsear.
     const cleaned = textBlock.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "");
     extracted = JSON.parse(cleaned);
   } catch {
-    return new Response(JSON.stringify({ error: "Não consegui interpretar a resposta da IA como JSON." }), {
-      status: 502,
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-    });
+    // Extrato grande (muitas páginas/linhas) pode estourar max_tokens e
+    // cortar o JSON no meio de um objeto — em vez de descartar tudo,
+    // aproveita as linhas que fecharam por completo antes do corte.
+    const salvaged = isStatement ? salvageStatementLines(textBlock.text) : null;
+    if (salvaged && salvaged.length > 0) {
+      extracted = { linhas: salvaged };
+      truncated = true;
+    } else {
+      console.error("Não consegui interpretar a resposta da IA como JSON. Início:", textBlock.text.slice(0, 300), "| Fim:", textBlock.text.slice(-300));
+      return new Response(JSON.stringify({ error: "Não consegui interpretar a resposta da IA como JSON." }), {
+        status: 502,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      });
+    }
   }
 
-  return new Response(JSON.stringify({ ok: true, extracted }), {
+  return new Response(JSON.stringify({ ok: true, extracted, truncated }), {
     status: 200,
     headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
   });

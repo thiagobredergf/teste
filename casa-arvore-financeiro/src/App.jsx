@@ -272,7 +272,10 @@ async function callExtractDocument(fileBase64, mediaType, context) {
     throw new Error(detail);
   }
   if (!data?.ok) throw new Error(data?.error || "Não consegui ler o documento.");
-  return data.extracted || {};
+  // "truncated" só vem true no contexto "statement", quando o arquivo era
+  // grande demais e a IA cortou no meio — o back-end já recorta pra devolver
+  // só as linhas que fecharam por completo (ver salvageStatementLines).
+  return { ...(data.extracted || {}), _truncated: !!data.truncated };
 }
 
 // Abre o WhatsApp Web/app com uma mensagem pronta pro celular cadastrado
@@ -5958,7 +5961,11 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
           const lines = (Array.isArray(ex.linhas) ? ex.linhas : [])
             .filter((l) => l.data && l.valor != null)
             .map((l) => ({ data: l.data, valor: Math.abs(Number(l.valor) || 0), tipo: l.tipo === "Entrada" ? "Entrada" : "Saída", descricao: l.descricao || "" }));
-          if (lines.length === 0) setParseError("A IA não encontrou nenhum movimento reconhecível nesse arquivo — confira se é um extrato/relatório com uma tabela de lançamentos.");
+          if (lines.length === 0) {
+            setParseError("A IA não encontrou nenhum movimento reconhecível nesse arquivo — confira se é um extrato/relatório com uma tabela de lançamentos.");
+          } else if (ex._truncated) {
+            setParseError(`Arquivo grande — a IA só conseguiu ler ${lines.length} lançamento(s) de uma vez (parou no meio do documento). Confira se falta alguma linha do fim do período; pra pegar o resto, importe separado (ex.: por quinzena) ou use CSV/OFX se o banco exportar.`);
+          }
           setStatementLines(lines);
         } catch (err) {
           setParseError(err?.message || "Erro ao ler o arquivo com IA.");
@@ -6091,7 +6098,14 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
           )}
         </div>
         {parseError && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+          <div
+            className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm"
+            style={
+              statementLines && statementLines.length > 0
+                ? { background: COLORS.amberSoft, color: COLORS.amber }
+                : { background: COLORS.redSoft, color: COLORS.red }
+            }
+          >
             <AlertTriangle size={15} /> {parseError}
           </div>
         )}
