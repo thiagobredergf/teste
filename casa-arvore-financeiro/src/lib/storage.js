@@ -21,6 +21,7 @@ const TABLE_NAMES = {
   fiscalObligations: "fiscalObligations",
   contacts: "contacts",
   documentUploads: "documentUploads",
+  categories: "categories",
 };
 
 // selectedEmpresa é só preferência de navegação de quem está olhando a
@@ -28,47 +29,6 @@ const TABLE_NAMES = {
 // (senão a seleção de um gestor ficaria vazando pra tela dos outros).
 const LOCAL_KEYS = new Set(["selectedEmpresa"]);
 const LOCAL_PREFIX = "ca-financeiro:";
-
-async function getCategories() {
-  const { data, error } = await supabase.from("categories").select("codigo, nome, natureza");
-  if (error) {
-    console.error("storageGet categories falhou:", error);
-    return null;
-  }
-  return {
-    receitas: data.filter((c) => c.natureza === "receita").map(({ codigo, nome }) => ({ codigo, nome })),
-    despesas: data.filter((c) => c.natureza === "despesa").map(({ codigo, nome }) => ({ codigo, nome })),
-  };
-}
-
-async function setCategories(value) {
-  const rows = [
-    ...value.receitas.map((c) => ({ codigo: c.codigo, nome: c.nome, natureza: "receita" })),
-    ...value.despesas.map((c) => ({ codigo: c.codigo, nome: c.nome, natureza: "despesa" })),
-  ];
-  const { data: existing, error: selErr } = await supabase.from("categories").select("codigo");
-  if (selErr) {
-    console.error("storageSet categories falhou ao ler existentes:", selErr);
-    return false;
-  }
-  const newCodes = new Set(rows.map((r) => r.codigo));
-  const toDelete = existing.filter((r) => !newCodes.has(r.codigo)).map((r) => r.codigo);
-  if (toDelete.length) {
-    const { error } = await supabase.from("categories").delete().in("codigo", toDelete);
-    if (error) {
-      console.error("storageSet categories falhou ao apagar:", error);
-      return false;
-    }
-  }
-  if (rows.length) {
-    const { error } = await supabase.from("categories").upsert(rows);
-    if (error) {
-      console.error("storageSet categories falhou ao gravar:", error);
-      return false;
-    }
-  }
-  return true;
-}
 
 export async function storageGet(key) {
   if (LOCAL_KEYS.has(key)) {
@@ -79,11 +39,6 @@ export async function storageGet(key) {
       console.error("storageGet local falhou:", e);
       return null;
     }
-  }
-
-  if (key === "categories") {
-    const value = await getCategories();
-    return value ? { key, value: JSON.stringify(value) } : null;
   }
 
   const table = TABLE_NAMES[key];
@@ -105,11 +60,6 @@ export async function storageSet(key, value) {
       console.error("storageSet local falhou:", e);
       return null;
     }
-  }
-
-  if (key === "categories") {
-    const ok = await setCategories(JSON.parse(value));
-    return ok ? { key, value } : null;
   }
 
   const table = TABLE_NAMES[key];

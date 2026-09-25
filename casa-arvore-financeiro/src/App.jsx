@@ -39,34 +39,155 @@ const COLORS = {
 const MONTHS = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
 const MONTH_NAMES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
-const DEFAULT_CATEGORIES = {
-  receitas: [
-    { codigo: "R01", nome: "Vendas de Produtos" },
-    { codigo: "R02", nome: "Prestação de Serviços" },
-    { codigo: "R03", nome: "Aluguéis Recebidos" },
-    { codigo: "R04", nome: "Juros Recebidos" },
-    { codigo: "R05", nome: "Outros Recebimentos" },
-  ],
-  despesas: [
-    { codigo: "D01", nome: "Fornecedores / Compras" },
-    { codigo: "D02", nome: "Salários e Pró-labore" },
-    { codigo: "D03", nome: "Aluguel" },
-    { codigo: "D04", nome: "Energia Elétrica" },
-    { codigo: "D05", nome: "Água e Saneamento" },
-    { codigo: "D06", nome: "Internet e Telefone" },
-    { codigo: "D07", nome: "Contabilidade" },
-    { codigo: "D08", nome: "Impostos e Taxas" },
-    { codigo: "D09", nome: "Manutenção e Reparos" },
-    { codigo: "D10", nome: "Material de Escritório" },
-    { codigo: "D11", nome: "Marketing e Publicidade" },
-    { codigo: "D12", nome: "Frete e Logística" },
-    { codigo: "D13", nome: "Combustível e Transporte" },
-    { codigo: "D14", nome: "Seguros" },
-    { codigo: "D15", nome: "Empréstimos e Financiamentos" },
-    { codigo: "D16", nome: "Despesas Bancárias" },
-    { codigo: "D17", nome: "Outras Despesas" },
+// Plano de Contas: cada empresa tem sua própria lista (por segmento),
+// agrupada num nível de "grupo" pra ficar comparável na DRE entre
+// empresas de segmentos diferentes. A taxonomia de grupo é sempre a
+// mesma; só a lista de contas analíticas dentro de cada grupo muda por
+// segmento (ver PLANO_CONTAS_TEMPLATES). Fica de fora de propósito o que
+// é balanço patrimonial (Ativo/Passivo/PL, Investimentos) — o sistema já
+// representa isso via Contas/Contas a Pagar/Receber, não como categoria
+// de lançamento.
+const PLANO_CONTAS_GRUPOS = {
+  receita: ["Receita Operacional", "Outras Receitas Operacionais", "Receitas Financeiras"],
+  despesa: [
+    "Deduções e Impostos sobre Vendas",
+    "Custos Diretos (CMV / Serviços Prestados)",
+    "Despesas com Pessoal",
+    "Despesas de Ocupação",
+    "Serviços de Terceiros e Tecnologia",
+    "Marketing e Comercial",
+    "Despesas Financeiras",
+    "Outras Despesas",
   ],
 };
+
+// Chave "__generico" é o fallback pra qualquer segmento sem template
+// dedicado ainda. As chaves com nome de segmento precisam bater exatamente
+// com SEGMENTOS_EMPRESA. Os códigos de "Clínica / Consultório" abaixo são
+// os mesmos já gravados no banco pelas duas empresas semeadas na fase 12
+// — mudar um nome aqui não renomeia o que já existe, só afeta empresas
+// novas desse segmento.
+const PLANO_CONTAS_TEMPLATES = {
+  "Clínica / Consultório": [
+    { grupo: "Receita Operacional", codigo: "R1.01", nome: "Consultas Particulares", natureza: "receita" },
+    { grupo: "Receita Operacional", codigo: "R1.02", nome: "Consultas via Convênios / Planos de Saúde", natureza: "receita" },
+    { grupo: "Receita Operacional", codigo: "R1.03", nome: "Procedimentos Médicos e Cirurgias", natureza: "receita" },
+    { grupo: "Receita Operacional", codigo: "R1.04", nome: "Exames e Diagnósticos", natureza: "receita" },
+    { grupo: "Receita Operacional", codigo: "R1.05", nome: "Medicina Ocupacional", natureza: "receita" },
+    { grupo: "Outras Receitas Operacionais", codigo: "R2.01", nome: "Locação de Salas / Consultórios", natureza: "receita" },
+    { grupo: "Outras Receitas Operacionais", codigo: "R2.02", nome: "Venda de Vacinas / Medicamentos", natureza: "receita" },
+    { grupo: "Outras Receitas Operacionais", codigo: "R2.03", nome: "Contratos de Gestão / Parcerias", natureza: "receita" },
+    { grupo: "Receitas Financeiras", codigo: "R3.01", nome: "Rendimentos de Aplicações Financeiras", natureza: "receita" },
+    { grupo: "Receitas Financeiras", codigo: "R3.02", nome: "Descontos Obtidos", natureza: "receita" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.01", nome: "Simples Nacional (DAS)", natureza: "despesa" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.02", nome: "ISS (Imposto Sobre Serviços)", natureza: "despesa" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.03", nome: "PIS / COFINS", natureza: "despesa" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.04", nome: "IRPJ / CSLL", natureza: "despesa" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.05", nome: "Tarifas de Cartão de Crédito / Débito", natureza: "despesa" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.06", nome: "Tarifas de Boletos Bancários", natureza: "despesa" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.07", nome: "Glosas de Convênios", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.01", nome: "Repasse a Médicos Parceiros / Plantonistas (PF)", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.02", nome: "Prestadores de Serviços Médicos (PJ)", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.03", nome: "Comissões da Recepção / Vendas", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.04", nome: "Descartáveis (Luvas, Seringas, Agulhas, Gazes)", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.05", nome: "Medicamentos e Anestésicos", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.06", nome: "Material de Higienização e Esterilização", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.07", nome: "Serviços de Lavanderia Hospitalar", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.08", nome: "Descarte de Lixo Hospitalar", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.01", nome: "Salários e Ordenados (Recepção, Enfermagem, Administração)", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.02", nome: "Pró-labore", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.03", nome: "Encargos Sociais (INSS, FGTS)", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.04", nome: "Benefícios (Vale-Transporte, Vale-Refeição, Plano de Saúde)", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.05", nome: "Rescisões e Férias", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.01", nome: "Aluguel do Imóvel", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.02", nome: "Condomínio e IPTU", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.03", nome: "Energia Elétrica e Água", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.04", nome: "Telefone, Internet e Links de Dados", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.05", nome: "Limpeza, Copa e Consumo Diário", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.06", nome: "Manutenção de Infraestrutura", natureza: "despesa" },
+    { grupo: "Serviços de Terceiros e Tecnologia", codigo: "D5.01", nome: "Assessoria Contábil", natureza: "despesa" },
+    { grupo: "Serviços de Terceiros e Tecnologia", codigo: "D5.02", nome: "Assessoria Jurídica", natureza: "despesa" },
+    { grupo: "Serviços de Terceiros e Tecnologia", codigo: "D5.03", nome: "Licença de Software de Gestão Médica (Prontuário/ERP)", natureza: "despesa" },
+    { grupo: "Serviços de Terceiros e Tecnologia", codigo: "D5.04", nome: "Serviços de TI e Hospedagem em Nuvem", natureza: "despesa" },
+    { grupo: "Serviços de Terceiros e Tecnologia", codigo: "D5.05", nome: "Licenças Médicas e Vigilância Sanitária (Anvisa, CRM, Alvarás)", natureza: "despesa" },
+    { grupo: "Marketing e Comercial", codigo: "D6.01", nome: "Anúncios (Google Ads, Meta Ads)", natureza: "despesa" },
+    { grupo: "Marketing e Comercial", codigo: "D6.02", nome: "Agência de Marketing / Redes Sociais", natureza: "despesa" },
+    { grupo: "Marketing e Comercial", codigo: "D6.03", nome: "Identidade Visual e Material Impresso", natureza: "despesa" },
+    { grupo: "Despesas Financeiras", codigo: "D7.01", nome: "Tarifas de Manutenção de Conta", natureza: "despesa" },
+    { grupo: "Despesas Financeiras", codigo: "D7.02", nome: "Juros de Empréstimos e Financiamentos", natureza: "despesa" },
+    { grupo: "Despesas Financeiras", codigo: "D7.03", nome: "Multas e Juros por Atraso", natureza: "despesa" },
+    { grupo: "Outras Despesas", codigo: "D8.01", nome: "Aquisição de Equipamentos Médicos e Maquinário", natureza: "despesa" },
+    { grupo: "Outras Despesas", codigo: "D8.02", nome: "Reformas e Benfeitorias no Imóvel", natureza: "despesa" },
+  ],
+
+  "Restaurante / Bar": [
+    { grupo: "Receita Operacional", codigo: "R1.01", nome: "Vendas de Alimentos e Bebidas (Salão/Balcão)", natureza: "receita" },
+    { grupo: "Receita Operacional", codigo: "R1.02", nome: "Vendas via Delivery (iFood, Rappi, etc.)", natureza: "receita" },
+    { grupo: "Receitas Financeiras", codigo: "R3.01", nome: "Rendimentos de Aplicações Financeiras", natureza: "receita" },
+    { grupo: "Receitas Financeiras", codigo: "R3.02", nome: "Descontos Obtidos", natureza: "receita" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.01", nome: "Simples Nacional / Impostos a Recolher", natureza: "despesa" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.02", nome: "Comissões de Plataformas de Delivery", natureza: "despesa" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.03", nome: "Taxas de Cartão de Crédito / Débito", natureza: "despesa" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.04", nome: "Taxas de Antecipação de Recebíveis", natureza: "despesa" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.05", nome: "Cancelamentos e Cortesias", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.01", nome: "Carnes e Proteínas", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.02", nome: "Pães e Hortifrúti", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.03", nome: "Bebidas e Outros Insumos", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.04", nome: "Embalagens e Descartáveis de Delivery", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.01", nome: "Salários e Ordenados", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.02", nome: "Pró-labore", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.03", nome: "Freelancers / Diárias", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.04", nome: "Provisão de Férias e 13º Salário", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.05", nome: "Benefícios (Vale-Transporte, Alimentação)", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.06", nome: "Treinamentos e Uniformes", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.07", nome: "Sindicato e Encargos", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.01", nome: "Aluguel e Condomínio", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.02", nome: "IPTU", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.03", nome: "Energia Elétrica", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.04", nome: "Água e Esgoto", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.05", nome: "Gás Comercial (GLP/Encanado)", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.06", nome: "Seguros do Estabelecimento", natureza: "despesa" },
+    { grupo: "Serviços de Terceiros e Tecnologia", codigo: "D5.01", nome: "Contabilidade", natureza: "despesa" },
+    { grupo: "Serviços de Terceiros e Tecnologia", codigo: "D5.02", nome: "Assessoria Jurídica", natureza: "despesa" },
+    { grupo: "Serviços de Terceiros e Tecnologia", codigo: "D5.03", nome: "Software de Frente de Caixa (PDV) e ERP", natureza: "despesa" },
+    { grupo: "Marketing e Comercial", codigo: "D6.01", nome: "Anúncios Online (Meta Ads, Google Ads)", natureza: "despesa" },
+    { grupo: "Marketing e Comercial", codigo: "D6.02", nome: "Promoções e Cupons nas Plataformas", natureza: "despesa" },
+    { grupo: "Despesas Financeiras", codigo: "D7.01", nome: "Tarifas Bancárias", natureza: "despesa" },
+    { grupo: "Despesas Financeiras", codigo: "D7.02", nome: "Juros e Multas por Atraso", natureza: "despesa" },
+    { grupo: "Outras Despesas", codigo: "D8.01", nome: "Manutenção de Equipamentos e Utensílios", natureza: "despesa" },
+    { grupo: "Outras Despesas", codigo: "D8.02", nome: "Aquisição de Equipamentos de Cozinha e Salão", natureza: "despesa" },
+  ],
+
+  // Fallback pra qualquer segmento sem template dedicado ainda.
+  __generico: [
+    { grupo: "Receita Operacional", codigo: "R1.01", nome: "Vendas de Produtos", natureza: "receita" },
+    { grupo: "Receita Operacional", codigo: "R1.02", nome: "Prestação de Serviços", natureza: "receita" },
+    { grupo: "Outras Receitas Operacionais", codigo: "R2.01", nome: "Aluguéis Recebidos", natureza: "receita" },
+    { grupo: "Outras Receitas Operacionais", codigo: "R2.02", nome: "Outros Recebimentos", natureza: "receita" },
+    { grupo: "Receitas Financeiras", codigo: "R3.01", nome: "Juros Recebidos", natureza: "receita" },
+    { grupo: "Deduções e Impostos sobre Vendas", codigo: "D1.01", nome: "Impostos e Taxas", natureza: "despesa" },
+    { grupo: "Custos Diretos (CMV / Serviços Prestados)", codigo: "D2.01", nome: "Fornecedores / Compras", natureza: "despesa" },
+    { grupo: "Despesas com Pessoal", codigo: "D3.01", nome: "Salários e Pró-labore", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.01", nome: "Aluguel", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.02", nome: "Energia Elétrica", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.03", nome: "Água e Saneamento", natureza: "despesa" },
+    { grupo: "Despesas de Ocupação", codigo: "D4.04", nome: "Seguros", natureza: "despesa" },
+    { grupo: "Serviços de Terceiros e Tecnologia", codigo: "D5.01", nome: "Internet e Telefone", natureza: "despesa" },
+    { grupo: "Serviços de Terceiros e Tecnologia", codigo: "D5.02", nome: "Contabilidade", natureza: "despesa" },
+    { grupo: "Marketing e Comercial", codigo: "D6.01", nome: "Marketing e Publicidade", natureza: "despesa" },
+    { grupo: "Despesas Financeiras", codigo: "D7.01", nome: "Despesas Bancárias", natureza: "despesa" },
+    { grupo: "Despesas Financeiras", codigo: "D7.02", nome: "Empréstimos e Financiamentos", natureza: "despesa" },
+    { grupo: "Outras Despesas", codigo: "D8.01", nome: "Manutenção e Reparos", natureza: "despesa" },
+    { grupo: "Outras Despesas", codigo: "D8.02", nome: "Material de Escritório", natureza: "despesa" },
+    { grupo: "Outras Despesas", codigo: "D8.03", nome: "Frete e Logística", natureza: "despesa" },
+    { grupo: "Outras Despesas", codigo: "D8.04", nome: "Combustível e Transporte", natureza: "despesa" },
+    { grupo: "Outras Despesas", codigo: "D8.05", nome: "Outras Despesas", natureza: "despesa" },
+  ],
+};
+
+function categoriaTemplateDoSegmento(segmento) {
+  return PLANO_CONTAS_TEMPLATES[segmento] || PLANO_CONTAS_TEMPLATES.__generico;
+}
 
 const EMPRESA_CORES = ["#1F3A34", "#B8912F", "#2F6E8C", "#8C4A2F", "#5B4B8C", "#3E7A4C"];
 
@@ -407,7 +528,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [fiscalObligations, setFiscalObligations] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [documentUploads, setDocumentUploads] = useState([]);
-  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [categories, setCategories] = useState([]);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
   const [navQuery, setNavQuery] = useState("");
@@ -436,7 +557,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setFiscalObligations(data.fiscalObligations || []);
       setContacts(data.contacts || []);
       setDocumentUploads(data.documentUploads || []);
-      setCategories(data.categories || DEFAULT_CATEGORIES);
+      setCategories(data.categories || []);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
       // cards de todas), pra escolher com qual vai trabalhar.
@@ -452,6 +573,27 @@ function FinanceiroApp({ userEmail, onLogout }) {
     if (!ok) setSaveError("Não foi possível salvar agora. Suas alterações podem não persistir — tente novamente em instantes.");
     else setSaveError(null);
   }, []);
+
+  // Toda empresa nova já nasce com o Plano de Contas do segmento dela
+  // (ver PLANO_CONTAS_TEMPLATES) — sem isso a empresa ficaria sem
+  // categoria nenhuma pra classificar lançamento até alguém cadastrar
+  // uma por uma na mão.
+  const saveEmpresas = useCallback((novasEmpresas) => {
+    const empresaCriada = novasEmpresas.find((e) => !empresas.some((old) => old.id === e.id));
+    persist("empresas", novasEmpresas, setEmpresas);
+    if (empresaCriada) {
+      const template = categoriaTemplateDoSegmento(empresaCriada.segmento);
+      const novasCategorias = template.map((t) => ({
+        id: `${empresaCriada.id}-${t.codigo}`,
+        empresaId: empresaCriada.id,
+        grupo: t.grupo,
+        codigo: t.codigo,
+        nome: t.nome,
+        natureza: t.natureza,
+      }));
+      persist("categories", [...categories, ...novasCategorias], setCategories);
+    }
+  }, [empresas, categories, persist]);
 
   const changeEmpresa = useCallback((id) => {
     setSelectedEmpresa(id);
@@ -494,11 +636,6 @@ function FinanceiroApp({ userEmail, onLogout }) {
     persist("documentUploads", documentUploads.map((u) => (u.id === uploadId ? { ...u, status: "processado" } : u)), setDocumentUploads);
   };
 
-  const allCategoryNames = useMemo(
-    () => [...categories.receitas.map((c) => c.nome), ...categories.despesas.map((c) => c.nome)],
-    [categories]
-  );
-
   const inScope = useCallback(
     (item) => !item.deletedAt && item.empresaId === selectedEmpresa,
     [selectedEmpresa]
@@ -511,6 +648,13 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const bankEntriesF = useMemo(() => bankEntries.filter(inScope), [bankEntries, inScope]);
   const fiscalObligationsF = useMemo(() => fiscalObligations.filter(inScope), [fiscalObligations, inScope]);
   const transfersF = useMemo(() => transfers.filter(inScope), [transfers, inScope]);
+  // Plano de Contas é por empresa desde a fase 12 — categoriesF é a lista
+  // da empresa selecionada, já separada por natureza pros formulários de
+  // Contas a Pagar/Receber.
+  const categoriesF = useMemo(() => categories.filter(inScope), [categories, inScope]);
+  const receitasF = useMemo(() => categoriesF.filter((c) => c.natureza === "receita"), [categoriesF]);
+  const despesasF = useMemo(() => categoriesF.filter((c) => c.natureza === "despesa"), [categoriesF]);
+  const allCategoryNames = useMemo(() => categoriesF.map((c) => c.nome), [categoriesF]);
 
   /* ------------------------- derived calculations ---------------------- */
   const accountBalance = useCallback(
@@ -993,7 +1137,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
               <EmpresasView
                 empresas={empresas}
                 role={role}
-                onSave={(v) => persist("empresas", v, setEmpresas)}
+                onSave={saveEmpresas}
                 onOpenAccounts={(id) => { changeEmpresa(id); setView("accounts"); }}
                 onOpenContacts={(id) => { changeEmpresa(id); setView("contacts"); }}
                 onOpenEmpresa={(id) => { changeEmpresa(id); setView("resumo"); }}
@@ -1025,7 +1169,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 accounts={accounts}
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
-                categories={categories.despesas}
+                categories={despesasF}
                 contacts={contacts}
                 onSaveContacts={(v) => persist("contacts", v, setContacts)}
                 onSave={(v) => persist("payables", v, setPayables)}
@@ -1041,7 +1185,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 accounts={accounts}
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
-                categories={categories.receitas}
+                categories={receitasF}
                 contacts={contacts}
                 onSaveContacts={(v) => persist("contacts", v, setContacts)}
                 onSave={(v) => persist("receivables", v, setReceivables)}
@@ -1086,7 +1230,13 @@ function FinanceiroApp({ userEmail, onLogout }) {
             )}
 
             {view === "categories" && (
-              <CategoriesView categories={categories} readOnly={role !== "gestor"} onSave={(v) => persist("categories", v, setCategories)} />
+              <CategoriesView
+                categories={categories}
+                selectedEmpresa={selectedEmpresa}
+                currentEmpresa={currentEmpresa}
+                readOnly={role !== "gestor"}
+                onSave={(v) => persist("categories", v, setCategories)}
+              />
             )}
 
             {view === "reconciliation" && (
@@ -4562,66 +4712,110 @@ function FiscalModal({ initial, onClose, onSubmit }) {
 /* ---------------------------------------------------------------------- */
 /*  Plano de Contas                                                        */
 /* ---------------------------------------------------------------------- */
-function CategoriesView({ categories, readOnly, onSave }) {
-  const [newReceita, setNewReceita] = useState("");
-  const [newDespesa, setNewDespesa] = useState("");
+function CategoriesView({ categories, selectedEmpresa, currentEmpresa, readOnly, onSave }) {
+  const [newNome, setNewNome] = useState({}); // { [grupo]: "texto digitado" }
+  const scoped = categories.filter((c) => c.empresaId === selectedEmpresa);
 
-  const addReceita = () => {
-    if (!newReceita.trim()) return;
-    const codigo = `R${String(categories.receitas.length + 1).padStart(2, "0")}`;
-    onSave({ ...categories, receitas: [...categories.receitas, { codigo, nome: newReceita.trim() }] });
-    setNewReceita("");
+  // Próximo código dentro do grupo: olha o maior sufixo numérico já usado
+  // (não o total de linhas) pra nunca colidir com um código que ficou
+  // "no meio" depois de uma exclusão.
+  const nextCodigo = (natureza, grupo) => {
+    const prefix = natureza === "receita" ? "R" : "D";
+    const grupoIdx = PLANO_CONTAS_GRUPOS[natureza].indexOf(grupo) + 1;
+    const maxSeq = scoped
+      .filter((c) => c.natureza === natureza && c.grupo === grupo)
+      .reduce((max, c) => {
+        const m = c.codigo.match(/\.(\d+)$/);
+        return Math.max(max, m ? Number(m[1]) : 0);
+      }, 0);
+    return `${prefix}${grupoIdx}.${String(maxSeq + 1).padStart(2, "0")}`;
   };
-  const addDespesa = () => {
-    if (!newDespesa.trim()) return;
-    const codigo = `D${String(categories.despesas.length + 1).padStart(2, "0")}`;
-    onSave({ ...categories, despesas: [...categories.despesas, { codigo, nome: newDespesa.trim() }] });
-    setNewDespesa("");
+
+  const addConta = (natureza, grupo) => {
+    const nome = (newNome[grupo] || "").trim();
+    if (!nome || !selectedEmpresa) return;
+    const codigo = nextCodigo(natureza, grupo);
+    const nova = { id: `${selectedEmpresa}-${codigo}`, empresaId: selectedEmpresa, grupo, codigo, nome, natureza };
+    onSave([...categories, nova]);
+    setNewNome((s) => ({ ...s, [grupo]: "" }));
   };
-  const removeReceita = (codigo) => onSave({ ...categories, receitas: categories.receitas.filter((c) => c.codigo !== codigo) });
-  const removeDespesa = (codigo) => onSave({ ...categories, despesas: categories.despesas.filter((c) => c.codigo !== codigo) });
+  const removeConta = (id) => onSave(categories.filter((c) => c.id !== id));
+
+  // Só ADICIONA o que falta do padrão do segmento — nunca apaga uma
+  // conta que o gestor já tenha criado ou renomeado.
+  const restaurarPadrao = () => {
+    if (!currentEmpresa) return;
+    const template = categoriaTemplateDoSegmento(currentEmpresa.segmento);
+    const nomesExistentes = new Set(scoped.map((c) => c.nome.trim().toLowerCase()));
+    const faltantes = template.filter((t) => !nomesExistentes.has(t.nome.toLowerCase()));
+    if (faltantes.length === 0) {
+      alert("Essa empresa já tem todas as contas padrão do segmento dela.");
+      return;
+    }
+    if (!confirmDelete(`Adicionar ${faltantes.length} conta(s) do padrão do segmento "${currentEmpresa.segmento || "genérico"}"? Nada é apagado, só o que falta é criado.`)) return;
+    const novas = faltantes.map((t) => ({ id: `${selectedEmpresa}-${t.codigo}`, empresaId: selectedEmpresa, grupo: t.grupo, codigo: t.codigo, nome: t.nome, natureza: t.natureza }));
+    onSave([...categories, ...novas]);
+  };
+
+  const renderGrupo = (natureza, grupo) => {
+    const contas = scoped.filter((c) => c.natureza === natureza && c.grupo === grupo).sort((a, b) => a.codigo.localeCompare(b.codigo));
+    return (
+      <div key={grupo} className="mb-4 last:mb-0">
+        <p className="text-xs font-semibold mb-1.5" style={{ color: COLORS.inkSoft }}>{grupo}</p>
+        {contas.length === 0 ? (
+          <p className="text-xs italic mb-1.5" style={{ color: COLORS.inkSoft }}>Nenhuma conta nesse grupo.</p>
+        ) : (
+          <div className="space-y-1 mb-1.5">
+            {contas.map((c) => (
+              <div key={c.id} className="flex items-center justify-between text-sm py-0.5">
+                <span style={{ color: COLORS.ink }}>{c.codigo} · {c.nome}</span>
+                {!readOnly && (
+                  <button onClick={() => removeConta(c.id)} title="Excluir conta" className="p-1 rounded hover:bg-black/5"><Trash2 size={13} color={COLORS.red} /></button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {!readOnly && (
+          <div className="flex gap-2">
+            <TextInput
+              value={newNome[grupo] || ""}
+              onChange={(e) => setNewNome((s) => ({ ...s, [grupo]: e.target.value }))}
+              placeholder={`Nova conta em "${grupo}"`}
+              style={{ height: 32 }}
+              onKeyDown={(e) => e.key === "Enter" && addConta(natureza, grupo)}
+            />
+            <Button variant="subtle" onClick={() => addConta(natureza, grupo)} title="Adicionar conta" style={{ height: 32 }}><Plus size={13} /></Button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-4">
-      <Header title="Plano de Contas" subtitle={readOnly ? "Categorias usadas nos lançamentos — só o gestor pode editar." : "Categorias usadas nos lançamentos de receitas e despesas."} />
+      <Header
+        title="Plano de Contas"
+        subtitle={
+          !currentEmpresa
+            ? "Selecione uma empresa pra ver o plano de contas dela."
+            : readOnly
+              ? `${currentEmpresa.nome} · segmento: ${currentEmpresa.segmento || "não definido"} · só o gestor pode editar.`
+              : `${currentEmpresa.nome} · segmento: ${currentEmpresa.segmento || "não definido"}`
+        }
+      >
+        {!readOnly && currentEmpresa && (
+          <Button variant="ghost" onClick={restaurarPadrao}><RotateCcw size={15} /> Restaurar padrão do segmento</Button>
+        )}
+      </Header>
       <div className="grid md:grid-cols-2 gap-4">
         <Card className="p-4">
           <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.green }}>Receitas</h2>
-          <div className="space-y-1.5 mb-3">
-            {categories.receitas.map((c) => (
-              <div key={c.codigo} className="flex items-center justify-between text-sm py-1">
-                <span style={{ color: COLORS.ink }}>{c.codigo} · {c.nome}</span>
-                {!readOnly && (
-                  <button onClick={() => removeReceita(c.codigo)} title="Excluir categoria" className="p-1 rounded hover:bg-black/5"><Trash2 size={13} color={COLORS.red} /></button>
-                )}
-              </div>
-            ))}
-          </div>
-          {!readOnly && (
-            <div className="flex gap-2">
-              <TextInput value={newReceita} onChange={(e) => setNewReceita(e.target.value)} placeholder="Nova categoria de receita" onKeyDown={(e) => e.key === "Enter" && addReceita()} />
-              <Button variant="subtle" onClick={addReceita} title="Adicionar categoria de receita"><Plus size={14} /></Button>
-            </div>
-          )}
+          {PLANO_CONTAS_GRUPOS.receita.map((g) => renderGrupo("receita", g))}
         </Card>
         <Card className="p-4">
           <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.red }}>Despesas</h2>
-          <div className="space-y-1.5 mb-3 max-h-72 overflow-y-auto">
-            {categories.despesas.map((c) => (
-              <div key={c.codigo} className="flex items-center justify-between text-sm py-1">
-                <span style={{ color: COLORS.ink }}>{c.codigo} · {c.nome}</span>
-                {!readOnly && (
-                  <button onClick={() => removeDespesa(c.codigo)} title="Excluir categoria" className="p-1 rounded hover:bg-black/5"><Trash2 size={13} color={COLORS.red} /></button>
-                )}
-              </div>
-            ))}
-          </div>
-          {!readOnly && (
-            <div className="flex gap-2">
-              <TextInput value={newDespesa} onChange={(e) => setNewDespesa(e.target.value)} placeholder="Nova categoria de despesa" onKeyDown={(e) => e.key === "Enter" && addDespesa()} />
-              <Button variant="subtle" onClick={addDespesa} title="Adicionar categoria de despesa"><Plus size={14} /></Button>
-            </div>
-          )}
+          {PLANO_CONTAS_GRUPOS.despesa.map((g) => renderGrupo("despesa", g))}
         </Card>
       </div>
     </div>
