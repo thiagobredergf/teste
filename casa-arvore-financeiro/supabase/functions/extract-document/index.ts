@@ -4,14 +4,17 @@
 // operador confirmar no modal de "Novo lançamento" — nunca cria o
 // lançamento sozinha.
 //
-// Usada em três contextos (parâmetro "context" no corpo da requisição), que
+// Usada em quatro contextos (parâmetro "context" no corpo da requisição), que
 // mudam só o que a IA deve procurar no documento — o formato de resposta é
-// o mesmo nos três:
+// o mesmo nos quatro:
 //   - "payable"    (Contas a Pagar): contraparte = fornecedor/beneficiário.
 //   - "receivable" (Contas a Receber): contraparte = cliente/pagador.
 //   - "bankEntry"  (Lançamentos Bancários): comprovante de um movimento só
 //     (TED, PIX, tarifa, juros, IOF, rendimento) — sempre 1 parcela, com
 //     tipo_lancamento indicando Entrada ou Saída.
+//   - "transfer"   (Transferências): comprovante de TED/PIX entre duas
+//     contas da própria empresa — sem contraparte/categoria, só valor,
+//     data e uma descrição citando os bancos de origem/destino.
 //
 // Exige login no ESEK (verify_jwt padrão do Supabase) — não tem segredo
 // próprio como a crm-integration, porque quem chama é sempre um usuário
@@ -104,6 +107,22 @@ Regras:
 - "numero_documento": sempre null (não se aplica a lançamento bancário avulso).
 - "parcelas": comprovante bancário é SEMPRE um evento único — retorne exatamente 1 item no array, com o valor e a data exatos do comprovante (campo "vencimento" aqui representa a DATA DO MOVIMENTO, não um vencimento futuro).
 - "descricao" da parcela: breve, ex: "PIX enviado - <contraparte>" ou "Tarifa de manutenção de conta".
+- Se não tiver certeza de um campo, retorne null — nunca invente ou estime.`,
+
+  transfer: `Você lê comprovantes brasileiros de TED/PIX/DOC e extrai dados pra um lançamento de TRANSFERÊNCIA ENTRE CONTAS DA MESMA EMPRESA — as duas pontas (origem e destino) já são contas do próprio usuário, não há fornecedor/cliente envolvido.
+
+Responda APENAS com um objeto JSON, sem markdown, sem explicação, no formato exato:
+${RESPONSE_SHAPE}
+
+Regras:
+- "contraparte": sempre null (não se aplica — as duas contas já são do usuário).
+- "documento_contraparte": sempre null.
+- "categoria_sugerida": sempre null (transferência entre contas não é receita nem despesa).
+- "tipo_lancamento": sempre null.
+- "tipo_documento": "comprovante_pix", "comprovante_ted", "comprovante_doc" ou "outro".
+- "numero_documento": sempre null.
+- "parcelas": SEMPRE 1 item, com o valor e a data exatos do comprovante (campo "vencimento" aqui representa a DATA DO MOVIMENTO, não um vencimento futuro).
+- "descricao" da parcela: breve, citando os bancos/contas de origem e destino se aparecerem no comprovante, ex: "Transferência Itaú → Bradesco".
 - Se não tiver certeza de um campo, retorne null — nunca invente ou estime.`,
 };
 

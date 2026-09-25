@@ -4070,27 +4070,74 @@ function BankStatementImportModal({ rows, categories, accounts, entries, onClose
 /* ---------------------------------------------------------------------- */
 function TransfersView({ transfers, accounts, selectedEmpresa, onSave }) {
   const [modal, setModal] = useState(null);
+  const [aiNote, setAiNote] = useState("");
+  const [previewDoc, setPreviewDoc] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
   const scopedAccounts = accounts.filter((a) => a.empresaId === selectedEmpresa);
   const submit = (form) => {
     if (form.id) onSave(transfers.map((t) => (t.id === form.id ? form : t)));
     else onSave([...transfers, { ...form, id: uid() }]);
     setModal(null);
+    setPreviewDoc(null);
   };
   const remove = (id) => {
     if (!confirmDelete("Mover esta transferência pra lixeira? Você pode restaurar depois, em Lixeira.")) return;
     onSave(transfers.map((t) => (t.id === id ? { ...t, deletedAt: new Date().toISOString() } : t)));
   };
+  const duplicateTransfer = (t) => {
+    setAiNote("");
+    setModal({ contaOrigemId: t.contaOrigemId, contaDestinoId: t.contaDestinoId, valor: t.valor, descricao: t.descricao, data: todayISO(), empresaId: t.empresaId });
+  };
   const sorted = [...transfers]
     .filter((t) => !t.deletedAt && t.empresaId === selectedEmpresa)
     .sort((a, b) => (b.data || "").localeCompare(a.data || ""));
 
+  const handleImportDocument = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setImportError("");
+    setImporting(true);
+    try {
+      const fileBase64 = await fileToBase64(file);
+      const ex = await callExtractDocument(fileBase64, file.type, "transfer");
+      const p = (Array.isArray(ex.parcelas) && ex.parcelas[0]) || ex;
+      setAiNote("Dados extraídos automaticamente do comprovante — confira antes de salvar, principalmente as contas de origem e destino.");
+      setPreviewDoc({ url: `data:${file.type};base64,${fileBase64}`, mediaType: file.type });
+      setModal({
+        contaOrigemId: scopedAccounts[0]?.id || "",
+        contaDestinoId: scopedAccounts[1]?.id || "",
+        data: p.vencimento || todayISO(),
+        valor: p.valor != null ? String(p.valor) : "",
+        descricao: p.descricao || "",
+      });
+    } catch (err) {
+      setImportError(err?.message || "Erro ao importar o documento.");
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <Header title="Transferências entre contas" subtitle="Movimentações internas — não afetam o fluxo de caixa.">
-        <Button onClick={() => setModal({})} disabled={scopedAccounts.length < 2}><Plus size={15} /> Nova transferência</Button>
+        <label
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
+          style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
+        >
+          <Upload size={15} /> {importing ? "Lendo comprovante…" : "Importar documento"}
+          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing || scopedAccounts.length < 2} />
+        </label>
+        <Button onClick={() => { setAiNote(""); setModal({}); }} disabled={scopedAccounts.length < 2}><Plus size={15} /> Nova transferência</Button>
       </Header>
       {scopedAccounts.length < 2 && (
         <p className="text-sm px-1" style={{ color: COLORS.inkSoft }}>Cadastre pelo menos 2 contas nesta empresa para registrar transferências.</p>
+      )}
+      {importError && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+          <AlertTriangle size={15} /> {importError}
+        </div>
       )}
       <Card className="overflow-x-auto">
         {sorted.length === 0 ? (
@@ -4120,6 +4167,7 @@ function TransfersView({ transfers, accounts, selectedEmpresa, onSave }) {
                     <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{t.descricao}</td>
                     <td className="px-4 py-2.5">
                       <div className="flex justify-end gap-1">
+                        <button onClick={() => duplicateTransfer(t)} title="Duplicar transferência" className="p-1.5 rounded-md hover:bg-black/5"><Copy size={14} color={COLORS.inkSoft} /></button>
                         <button onClick={() => setModal(t)} title="Editar transferência" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
                         <button onClick={() => remove(t.id)} title="Excluir transferência" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
                       </div>
@@ -4131,40 +4179,54 @@ function TransfersView({ transfers, accounts, selectedEmpresa, onSave }) {
           </table>
         )}
       </Card>
-      {modal && <TransferModal initial={modal} accounts={scopedAccounts} onClose={() => setModal(null)} onSubmit={submit} />}
+      {modal && (
+        <TransferModal
+          initial={modal} accounts={scopedAccounts} aiNote={aiNote} previewDoc={previewDoc}
+          onClose={() => { setModal(null); setAiNote(""); setPreviewDoc(null); }}
+          onSubmit={submit}
+        />
+      )}
     </div>
   );
 }
 
-function TransferModal({ initial, accounts, onClose, onSubmit }) {
+function TransferModal({ initial, accounts, aiNote, previewDoc, onClose, onSubmit }) {
   const [form, setForm] = useState({
     data: todayISO(), contaOrigemId: accounts[0]?.id || "", contaDestinoId: accounts[1]?.id || "",
     valor: "", descricao: "", empresaId: accounts[0]?.empresaId || "", ...initial,
   });
   const valid = form.contaOrigemId && form.contaDestinoId && form.contaOrigemId !== form.contaDestinoId && Number(form.valor) > 0;
   return (
-    <Modal title={initial.id ? "Editar transferência" : "Nova transferência"} onClose={onClose}>
-      <div className="grid gap-3">
-        <Field label="Data"><TextInput type="date" value={form.data} max={todayISO()} onChange={(e) => setForm({ ...form, data: e.target.value })} /></Field>
-        <Field label="Saiu da conta">
-          <Select value={form.contaOrigemId} onChange={(e) => setForm({ ...form, contaOrigemId: e.target.value })}>
-            {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
-          </Select>
-        </Field>
-        <Field label="Entrou na conta">
-          <Select value={form.contaDestinoId} onChange={(e) => setForm({ ...form, contaDestinoId: e.target.value })}>
-            {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
-          </Select>
-        </Field>
-        {form.contaOrigemId === form.contaDestinoId && (
-          <p className="text-xs" style={{ color: COLORS.red }}>A conta de origem e destino precisam ser diferentes.</p>
-        )}
-        <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} /></Field>
-        <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} /></Field>
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => valid && onSubmit(form)} disabled={!valid}>Salvar</Button>
+    <Modal title={initial.id ? "Editar transferência" : "Nova transferência"} onClose={onClose} wide={!previewDoc} xwide={!!previewDoc}>
+      {aiNote && (
+        <p className="text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: COLORS.greenSoft, color: COLORS.green }}>
+          {aiNote}
+        </p>
+      )}
+      <div className={previewDoc ? "grid md:grid-cols-[1fr_300px] gap-4" : ""}>
+        <div className="grid gap-3">
+          <Field label="Data"><TextInput type="date" value={form.data} max={todayISO()} onChange={(e) => setForm({ ...form, data: e.target.value })} /></Field>
+          <Field label="Saiu da conta">
+            <Select value={form.contaOrigemId} onChange={(e) => setForm({ ...form, contaOrigemId: e.target.value })}>
+              {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+            </Select>
+          </Field>
+          <Field label="Entrou na conta">
+            <Select value={form.contaDestinoId} onChange={(e) => setForm({ ...form, contaDestinoId: e.target.value })}>
+              {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+            </Select>
+          </Field>
+          {form.contaOrigemId === form.contaDestinoId && (
+            <p className="text-xs" style={{ color: COLORS.red }}>A conta de origem e destino precisam ser diferentes.</p>
+          )}
+          <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} /></Field>
+          <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} /></Field>
         </div>
+        <DocumentPreviewPanel doc={previewDoc} />
+      </div>
+      <div className="flex justify-end gap-2 pt-4">
+        <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+        <Button onClick={() => valid && onSubmit(form)} disabled={!valid}>Salvar</Button>
       </div>
     </Modal>
   );
