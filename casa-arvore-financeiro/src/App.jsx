@@ -1176,6 +1176,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 pendingImport={pendingImport?.context === "payable" ? pendingImport : null}
                 onImportProcessed={handleImportProcessed}
                 userEmail={userEmail}
+                canEdit={role === "gestor"}
               />
             )}
 
@@ -1192,6 +1193,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 pendingImport={pendingImport?.context === "receivable" ? pendingImport : null}
                 onImportProcessed={handleImportProcessed}
                 userEmail={userEmail}
+                canEdit={role === "gestor"}
               />
             )}
 
@@ -1205,6 +1207,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 onSave={(v) => persist("bankEntries", v, setBankEntries)}
                 pendingImport={pendingImport?.context === "bankEntry" ? pendingImport : null}
                 onImportProcessed={handleImportProcessed}
+                canEdit={role === "gestor"}
               />
             )}
 
@@ -1215,6 +1218,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
                 onSave={(v) => persist("transfers", v, setTransfers)}
+                canEdit={role === "gestor"}
               />
             )}
 
@@ -1636,20 +1640,20 @@ function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts, 
                     {e.cnpj && <p className="text-xs" style={{ color: COLORS.inkSoft }}>{e.cnpj}</p>}
                   </div>
                 </div>
-                <div className="flex gap-1 shrink-0">
-                  <button onClick={() => onOpenAccounts(e.id)} title="Ver contas bancárias desta empresa" className="p-1.5 rounded-md hover:bg-black/5">
-                    <Landmark size={14} color={COLORS.inkSoft} />
-                  </button>
-                  <button onClick={() => onOpenContacts(e.id)} title="Ver contatos desta empresa (clientes/fornecedores)" className="p-1.5 rounded-md hover:bg-black/5">
-                    <Contact size={14} color={COLORS.inkSoft} />
-                  </button>
-                  <button onClick={() => copyUploadLink(e)} title="Copiar link de upload sem login (pro cliente enviar documentos)" className="p-1.5 rounded-md hover:bg-black/5">
-                    <Link2 size={14} color={COLORS.inkSoft} />
-                  </button>
-                  <button onClick={() => setModal(e)} title="Editar empresa" className="p-1.5 rounded-md hover:bg-black/5">
-                    <Pencil size={14} color={COLORS.inkSoft} />
-                  </button>
-                  {isGestor && (
+                {isGestor && (
+                  <div className="flex gap-1 shrink-0">
+                    <button onClick={() => onOpenAccounts(e.id)} title="Ver contas bancárias desta empresa" className="p-1.5 rounded-md hover:bg-black/5">
+                      <Landmark size={14} color={COLORS.inkSoft} />
+                    </button>
+                    <button onClick={() => onOpenContacts(e.id)} title="Ver contatos desta empresa (clientes/fornecedores)" className="p-1.5 rounded-md hover:bg-black/5">
+                      <Contact size={14} color={COLORS.inkSoft} />
+                    </button>
+                    <button onClick={() => copyUploadLink(e)} title="Copiar link de upload sem login (pro cliente enviar documentos)" className="p-1.5 rounded-md hover:bg-black/5">
+                      <Link2 size={14} color={COLORS.inkSoft} />
+                    </button>
+                    <button onClick={() => setModal(e)} title="Editar empresa" className="p-1.5 rounded-md hover:bg-black/5">
+                      <Pencil size={14} color={COLORS.inkSoft} />
+                    </button>
                     <button
                       onClick={() => toggleAtiva(e)}
                       title={e.ativa === false ? "Reativar empresa" : "Inativar empresa"}
@@ -1657,8 +1661,8 @@ function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts, 
                     >
                       {e.ativa === false ? <Check size={14} color={COLORS.green} /> : <Trash2 size={14} color={COLORS.red} />}
                     </button>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
               {(e.segmento || e.proprietario || e.contatoEmail || e.contatoCelular) && (
                 <div className="pb-3 space-y-1">
@@ -2331,7 +2335,7 @@ function StatusSummary({ items, statuses }) {
 /* ---------------------------------------------------------------------- */
 function PayablesView({
   payables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
-  pendingImport, onImportProcessed, userEmail,
+  pendingImport, onImportProcessed, userEmail, canEdit = true,
 }) {
   const [modal, setModal] = useState(null);
   const [payModal, setPayModal] = useState(null);
@@ -2550,27 +2554,31 @@ function PayablesView({
   return (
     <div className="space-y-4">
       <Header title="Contas a Pagar" subtitle={`${filtered.length} lançamento(s) · ${fmtBRL(total)}`}>
-        <label
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
-          style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
-        >
-          <Upload size={15} /> {importing ? "Lendo documento…" : "Importar documento"}
-          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing} />
-        </label>
-        <Button variant="ghost" onClick={() => setScheduleModal(true)}>
-          <CalendarClock size={15} /> Agendar pagamentos
-        </Button>
-        <Button variant="ghost" onClick={() => setBatchSettleModal(true)}>
-          <CheckCheck size={15} /> Dar baixa em lote
-        </Button>
-        {agendados.length > 0 && (
-          <Button variant="ghost" onClick={notifyOwner} title="Abre o WhatsApp com uma mensagem pronta, listando os pagamentos agendados que aguardam autorização">
-            <MessageCircle size={15} /> Notificar dono ({agendados.length})
-          </Button>
+        {canEdit && (
+          <>
+            <label
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
+              style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
+            >
+              <Upload size={15} /> {importing ? "Lendo documento…" : "Importar documento"}
+              <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing} />
+            </label>
+            <Button variant="ghost" onClick={() => setScheduleModal(true)}>
+              <CalendarClock size={15} /> Agendar pagamentos
+            </Button>
+            <Button variant="ghost" onClick={() => setBatchSettleModal(true)}>
+              <CheckCheck size={15} /> Dar baixa em lote
+            </Button>
+            {agendados.length > 0 && (
+              <Button variant="ghost" onClick={notifyOwner} title="Abre o WhatsApp com uma mensagem pronta, listando os pagamentos agendados que aguardam autorização">
+                <MessageCircle size={15} /> Notificar dono ({agendados.length})
+              </Button>
+            )}
+            <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa }); }}>
+              <Plus size={15} /> Novo lançamento
+            </Button>
+          </>
         )}
-        <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa }); }}>
-          <Plus size={15} /> Novo lançamento
-        </Button>
       </Header>
       {importError && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
@@ -2633,23 +2641,29 @@ function PayablesView({
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
-                      {p.status === "Pago" && (
+                      {canEdit && p.status === "Pago" && (
                         <button onClick={() => cancelPayment(p)} title="Cancelar baixa" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                       )}
                       {p.status === "Agendado" && (
                         <>
                           <Button variant="subtle" onClick={() => authorizePayment(p)} title={`Proposto pra ${fmtDate(p.agendadoPara)}`}><ShieldCheck size={13} /> Autorizar</Button>
-                          <button onClick={() => cancelSchedule(p)} title="Cancelar agendamento (volta pra A Pagar)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
+                          {canEdit && (
+                            <button onClick={() => cancelSchedule(p)} title="Cancelar agendamento (volta pra A Pagar)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
+                          )}
                         </>
                       )}
-                      {p.status === "Autorizado" && (
+                      {canEdit && p.status === "Autorizado" && (
                         <button onClick={() => cancelSchedule(p)} title="Cancelar agendamento (volta pra A Pagar)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                       )}
-                      {p.status !== "Pago" && (
+                      {canEdit && p.status !== "Pago" && (
                         <Button variant="subtle" onClick={() => setPayModal(p)}><Check size={13} /> Dar baixa</Button>
                       )}
-                      <button onClick={() => { setAiNote(""); setModal(p); }} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                      <button onClick={() => remove(p.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                      {canEdit && (
+                        <>
+                          <button onClick={() => { setAiNote(""); setModal(p); }} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                          <button onClick={() => remove(p.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                        </>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -3250,7 +3264,7 @@ function BatchSettleModal({ title, items, nameField, valueLabel, dateLabel, acco
 /* ---------------------------------------------------------------------- */
 function ReceivablesView({
   receivables, accounts, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
-  pendingImport, onImportProcessed, userEmail,
+  pendingImport, onImportProcessed, userEmail, canEdit = true,
 }) {
   const [modal, setModal] = useState(null);
   const [recModal, setRecModal] = useState(null);
@@ -3457,19 +3471,23 @@ function ReceivablesView({
   return (
     <div className="space-y-4">
       <Header title="Contas a Receber" subtitle={`${filtered.length} lançamento(s) · ${fmtBRL(total)}`}>
-        <label
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
-          style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
-        >
-          <Upload size={15} /> {importing ? "Lendo documento…" : "Importar documento"}
-          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing} />
-        </label>
-        <Button variant="ghost" onClick={() => setBatchSettleModal(true)}>
-          <CheckCheck size={15} /> Dar baixa em lote
-        </Button>
-        <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa }); }}>
-          <Plus size={15} /> Novo lançamento
-        </Button>
+        {canEdit && (
+          <>
+            <label
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
+              style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
+            >
+              <Upload size={15} /> {importing ? "Lendo documento…" : "Importar documento"}
+              <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing} />
+            </label>
+            <Button variant="ghost" onClick={() => setBatchSettleModal(true)}>
+              <CheckCheck size={15} /> Dar baixa em lote
+            </Button>
+            <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa }); }}>
+              <Plus size={15} /> Novo lançamento
+            </Button>
+          </>
+        )}
       </Header>
       {importError && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
@@ -3534,7 +3552,7 @@ function ReceivablesView({
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
-                      {r.status === "Recebido" ? (
+                      {canEdit && (r.status === "Recebido" ? (
                         <button onClick={() => cancelReceipt(r)} title="Cancelar recebimento" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                       ) : r.status === "Antecipado" ? (
                         <>
@@ -3547,9 +3565,13 @@ function ReceivablesView({
                           <button onClick={() => notifyClient(r)} title="Cobrar cliente via WhatsApp" className="p-1.5 rounded-md hover:bg-black/5"><MessageCircle size={14} color={COLORS.primary} /></button>
                           <button onClick={() => setAnticipateModal(r)} title="Marcar como em processo de antecipação" className="p-1.5 rounded-md hover:bg-black/5"><Zap size={14} color={COLORS.gold} /></button>
                         </>
+                      ))}
+                      {canEdit && (
+                        <>
+                          <button onClick={() => setModal(r)} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                          <button onClick={() => remove(r.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                        </>
                       )}
-                      <button onClick={() => setModal(r)} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                      <button onClick={() => remove(r.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
                     </div>
                   </td>
                 </tr>
@@ -3878,7 +3900,7 @@ function guessCategoria(descricao, entries, empresaId) {
 /* ---------------------------------------------------------------------- */
 /*  Lançamentos Bancários                                                  */
 /* ---------------------------------------------------------------------- */
-function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSave, pendingImport, onImportProcessed }) {
+function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSave, pendingImport, onImportProcessed, canEdit = true }) {
   const [modal, setModal] = useState(null);
   const [aiNote, setAiNote] = useState("");
   const [importing, setImporting] = useState(false);
@@ -3997,21 +4019,25 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
   return (
     <div className="space-y-4">
       <Header title="Lançamentos Bancários" subtitle="Entradas e saídas avulsas direto do banco: juros, tarifas, IOF, rendimentos.">
-        <label
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
-          style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
-        >
-          <Upload size={15} /> {importing ? "Lendo comprovante…" : "Importar documento"}
-          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing || scopedAccounts.length === 0} />
-        </label>
-        <label
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
-          style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
-        >
-          <FileUp size={15} /> {statementImporting ? "Lendo extrato…" : "Importar extrato (CSV/OFX)"}
-          <input type="file" accept=".csv,.ofx,.qfx,.txt" className="hidden" onChange={handleImportStatement} disabled={statementImporting || scopedAccounts.length === 0} />
-        </label>
-        <Button onClick={() => { setAiNote(""); setModal({}); }} disabled={scopedAccounts.length === 0}><Plus size={15} /> Novo lançamento</Button>
+        {canEdit && (
+          <>
+            <label
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
+              style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
+            >
+              <Upload size={15} /> {importing ? "Lendo comprovante…" : "Importar documento"}
+              <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing || scopedAccounts.length === 0} />
+            </label>
+            <label
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
+              style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
+            >
+              <FileUp size={15} /> {statementImporting ? "Lendo extrato…" : "Importar extrato (CSV/OFX)"}
+              <input type="file" accept=".csv,.ofx,.qfx,.txt" className="hidden" onChange={handleImportStatement} disabled={statementImporting || scopedAccounts.length === 0} />
+            </label>
+            <Button onClick={() => { setAiNote(""); setModal({}); }} disabled={scopedAccounts.length === 0}><Plus size={15} /> Novo lançamento</Button>
+          </>
+        )}
       </Header>
       {scopedAccounts.length === 0 && (
         <p className="text-sm px-1" style={{ color: COLORS.inkSoft }}>Cadastre uma conta antes de lançar movimentos bancários.</p>
@@ -4056,11 +4082,13 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
                       {e.tipo === "Entrada" ? "+" : "−"}{fmtBRL(e.valor)}
                     </td>
                     <td className="px-4 py-2.5">
-                      <div className="flex justify-end gap-1">
-                        <button onClick={() => duplicateEntry(e)} title="Duplicar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Copy size={14} color={COLORS.inkSoft} /></button>
-                        <button onClick={() => setModal(e)} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                        <button onClick={() => remove(e.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
-                      </div>
+                      {canEdit && (
+                        <div className="flex justify-end gap-1">
+                          <button onClick={() => duplicateEntry(e)} title="Duplicar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Copy size={14} color={COLORS.inkSoft} /></button>
+                          <button onClick={() => setModal(e)} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                          <button onClick={() => remove(e.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );
@@ -4275,7 +4303,7 @@ function BankStatementImportModal({ rows, categories, accounts, entries, onClose
 /* ---------------------------------------------------------------------- */
 /*  Transferências                                                         */
 /* ---------------------------------------------------------------------- */
-function TransfersView({ transfers, accounts, selectedEmpresa, onSave }) {
+function TransfersView({ transfers, accounts, selectedEmpresa, onSave, canEdit = true }) {
   const [modal, setModal] = useState(null);
   const [aiNote, setAiNote] = useState("");
   const [previewDoc, setPreviewDoc] = useState(null);
@@ -4329,14 +4357,18 @@ function TransfersView({ transfers, accounts, selectedEmpresa, onSave }) {
   return (
     <div className="space-y-4">
       <Header title="Transferências entre contas" subtitle="Movimentações internas — não afetam o fluxo de caixa.">
-        <label
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
-          style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
-        >
-          <Upload size={15} /> {importing ? "Lendo comprovante…" : "Importar documento"}
-          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing || scopedAccounts.length < 2} />
-        </label>
-        <Button onClick={() => { setAiNote(""); setModal({}); }} disabled={scopedAccounts.length < 2}><Plus size={15} /> Nova transferência</Button>
+        {canEdit && (
+          <>
+            <label
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
+              style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
+            >
+              <Upload size={15} /> {importing ? "Lendo comprovante…" : "Importar documento"}
+              <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing || scopedAccounts.length < 2} />
+            </label>
+            <Button onClick={() => { setAiNote(""); setModal({}); }} disabled={scopedAccounts.length < 2}><Plus size={15} /> Nova transferência</Button>
+          </>
+        )}
       </Header>
       {scopedAccounts.length < 2 && (
         <p className="text-sm px-1" style={{ color: COLORS.inkSoft }}>Cadastre pelo menos 2 contas nesta empresa para registrar transferências.</p>
@@ -4373,11 +4405,13 @@ function TransfersView({ transfers, accounts, selectedEmpresa, onSave }) {
                     <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(t.valor)}</td>
                     <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{t.descricao}</td>
                     <td className="px-4 py-2.5">
-                      <div className="flex justify-end gap-1">
-                        <button onClick={() => duplicateTransfer(t)} title="Duplicar transferência" className="p-1.5 rounded-md hover:bg-black/5"><Copy size={14} color={COLORS.inkSoft} /></button>
-                        <button onClick={() => setModal(t)} title="Editar transferência" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                        <button onClick={() => remove(t.id)} title="Excluir transferência" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
-                      </div>
+                      {canEdit && (
+                        <div className="flex justify-end gap-1">
+                          <button onClick={() => duplicateTransfer(t)} title="Duplicar transferência" className="p-1.5 rounded-md hover:bg-black/5"><Copy size={14} color={COLORS.inkSoft} /></button>
+                          <button onClick={() => setModal(t)} title="Editar transferência" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                          <button onClick={() => remove(t.id)} title="Excluir transferência" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );
