@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -364,6 +364,7 @@ const STORE_KEYS = {
   contacts: "contacts",
   documentUploads: "documentUploads",
   categories: "categories",
+  settlementPartners: "settlementPartners",
   selectedEmpresa: "selectedEmpresa",
 };
 
@@ -532,6 +533,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [contacts, setContacts] = useState([]);
   const [documentUploads, setDocumentUploads] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [settlementPartners, setSettlementPartners] = useState([]);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
   const [navQuery, setNavQuery] = useState("");
@@ -561,6 +563,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setContacts(data.contacts || []);
       setDocumentUploads(data.documentUploads || []);
       setCategories(data.categories || []);
+      setSettlementPartners(data.settlementPartners || []);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
       // cards de todas), pra escolher com qual vai trabalhar.
@@ -885,6 +888,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "fiscal", label: "Calendário Fiscal", icon: Calendar },
     { id: "categories", label: "Plano de Contas", icon: ListTree },
     { id: "reconciliation", label: "Conciliação Bancária", icon: CheckCircle2 },
+    ...(role === "gestor" ? [{ id: "settlementPartners", label: "Repasses de Terceiros", icon: Percent }] : []),
     { id: "reports", label: "Relatórios", icon: FileText },
     { id: "documentUploads", label: "Documentos Recebidos", icon: Inbox },
     { id: "lixeira", label: "Lixeira", icon: Trash2 },
@@ -897,7 +901,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "painel", label: "Painel", icon: LayoutDashboard, items: ["resumo", "dashboard"] },
     { id: "lancamentos", label: "Lançamentos", icon: Wallet, items: ["payables", "receivables", "bank", "transfers"] },
     { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
-    { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "reports", "documentUploads", "lixeira"] },
+    { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "settlementPartners", "reports", "documentUploads", "lixeira"] },
   ].map((s) => ({ ...s, items: s.items.map((id) => navById[id]).filter(Boolean) }));
 
   const activeSection = RAIL_SECTIONS.find((s) => s.items.some((n) => n.id === view)) || RAIL_SECTIONS[0];
@@ -1262,6 +1266,23 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 onSaveReceivables={(v) => persist("receivables", v, setReceivables)}
                 onSaveBankEntries={(v) => persist("bankEntries", v, setBankEntries)}
                 onSaveTransfers={(v) => persist("transfers", v, setTransfers)}
+              />
+            )}
+
+            {view === "settlementPartners" && (
+              <SettlementPartnersView
+                partners={settlementPartners}
+                accounts={accountsF}
+                empresaId={selectedEmpresa}
+                despesaCategorias={despesasF}
+                receitaCategorias={receitasF}
+                contacts={contacts}
+                payables={payables}
+                receivables={receivables}
+                onSavePartners={(v) => persist("settlementPartners", v, setSettlementPartners)}
+                onSaveContacts={(v) => persist("contacts", v, setContacts)}
+                onSavePayables={(v) => persist("payables", v, setPayables)}
+                onSaveReceivables={(v) => persist("receivables", v, setReceivables)}
               />
             )}
 
@@ -5869,8 +5890,21 @@ function guessContraparteFromDescricao(descricao) {
     // isso não é nome de gente/empresa.
     if (nome && !/^[\d.\-/]+$/.test(nome)) return nome;
   }
+  // Repasse de adquirente/maquininha ou plataforma de delivery: o extrato
+  // não traz o consumidor final (essa informação não existe no repasse,
+  // que já vem agregado) — o certo é registrar como contraparte a própria
+  // adquirente/plataforma, não tentar adivinhar o cliente.
+  for (const nome of ACQUIRER_PLATFORM_NAMES) {
+    if (new RegExp(`\\b${nome}\\b`, "i").test(s)) return nome;
+  }
   return "";
 }
+
+const ACQUIRER_PLATFORM_NAMES = [
+  "Cielo", "Rede", "Stone", "GetNet", "PagSeguro", "PagBank", "SafraPay", "Ton", "Mercado Pago",
+  "Vero", "Bin", "Global Payments", "Sipag",
+  "iFood", "Rappi", "Uber Eats", "99Food", "Aiqfome",
+];
 
 function matchStatement(systemMovs, statementLines, toleranceDays = 3) {
   const usedSys = new Set();
@@ -6382,12 +6416,16 @@ function LancarNoSistemaModal({ tipo, line, initialContraparte, categorias, onCl
   const [descricao, setDescricao] = useState(line.descricao || "");
   const [valor, setValor] = useState(String(line.valor ?? ""));
   const [data, setData] = useState(line.data || todayISO());
-  const valid = contraparte.trim() && Number(valor) > 0;
+  // Contraparte é opcional de propósito: venda de balcão paga na maquininha
+  // não tem consumidor identificável no extrato — forçar um nome ali só
+  // geraria digitação sem sentido. "Consumidor Final" é o padrão da nota
+  // fiscal de venda a varejo sem identificação do comprador.
+  const valid = Number(valor) > 0;
 
   const submit = () => {
     const valorNum = Number(valor) || 0;
     onSubmit({
-      [isPayable ? "fornecedor" : "cliente"]: contraparte.trim(),
+      [isPayable ? "fornecedor" : "cliente"]: contraparte.trim() || "Consumidor Final",
       categoria,
       descricao,
       valor: valorNum,
@@ -6428,6 +6466,437 @@ function LancarNoSistemaModal({ tipo, line, initialContraparte, categorias, onCl
         </div>
       </div>
     </Modal>
+  );
+}
+
+// Deduções de repasse (comissão, antecipação, taxa de pagamento online,
+// publicidade...) vêm com nome livre — cada adquirente/plataforma chama do
+// jeito que quer. Em vez de forçar o operador a escolher a categoria de
+// despesa pra cada tipo toda vez, tenta bater por palavra-chave com o que
+// já existe no Plano de Contas da empresa.
+function guessDeducaoCategoria(tipoDeducao, despesaCategorias) {
+  const t = (tipoDeducao || "").toLowerCase();
+  const find = (re) => despesaCategorias.find((c) => re.test(c.nome.toLowerCase()));
+  let match = null;
+  if (/comiss/.test(t)) match = find(/comiss/);
+  else if (/antecip/.test(t)) match = find(/antecip/) || find(/financeir/);
+  else if (/public|an[uú]ncio|ads|turbo|patroc/.test(t)) match = find(/marketing|public|comercial/);
+  else if (/cart[aã]o|pagamento online|maquinin/.test(t)) match = find(/tecnologia|servi[cç]o/);
+  return (match || despesaCategorias[0])?.nome || "";
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Repasses de Terceiros — adquirente de cartão / plataforma de delivery */
+/* ---------------------------------------------------------------------- */
+function SettlementPartnerModal({ initial, onClose, onSubmit }) {
+  const [nome, setNome] = useState(initial?.nome || "");
+  const [tipo, setTipo] = useState(initial?.tipo || "adquirente");
+  const [regras, setRegras] = useState(initial?.regras?.length ? initial.regras : [{ tipo: "", percentual: "" }]);
+
+  const setRegra = (i, field, value) => setRegras((prev) => prev.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
+  const addRegra = () => setRegras((prev) => [...prev, { tipo: "", percentual: "" }]);
+  const removeRegra = (i) => setRegras((prev) => prev.filter((_, idx) => idx !== i));
+
+  const valid = nome.trim().length > 0;
+
+  const submit = () => {
+    onSubmit({
+      nome: nome.trim(),
+      tipo,
+      regras: regras.filter((r) => r.tipo.trim() && r.percentual !== "").map((r) => ({ tipo: r.tipo.trim(), percentual: Number(r.percentual) || 0 })),
+    });
+  };
+
+  return (
+    <Modal title={initial ? "Editar parceiro de repasse" : "Novo parceiro de repasse"} onClose={onClose}>
+      <div className="grid gap-3">
+        <Field label="Nome (como aparece no relatório de repasse)">
+          <TextInput value={nome} onChange={(e) => setNome(e.target.value)} autoFocus placeholder="Ex.: Cielo, iFood, Rappi..." />
+        </Field>
+        <Field label="Tipo">
+          <Select value={tipo} onChange={(e) => setTipo(e.target.value)}>
+            <option value="adquirente">Adquirente (maquininha de cartão)</option>
+            <option value="delivery">Plataforma de delivery</option>
+            <option value="convenio">Convênio / plano de saúde</option>
+            <option value="outro">Outro</option>
+          </Select>
+        </Field>
+        <div>
+          <p className="text-sm font-medium mb-1.5" style={{ color: COLORS.ink }}>Taxas contratadas</p>
+          <p className="text-xs mb-2" style={{ color: COLORS.inkSoft }}>
+            Cadastre cada taxa que o contrato prevê (comissão, antecipação, taxa de pagamento online, publicidade...) — é contra isso que o relatório de repasse importado será auditado.
+          </p>
+          <div className="grid gap-2">
+            {regras.map((r, i) => (
+              <div key={i} className="flex gap-2 items-center">
+                <TextInput placeholder="Tipo (ex.: Comissão)" value={r.tipo} onChange={(e) => setRegra(i, "tipo", e.target.value)} className="flex-1" />
+                <TextInput type="number" step="0.01" placeholder="%" value={r.percentual} onChange={(e) => setRegra(i, "percentual", e.target.value)} style={{ width: 90 }} />
+                <button onClick={() => removeRegra(i)} title="Remover taxa" style={{ color: COLORS.red }}><X size={16} /></button>
+              </div>
+            ))}
+          </div>
+          <Button variant="ghost" onClick={addRegra} className="mt-2"><Plus size={14} /> Adicionar taxa</Button>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => valid && submit()} disabled={!valid}>Salvar</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function SettlementPartnersView({
+  partners, accounts, empresaId, despesaCategorias, receitaCategorias, contacts, payables, receivables,
+  onSavePartners, onSaveContacts, onSavePayables, onSaveReceivables,
+}) {
+  const partnersF = useMemo(() => partners.filter((p) => p.empresaId === empresaId), [partners, empresaId]);
+  const [modal, setModal] = useState(null); // null | {} | partner
+  const [importPartnerId, setImportPartnerId] = useState("");
+  const [importContaId, setImportContaId] = useState(accounts[0]?.id || "");
+  const [fileName, setFileName] = useState("");
+  const [extracting, setExtracting] = useState(false);
+  const [parseError, setParseError] = useState("");
+  const [linhas, setLinhas] = useState(null);
+  const [categoriaPorTipo, setCategoriaPorTipo] = useState({});
+  const [receitaCategoria, setReceitaCategoria] = useState(receitaCategorias[0]?.nome || "");
+  const [lancadoOk, setLancadoOk] = useState("");
+
+  const partnerSelecionado = partnersF.find((p) => p.id === importPartnerId) || null;
+
+  const savePartner = (form) => {
+    if (modal?.id) onSavePartners(partners.map((p) => (p.id === modal.id ? { ...p, ...form } : p)));
+    else onSavePartners([...partners, { id: uid(), empresaId, ...form }]);
+    setModal(null);
+  };
+  const deletePartner = (p) => {
+    if (!confirmDelete(`Excluir o parceiro "${p.nome}"? Isso não afeta lançamentos já feitos com o repasse dele.`)) return;
+    onSavePartners(partners.filter((x) => x.id !== p.id));
+    if (importPartnerId === p.id) setImportPartnerId("");
+  };
+
+  // Relatório de repasse costuma vir em CSV/planilha (exportação do painel
+  // da adquirente/plataforma) — o mesmo caminho que extrato/comprovante já
+  // usa (extract-document com IA), agora também aceitando texto puro além
+  // de PDF/foto.
+  const handleImportFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setParseError("");
+    setLancadoOk("");
+    setFileName(file.name);
+    setLinhas(null);
+    setExtracting(true);
+    (async () => {
+      try {
+        const fileBase64 = await fileToBase64(file);
+        const isText = /\.(csv|txt)$/i.test(file.name) || /^text\//.test(file.type || "");
+        const mediaType = isText ? (file.type || "text/csv") : (file.type || (/\.pdf$/i.test(file.name) ? "application/pdf" : "image/jpeg"));
+        const ex = await callExtractDocument(fileBase64, mediaType, "settlementReport");
+        const parsed = (Array.isArray(ex.linhas) ? ex.linhas : [])
+          .filter((l) => l.bruto != null)
+          .map((l) => {
+            const deducoes = (Array.isArray(l.deducoes) ? l.deducoes : []).map((d) => ({ tipo: d.tipo || "Outra dedução", valor: Number(d.valor) || 0 }));
+            const bruto = Number(l.bruto) || 0;
+            return {
+              data: l.data || null,
+              bruto,
+              liquido: l.liquido != null ? Number(l.liquido) : bruto - deducoes.reduce((s, d) => s + d.valor, 0),
+              dataRepasse: l.dataRepasse || l.data || null,
+              deducoes,
+            };
+          });
+        if (parsed.length === 0) {
+          setParseError("A IA não encontrou nenhuma venda/lote reconhecível nesse relatório — confira se é um relatório de repasse com valores por venda ou por lote.");
+        } else if (ex._truncated) {
+          setParseError(`Arquivo grande — a IA só conseguiu ler ${parsed.length} linha(s) de uma vez (parou no meio do documento). Importe em partes menores se faltar período.`);
+        }
+        setLinhas(parsed);
+      } catch (err) {
+        setParseError(err?.message || "Erro ao ler o relatório com IA.");
+        setLinhas(null);
+      } finally {
+        setExtracting(false);
+      }
+    })();
+  };
+
+  const tiposDeducao = useMemo(() => {
+    if (!linhas) return [];
+    const set = new Set();
+    linhas.forEach((l) => l.deducoes.forEach((d) => set.add(d.tipo)));
+    return [...set];
+  }, [linhas]);
+
+  useEffect(() => {
+    if (tiposDeducao.length === 0) return;
+    setCategoriaPorTipo((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      tiposDeducao.forEach((t) => {
+        if (!next[t]) { next[t] = guessDeducaoCategoria(t, despesaCategorias); changed = true; }
+      });
+      return changed ? next : prev;
+    });
+  }, [tiposDeducao]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Agrupa por data de repasse (não pela data da venda) — é nessa data que
+  // o dinheiro efetivamente cai na conta, então é assim que o lançamento
+  // em lote (1 recebimento bruto + N pagamentos de taxa) deve ser feito.
+  const grupos = useMemo(() => {
+    if (!linhas) return [];
+    const map = new Map();
+    linhas.forEach((l) => {
+      const key = l.dataRepasse || l.data || "sem-data";
+      if (!map.has(key)) map.set(key, { dataRepasse: key, bruto: 0, liquido: 0, deducoesPorTipo: {}, n: 0 });
+      const g = map.get(key);
+      g.bruto += l.bruto;
+      g.liquido += l.liquido;
+      g.n += 1;
+      l.deducoes.forEach((d) => { g.deducoesPorTipo[d.tipo] = (g.deducoesPorTipo[d.tipo] || 0) + d.valor; });
+    });
+    return [...map.values()].sort((a, b) => (a.dataRepasse || "").localeCompare(b.dataRepasse || ""));
+  }, [linhas]);
+
+  // Compara a taxa REAL cobrada (deduzida do bruto do relatório) com a taxa
+  // CONTRATADA cadastrada no parceiro — divergência acima de 0,3 ponto
+  // percentual é sinalizada, porque isso é dinheiro sendo cobrado a mais
+  // (ou a menos) do que o contrato prevê.
+  const auditoria = useMemo(() => {
+    if (!linhas || !partnerSelecionado) return [];
+    const totalBruto = linhas.reduce((s, l) => s + l.bruto, 0);
+    if (totalBruto === 0) return [];
+    return tiposDeducao.map((tipo) => {
+      const totalDeducao = linhas.reduce((s, l) => s + (l.deducoes.find((d) => d.tipo === tipo)?.valor || 0), 0);
+      const percReal = (totalDeducao / totalBruto) * 100;
+      const regra = partnerSelecionado.regras.find((r) => r.tipo.toLowerCase() === tipo.toLowerCase());
+      const percContratado = regra ? regra.percentual : null;
+      const divergente = percContratado != null && Math.abs(percReal - percContratado) > 0.3;
+      return { tipo, percReal, percContratado, divergente, totalDeducao };
+    });
+  }, [linhas, tiposDeducao, partnerSelecionado]);
+
+  const lancarTudo = () => {
+    if (!linhas || !partnerSelecionado || !importContaId) return;
+    const { contacts: nextContacts, contact } = resolveContact(contacts, { nome: partnerSelecionado.nome, empresaId });
+    const novosReceivables = [];
+    const novosPayables = [];
+    grupos.forEach((g) => {
+      novosReceivables.push({
+        id: uid(),
+        empresaId,
+        cliente: partnerSelecionado.nome,
+        categoria: receitaCategoria,
+        descricao: `Repasse ${partnerSelecionado.nome} — ${fmtDate(g.dataRepasse)}`,
+        valor: g.bruto,
+        dataLanc: g.dataRepasse,
+        vencimento: g.dataRepasse,
+        status: "Recebido",
+        dataReceb: g.dataRepasse,
+        valorRecebido: g.bruto,
+        contaRecebId: importContaId,
+        conciliado: true,
+        contactId: contact?.id,
+      });
+      Object.entries(g.deducoesPorTipo).forEach(([tipo, valor]) => {
+        if (valor <= 0) return;
+        novosPayables.push({
+          id: uid(),
+          empresaId,
+          fornecedor: partnerSelecionado.nome,
+          categoria: categoriaPorTipo[tipo] || despesaCategorias[0]?.nome || "",
+          descricao: `${tipo} — ${partnerSelecionado.nome} — ${fmtDate(g.dataRepasse)}`,
+          valor,
+          dataLanc: g.dataRepasse,
+          vencimento: g.dataRepasse,
+          status: "Pago",
+          dataPgto: g.dataRepasse,
+          valorPago: valor,
+          contaPgtoId: importContaId,
+          conciliado: true,
+          contactId: contact?.id,
+        });
+      });
+    });
+    if (nextContacts !== contacts) onSaveContacts(nextContacts);
+    onSaveReceivables([...receivables, ...novosReceivables]);
+    onSavePayables([...payables, ...novosPayables]);
+    setLancadoOk(`${novosReceivables.length} repasse(s) lançado(s) como recebido + ${novosPayables.length} despesa(s) de taxa lançada(s) como paga, já conciliados.`);
+    setLinhas(null);
+    setFileName("");
+  };
+
+  return (
+    <div className="space-y-4">
+      <Header title="Repasses de Terceiros" subtitle="Cadastre adquirentes de cartão e plataformas de delivery com a taxa contratada, e audite o repasse real deles.">
+        <Button onClick={() => setModal({})}><Plus size={15} /> Novo parceiro</Button>
+      </Header>
+
+      {partnersF.length === 0 ? (
+        <EmptyState icon={Percent} title="Nenhum parceiro de repasse cadastrado" subtitle="Cadastre a adquirente de cartão ou a plataforma de delivery com a taxa contratada, pra poder auditar o relatório de repasse dela." />
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {partnersF.map((p) => (
+            <Card key={p.id} className="p-3.5">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="font-medium text-sm" style={{ color: COLORS.ink }}>{p.nome}</p>
+                  <p className="text-xs capitalize" style={{ color: COLORS.inkSoft }}>{p.tipo}</p>
+                </div>
+                <div className="flex gap-1 shrink-0">
+                  <button title="Editar" onClick={() => setModal(p)}><Pencil size={14} color={COLORS.inkSoft} /></button>
+                  <button title="Excluir" onClick={() => deletePartner(p)}><Trash2 size={14} color={COLORS.red} /></button>
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {(p.regras || []).length === 0 ? (
+                  <span className="text-xs" style={{ color: COLORS.inkSoft }}>Sem taxa contratada cadastrada.</span>
+                ) : p.regras.map((r, i) => (
+                  <span key={i} className="text-[11px] font-medium px-2 py-0.5 rounded-full" style={{ background: "#EFEEE8", color: COLORS.ink }}>
+                    {r.tipo}: {r.percentual}%
+                  </span>
+                ))}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <Card className="p-4 space-y-3">
+        <p className="text-sm font-medium" style={{ color: COLORS.ink }}>Importar relatório de repasse</p>
+        <div className="flex items-end gap-3 flex-wrap">
+          <Field label="Parceiro">
+            <Select value={importPartnerId} onChange={(e) => setImportPartnerId(e.target.value)}>
+              <option value="">Selecione...</option>
+              {partnersF.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+            </Select>
+          </Field>
+          <Field label="Conta de recebimento">
+            <Select value={importContaId} onChange={(e) => setImportContaId(e.target.value)}>
+              {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+            </Select>
+          </Field>
+          <Field label="Relatório (.csv, .txt, .pdf ou foto)">
+            <label
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer disabled:opacity-40"
+              style={{ background: importPartnerId ? COLORS.primary : COLORS.border, color: importPartnerId ? "#fff" : COLORS.inkSoft }}
+            >
+              <Upload size={15} /> {extracting ? "Lendo com IA…" : (fileName || "Escolher arquivo")}
+              <input type="file" accept=".csv,.txt,.pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportFile} disabled={extracting || !importPartnerId} />
+            </label>
+          </Field>
+          {linhas && (
+            <Button variant="ghost" onClick={() => { setLinhas(null); setFileName(""); }}><X size={15} /> Limpar</Button>
+          )}
+        </div>
+        {!importPartnerId && <p className="text-xs" style={{ color: COLORS.inkSoft }}>Selecione o parceiro antes de escolher o arquivo.</p>}
+        {parseError && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={linhas && linhas.length > 0 ? { background: COLORS.amberSoft, color: COLORS.amber } : { background: COLORS.redSoft, color: COLORS.red }}>
+            <AlertTriangle size={15} /> {parseError}
+          </div>
+        )}
+        {lancadoOk && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.greenSoft, color: COLORS.green }}>
+            <Check size={15} /> {lancadoOk}
+          </div>
+        )}
+      </Card>
+
+      {linhas && linhas.length > 0 && partnerSelecionado && (
+        <>
+          <ReportCard title="Auditoria das taxas" subtitle={`Taxa contratada com "${partnerSelecionado.nome}" vs. taxa real deduzida no relatório importado.`}>
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                  <th className="text-left font-medium px-2 py-1.5">Tipo de dedução</th>
+                  <th className="text-right font-medium px-2 py-1.5">Contratada</th>
+                  <th className="text-right font-medium px-2 py-1.5">Real (relatório)</th>
+                  <th className="text-right font-medium px-2 py-1.5">Total</th>
+                  <th className="text-left font-medium px-2 py-1.5">Lançar como (despesa)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditoria.map((a) => (
+                  <tr key={a.tipo} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>
+                      {a.tipo}
+                      {a.divergente && (
+                        <span className="ml-2 inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+                          <AlertTriangle size={10} /> Divergente
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.inkSoft }}>{a.percContratado != null ? `${a.percContratado}%` : "—"}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: a.divergente ? COLORS.red : COLORS.ink }}>{a.percReal.toFixed(2)}%</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(a.totalDeducao)}</td>
+                    <td className="px-2 py-1.5">
+                      <Select value={categoriaPorTipo[a.tipo] || ""} onChange={(e) => setCategoriaPorTipo((prev) => ({ ...prev, [a.tipo]: e.target.value }))}>
+                        {despesaCategorias.map((c) => <option key={c.codigo} value={c.nome}>{c.nome}</option>)}
+                      </Select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {auditoria.some((a) => a.divergente) && (
+              <p className="text-xs mt-2 flex items-center gap-1.5" style={{ color: COLORS.red }}>
+                <AlertTriangle size={13} /> Pelo menos uma taxa cobrada real ficou fora do contratado — confira com o parceiro antes de lançar.
+              </p>
+            )}
+          </ReportCard>
+
+          <ReportCard title="Resumo por data de repasse" subtitle="É nessa data que o valor efetivamente cai na conta — é assim que os lançamentos serão agrupados.">
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                  <th className="text-left font-medium px-2 py-1.5">Data de repasse</th>
+                  <th className="text-right font-medium px-2 py-1.5">Vendas/lotes</th>
+                  <th className="text-right font-medium px-2 py-1.5">Bruto</th>
+                  <th className="text-right font-medium px-2 py-1.5">Líquido</th>
+                </tr>
+              </thead>
+              <tbody>
+                {grupos.map((g) => (
+                  <tr key={g.dataRepasse} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{g.dataRepasse === "sem-data" ? "Sem data" : fmtDate(g.dataRepasse)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.inkSoft }}>{g.n}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.green }}>{fmtBRL(g.bruto)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(g.liquido)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ReportCard>
+
+          <Card className="p-4 flex items-end gap-3 flex-wrap">
+            <Field label="Categoria da receita (repasse bruto)">
+              <Select value={receitaCategoria} onChange={(e) => setReceitaCategoria(e.target.value)}>
+                {receitaCategorias.map((c) => <option key={c.codigo} value={c.nome}>{c.nome}</option>)}
+              </Select>
+            </Field>
+            <Button onClick={lancarTudo} disabled={grupos.some((g) => g.dataRepasse === "sem-data")}>
+              <CheckCheck size={15} /> Lançar {grupos.length} repasse(s)
+            </Button>
+            <p className="text-xs w-full" style={{ color: COLORS.inkSoft }}>
+              Cria 1 Conta a Receber (valor bruto, já recebida) + 1 Conta a Pagar por taxa (já paga) para cada data de repasse — tudo já conciliado nesta conta.
+            </p>
+            {grupos.some((g) => g.dataRepasse === "sem-data") && (
+              <p className="text-xs w-full flex items-center gap-1.5" style={{ color: COLORS.red }}>
+                <AlertTriangle size={13} /> O relatório tem linha(s) sem nenhuma data reconhecida — corrija o arquivo antes de lançar.
+              </p>
+            )}
+          </Card>
+        </>
+      )}
+
+      {modal && (
+        <SettlementPartnerModal
+          initial={modal.id ? modal : null}
+          onClose={() => setModal(null)}
+          onSubmit={savePartner}
+        />
+      )}
+    </div>
   );
 }
 

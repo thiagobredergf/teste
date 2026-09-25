@@ -22,6 +22,7 @@ const TABLE_NAMES = {
   contacts: "contacts",
   documentUploads: "documentUploads",
   categories: "categories",
+  settlementPartners: "settlement_partners",
 };
 
 // selectedEmpresa é só preferência de navegação de quem está olhando a

@@ -4,7 +4,7 @@
 // operador confirmar no modal de "Novo lançamento" — nunca cria o
 // lançamento sozinha.
 //
-// Usada em cinco contextos (parâmetro "context" no corpo da requisição):
+// Usada em seis contextos (parâmetro "context" no corpo da requisição):
 //   - "payable"    (Contas a Pagar): contraparte = fornecedor/beneficiário.
 //   - "receivable" (Contas a Receber): contraparte = cliente/pagador.
 //   - "bankEntry"  (Lançamentos Bancários): comprovante de um movimento só
@@ -14,12 +14,17 @@
 //     contas da própria empresa — sem contraparte/categoria, só valor,
 //     data e uma descrição citando os bancos de origem/destino.
 // Os quatro acima usam o mesmo formato de resposta (RESPONSE_SHAPE, um
-// documento = "parcelas"). O quinto é diferente:
-//   - "statement"  (Conciliação Bancária): extrato/fatura/relatório de
-//     maquininha com VÁRIAS linhas de movimento — não é "um documento, uma
-//     ou mais parcelas", é uma lista solta de lançamentos (STATEMENT_SHAPE),
-//     usada quando o arquivo não é CSV/OFX (que já são lidos sem IA, de
-//     graça, no próprio navegador) e sim PDF/imagem.
+// documento = "parcelas"). Os dois abaixo devolvem uma LISTA SOLTA de
+// linhas em vez de "um documento, uma ou mais parcelas":
+//   - "statement"        (Conciliação Bancária): extrato/fatura com várias
+//     linhas de movimento — usada quando o arquivo não é CSV/OFX (que já
+//     são lidos sem IA, de graça, no próprio navegador) e sim PDF/imagem.
+//   - "settlementReport" (Repasses de Terceiros): relatório de repasse de
+//     adquirente de cartão ou plataforma de delivery — cada linha vem com
+//     valor bruto, cada dedução (comissão, taxa, publicidade...) e valor
+//     líquido, pra depois auditar contra a taxa contratada com o parceiro.
+//     Aceita CSV/planilha como texto (não precisa ser imagem) porque é o
+//     formato mais comum de export desses relatórios.
 //
 // Exige login no ESEK (verify_jwt padrão do Supabase) — não tem segredo
 // próprio como a crm-integration, porque quem chama é sempre um usuário
@@ -40,7 +45,15 @@ const ALLOWED_MEDIA_TYPES = new Set([
   "image/jpeg",
   "image/png",
   "image/webp",
+  "text/csv",
+  "text/plain",
 ]);
+
+// Base64 -> texto UTF-8 (atob puro corrompe acento; passa pelos bytes certo).
+function base64ToText(b64: string): string {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  return new TextDecoder("utf-8").decode(bytes);
+}
 
 // ~15MB em base64 (arquivo original bem menor) — generoso pra boleto/NF,
 // evita payload absurdo indo pro modelo por engano.
@@ -152,12 +165,41 @@ Regras:
 - Documento com muitas páginas ou centenas de linhas: extraia o máximo que conseguir ler com confiança, mesmo que não seja tudo.
 - Se não tiver certeza da data ou do valor de uma linha específica, PULE essa linha em vez de adivinhar — é melhor faltar uma linha do que inventar um valor errado.`;
 
-// Extrato grande demais corta o JSON no meio (max_tokens estourado) antes
+const SETTLEMENT_RESPONSE_SHAPE = `{
+  "linhas": [
+    {
+      "data": "AAAA-MM-DD",
+      "bruto": number,
+      "liquido": number,
+      "dataRepasse": "AAAA-MM-DD" ou null,
+      "deducoes": [ { "tipo": string, "valor": number } ]
+    }
+  ]
+}`;
+
+const SETTLEMENT_SYSTEM_PROMPT = `Você lê um relatório de repasse de adquirente de cartão (Cielo, Rede, Stone, GetNet, PagSeguro...) ou de plataforma de delivery (iFood, Rappi, Uber Eats...) — pode vir como CSV, planilha, PDF ou foto — e extrai cada linha de venda/lote com o valor bruto, cada dedução aplicada e o valor líquido resultante.
+
+Responda APENAS com um objeto JSON, sem markdown, sem explicação, no formato exato:
+${SETTLEMENT_RESPONSE_SHAPE}
+
+Regras:
+- Uma entrada por venda OU por lote de repasse, replicando a granularidade do próprio relatório — se ele já vem agrupado por dia/lote, uma entrada por grupo; se vem por transação individual, uma entrada por transação. Não invente agrupamento que o relatório não tem.
+- "bruto": valor da venda antes de qualquer dedução.
+- "liquido": valor que efetivamente foi (ou vai ser) depositado, depois de todas as deduções dessa linha.
+- "dataRepasse": a data em que o valor cai (ou vai cair) na conta bancária — normalmente diferente da data da venda. Se o relatório não informar, retorne null.
+- "deducoes": uma entrada pra CADA tipo de taxa/desconto aplicado, com "tipo" descrevendo o que é (ex.: "Comissão", "Taxa de Pagamento Online", "Publicidade", "Antecipação de Recebíveis", "Taxa de Cartão de Débito") e "valor" o valor em R$ descontado (sempre positivo, nunca negativo). Se o relatório só mostrar o percentual, calcule o valor em R$ a partir do bruto.
+- Se bruto menos a soma das deduções não bater exatamente com líquido, reporte os três valores do jeito que estão no relatório mesmo assim — o objetivo é auditar depois se veio errado, nunca ajuste um número pra fazer a conta fechar.
+- NUNCA inclua linha de resumo/total do relatório como se fosse uma venda.
+- Se não tiver certeza de um valor específico, PULE essa linha em vez de estimar.`;
+
+// Resposta grande demais corta o JSON no meio (max_tokens estourado) antes
 // de fechar o array "linhas" — em vez de jogar tudo fora, varre o texto a
 // partir do "[" contando chaves e recorta só os objetos que fecharam por
 // completo, descartando o último (que ficou pela metade). Cada "linha" é
-// sempre um objeto raso (sem aninhamento), então contar chaves é seguro.
-function salvageStatementLines(text: string): unknown[] | null {
+// sempre um objeto raso o suficiente (sem aninhamento alem de "deducoes",
+// que é uma lista de pares tipo/valor) — contar chaves ainda é seguro
+// porque cada "deducoes" abre e fecha dentro do próprio objeto da linha.
+function salvageLinhasArray(text: string): unknown[] | null {
   const arrStart = text.indexOf("[");
   if (arrStart === -1) return null;
   let depth = 0;
@@ -228,22 +270,35 @@ Deno.serve(async (req) => {
     });
   }
 
-  const isStatement = context === "statement";
-  const systemPrompt = isStatement ? STATEMENT_SYSTEM_PROMPT : (CONTEXT_PROMPTS[context || "payable"] || CONTEXT_PROMPTS.payable);
+  // "statement" (extrato/fatura, Conciliação Bancária) e "settlementReport"
+  // (relatório de repasse de adquirente/delivery) devolvem uma lista solta
+  // de linhas em vez de "um documento, uma ou mais parcelas" — usam formato
+  // de resposta próprio e podem ser grandes o bastante pra estourar
+  // max_tokens (ver salvageLinhasArray).
+  const usesLinhasShape = context === "statement" || context === "settlementReport";
+  const systemPrompt = context === "statement"
+    ? STATEMENT_SYSTEM_PROMPT
+    : context === "settlementReport"
+      ? SETTLEMENT_SYSTEM_PROMPT
+      : (CONTEXT_PROMPTS[context || "payable"] || CONTEXT_PROMPTS.payable);
 
-  const documentBlock = mediaType === "application/pdf"
-    ? { type: "document" as const, source: { type: "base64" as const, media_type: "application/pdf" as const, data: fileBase64 } }
-    : { type: "image" as const, source: { type: "base64" as const, media_type: mediaType as "image/jpeg" | "image/png" | "image/webp", data: fileBase64 } };
+  const isTextMedia = mediaType === "text/csv" || mediaType === "text/plain";
+  const documentBlock = isTextMedia
+    ? { type: "text" as const, text: base64ToText(fileBase64) }
+    : mediaType === "application/pdf"
+      ? { type: "document" as const, source: { type: "base64" as const, media_type: "application/pdf" as const, data: fileBase64 } }
+      : { type: "image" as const, source: { type: "base64" as const, media_type: mediaType as "image/jpeg" | "image/png" | "image/webp", data: fileBase64 } };
 
   const client = new Anthropic({ apiKey });
 
-  // Extrato pode ter dezenas/centenas de linhas — um boleto/comprovante
-  // normal cabe folgado em 2048 tokens de resposta, uma fatura inteira não.
+  // Extrato/relatório de repasse pode ter dezenas/centenas de linhas — um
+  // boleto/comprovante normal cabe folgado em 2048 tokens de resposta, uma
+  // fatura ou relatório de repasse inteiro não.
   let response;
   try {
     response = await client.messages.create({
       model: "claude-haiku-4-5",
-      max_tokens: isStatement ? 8192 : 2048,
+      max_tokens: usesLinhasShape ? 8192 : 2048,
       system: systemPrompt,
       messages: [
         {
@@ -285,10 +340,11 @@ Deno.serve(async (req) => {
     const cleaned = textBlock.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "");
     extracted = JSON.parse(cleaned);
   } catch {
-    // Extrato grande (muitas páginas/linhas) pode estourar max_tokens e
-    // cortar o JSON no meio de um objeto — em vez de descartar tudo,
-    // aproveita as linhas que fecharam por completo antes do corte.
-    const salvaged = isStatement ? salvageStatementLines(textBlock.text) : null;
+    // Extrato/relatório grande (muitas páginas/linhas) pode estourar
+    // max_tokens e cortar o JSON no meio de um objeto — em vez de
+    // descartar tudo, aproveita as linhas que fecharam por completo antes
+    // do corte.
+    const salvaged = usesLinhasShape ? salvageLinhasArray(textBlock.text) : null;
     if (salvaged && salvaged.length > 0) {
       extracted = { linhas: salvaged };
       truncated = true;
