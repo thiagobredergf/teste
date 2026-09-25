@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -3505,6 +3505,170 @@ function ReceivableModal({ initial, categories, contacts = [], aiNote, previewDo
 }
 
 /* ---------------------------------------------------------------------- */
+/*  Lançamentos Bancários — helpers de importação de extrato e categorização */
+/* ---------------------------------------------------------------------- */
+function stripAccents(s) {
+  return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+// Reconhece "1.234,56", "1234.56" ou "-1234,56" — bancos brasileiros
+// exportam nos dois formatos dependendo do sistema de origem.
+function parseMoneyBR(raw) {
+  if (raw == null || raw === "") return NaN;
+  let s = String(raw).trim().replace(/^R\$\s?/i, "");
+  const neg = /^-/.test(s) || /^\(.*\)$/.test(s);
+  s = s.replace(/[()]/g, "").replace(/^-/, "").trim();
+  const lastComma = s.lastIndexOf(",");
+  const lastDot = s.lastIndexOf(".");
+  if (lastComma > lastDot) s = s.replace(/\./g, "").replace(",", ".");
+  else if (lastDot > lastComma) s = s.replace(/,/g, "");
+  const n = parseFloat(s);
+  if (Number.isNaN(n)) return NaN;
+  return neg ? -Math.abs(n) : n;
+}
+
+// Aceita "DD/MM/AAAA", "AAAA-MM-DD" e variações com hora colada (comum em OFX).
+function parseDateBR(raw) {
+  const s = String(raw || "").trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (m) {
+    let [, d, mo, y] = m;
+    if (y.length === 2) y = `20${y}`;
+    return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  return "";
+}
+
+function addMonthsToISODate(dateISO, delta) {
+  const [y, m, d] = dateISO.split("-").map(Number);
+  const { y: ny, m: nm } = addMonths(y, m, delta);
+  const lastDay = new Date(ny, nm, 0).getDate();
+  return isoDate(ny, nm, Math.min(d, lastDay));
+}
+
+function splitCSVLine(line, delim) {
+  const out = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; continue; }
+    if (ch === delim && !inQuotes) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((c) => c.trim());
+}
+
+// Extrato em CSV varia muito de banco pra banco — detecta o delimitador e
+// tenta achar as colunas de data/descrição/valor pelo nome do cabeçalho
+// (ou colunas separadas de crédito/débito). Linha que não fecha conta
+// (sem data ou sem valor) é descartada — o analista revisa e completa
+// na tela antes de salvar, então perder uma linha ruim aqui não é grave.
+function parseCSVBankStatement(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length < 2) return [];
+  const delim = lines[0].split(";").length >= lines[0].split(",").length ? ";" : ",";
+  const header = splitCSVLine(lines[0], delim).map((h) => stripAccents(h.toLowerCase()));
+  const idx = (preds) => header.findIndex((h) => preds.some((p) => h.includes(p)));
+  const iData = idx(["data", "date"]);
+  const iDesc = idx(["historico", "descricao", "memo", "lancamento", "detalhes"]);
+  const iValor = idx(["valor", "amount", "montante"]);
+  const iCredito = idx(["credito", "credit"]);
+  const iDebito = idx(["debito", "debit"]);
+  const iTipo = idx(["tipo", "type"]);
+
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCSVLine(lines[i], delim);
+    if (cols.length < 2) continue;
+    const data = iData >= 0 ? parseDateBR(cols[iData]) : "";
+    const descricao = iDesc >= 0 ? cols[iDesc] : cols.filter((_, ci) => ci !== iData && ci !== iValor && ci !== iCredito && ci !== iDebito).join(" ").trim();
+    let valor = 0;
+    let tipo = "Saída";
+    if (iCredito >= 0 || iDebito >= 0) {
+      const vc = iCredito >= 0 ? parseMoneyBR(cols[iCredito]) : NaN;
+      const vd = iDebito >= 0 ? parseMoneyBR(cols[iDebito]) : NaN;
+      if (vc && !Number.isNaN(vc) && vc !== 0) { valor = Math.abs(vc); tipo = "Entrada"; }
+      else if (!Number.isNaN(vd) && vd !== 0) { valor = Math.abs(vd); tipo = "Saída"; }
+    } else if (iValor >= 0) {
+      const v = parseMoneyBR(cols[iValor]);
+      if (!Number.isNaN(v)) {
+        valor = Math.abs(v);
+        tipo = v < 0 ? "Saída" : "Entrada";
+      }
+      if (iTipo >= 0) {
+        const t = stripAccents(cols[iTipo].toLowerCase());
+        if (t.includes("deb") || t.includes("said")) tipo = "Saída";
+        else if (t.includes("cred") || t.includes("entr")) tipo = "Entrada";
+      }
+    }
+    if (!data || !valor) continue;
+    rows.push({ data, descricao, valor, tipo });
+  }
+  return rows;
+}
+
+// OFX não é XML de verdade (tags costumam vir sem fechamento), então
+// extrai cada bloco <STMTTRN>...</STMTTRN> e lê os campos por regex.
+function parseOFXBankStatement(text) {
+  const blocks = text.match(/<STMTTRN>[\s\S]*?<\/STMTTRN>/gi) || [];
+  const rows = [];
+  for (const block of blocks) {
+    const get = (tag) => {
+      const m = block.match(new RegExp(`<${tag}>([^<\r\n]*)`, "i"));
+      return m ? m[1].trim() : "";
+    };
+    const dtRaw = get("DTPOSTED");
+    const dateMatch = dtRaw.match(/^(\d{4})(\d{2})(\d{2})/);
+    const data = dateMatch ? `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}` : "";
+    const valor = parseFloat(get("TRNAMT"));
+    if (!data || Number.isNaN(valor) || valor === 0) continue;
+    rows.push({
+      data,
+      descricao: get("MEMO") || get("NAME") || "",
+      valor: Math.abs(valor),
+      tipo: valor >= 0 ? "Entrada" : "Saída",
+    });
+  }
+  return rows;
+}
+
+function parseBankStatementFile(text, filename) {
+  const isOFX = /<OFX>/i.test(text) || /OFXHEADER/i.test(text) || /\.(ofx|qfx)$/i.test(filename || "");
+  return isOFX ? parseOFXBankStatement(text) : parseCSVBankStatement(text);
+}
+
+function normalizeDescricao(s) {
+  return stripAccents(String(s || "")).toUpperCase().replace(/[0-9]/g, "").replace(/[^A-Z ]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// "Aprende" com o histórico: procura, entre os lançamentos já salvos da
+// mesma empresa, aquele com mais palavras (4+ letras) em comum com a
+// descrição atual e sugere a categoria dele — sem regra cadastrada à mão.
+function guessCategoria(descricao, entries, empresaId) {
+  const norm = normalizeDescricao(descricao);
+  const words = norm.split(" ").filter((w) => w.length >= 4);
+  if (words.length === 0) return null;
+  let best = null;
+  let bestScore = 0;
+  let bestDate = "";
+  for (const e of entries) {
+    if (e.deletedAt || e.empresaId !== empresaId || !e.categoria) continue;
+    const eWords = new Set(normalizeDescricao(e.descricao).split(" ").filter((w) => w.length >= 4));
+    const score = words.filter((w) => eWords.has(w)).length;
+    if (score > 0 && (score > bestScore || (score === bestScore && (e.data || "") > bestDate))) {
+      best = { categoria: e.categoria, exemplo: e.descricao };
+      bestScore = score;
+      bestDate = e.data || "";
+    }
+  }
+  return best;
+}
+
+/* ---------------------------------------------------------------------- */
 /*  Lançamentos Bancários                                                  */
 /* ---------------------------------------------------------------------- */
 function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSave, pendingImport, onImportProcessed }) {
@@ -3513,16 +3677,56 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState("");
   const [previewDoc, setPreviewDoc] = useState(null);
+  const [statementImporting, setStatementImporting] = useState(false);
+  const [statementError, setStatementError] = useState("");
+  const [importReview, setImportReview] = useState(null);
   const scopedAccounts = accounts.filter((a) => a.empresaId === selectedEmpresa);
-  const submit = (form) => {
-    if (form.id) onSave(entries.map((e) => (e.id === form.id ? form : e)));
-    else onSave([...entries, { ...form, id: uid() }]);
+  const submit = (formOrList) => {
+    const list = Array.isArray(formOrList) ? formOrList : [formOrList];
+    if (list.length === 1 && list[0].id) {
+      onSave(entries.map((e) => (e.id === list[0].id ? list[0] : e)));
+    } else {
+      onSave([...entries, ...list.map((f) => ({ ...f, id: uid() }))]);
+    }
     setModal(null);
     setPreviewDoc(null);
     if (pendingUploadRef.current) {
       onImportProcessed?.(pendingUploadRef.current);
       pendingUploadRef.current = null;
     }
+  };
+  const duplicateEntry = (e) => {
+    setAiNote("");
+    setModal({ contaId: e.contaId, tipo: e.tipo, categoria: e.categoria, descricao: e.descricao, valor: String(e.valor ?? ""), data: todayISO() });
+  };
+  const handleImportStatement = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setStatementError("");
+    setStatementImporting(true);
+    try {
+      const text = await file.text();
+      const rows = parseBankStatementFile(text, file.name);
+      if (rows.length === 0) {
+        setStatementError("Não consegui reconhecer nenhum lançamento nesse arquivo — confira se é um extrato em CSV ou OFX exportado do banco.");
+        return;
+      }
+      const withCategoria = rows.map((r) => {
+        const guess = guessCategoria(r.descricao, entries, selectedEmpresa);
+        return { ...r, categoria: guess?.categoria || categories[0] || "" };
+      });
+      setImportReview(withCategoria);
+    } catch (err) {
+      setStatementError(err?.message || "Erro ao ler o arquivo do extrato.");
+    } finally {
+      setStatementImporting(false);
+    }
+  };
+  const confirmImportReview = (rows, contaId) => {
+    const novos = rows.map((r) => ({ empresaId: selectedEmpresa, contaId, data: r.data, tipo: r.tipo, categoria: r.categoria, descricao: r.descricao, valor: Number(r.valor) || 0 }));
+    onSave([...entries, ...novos.map((f) => ({ ...f, id: uid() }))]);
+    setImportReview(null);
   };
   const remove = (id) => {
     if (!confirmDelete("Mover este lançamento pra lixeira? Você pode restaurar depois, em Lixeira.")) return;
@@ -3593,6 +3797,13 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
           <Upload size={15} /> {importing ? "Lendo comprovante…" : "Importar documento"}
           <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleImportDocument} disabled={importing || scopedAccounts.length === 0} />
         </label>
+        <label
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors disabled:opacity-40"
+          style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
+        >
+          <FileUp size={15} /> {statementImporting ? "Lendo extrato…" : "Importar extrato (CSV/OFX)"}
+          <input type="file" accept=".csv,.ofx,.qfx,.txt" className="hidden" onChange={handleImportStatement} disabled={statementImporting || scopedAccounts.length === 0} />
+        </label>
         <Button onClick={() => { setAiNote(""); setModal({}); }} disabled={scopedAccounts.length === 0}><Plus size={15} /> Novo lançamento</Button>
       </Header>
       {scopedAccounts.length === 0 && (
@@ -3601,6 +3812,11 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
       {importError && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
           <AlertTriangle size={15} /> {importError}
+        </div>
+      )}
+      {statementError && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+          <AlertTriangle size={15} /> {statementError}
         </div>
       )}
       <Card className="overflow-x-auto">
@@ -3634,6 +3850,7 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
                     </td>
                     <td className="px-4 py-2.5">
                       <div className="flex justify-end gap-1">
+                        <button onClick={() => duplicateEntry(e)} title="Duplicar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Copy size={14} color={COLORS.inkSoft} /></button>
                         <button onClick={() => setModal(e)} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
                         <button onClick={() => remove(e.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
                       </div>
@@ -3647,24 +3864,55 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
       </Card>
       {modal && (
         <BankEntryModal
-          initial={modal} accounts={scopedAccounts} categories={categories} aiNote={aiNote} previewDoc={previewDoc}
+          initial={modal} accounts={scopedAccounts} categories={categories} entries={entries} aiNote={aiNote} previewDoc={previewDoc}
           onClose={() => { setModal(null); setAiNote(""); setPreviewDoc(null); pendingUploadRef.current = null; }}
           onSubmit={submit}
+        />
+      )}
+      {importReview && (
+        <BankStatementImportModal
+          rows={importReview}
+          categories={categories}
+          accounts={scopedAccounts}
+          entries={entries}
+          onClose={() => setImportReview(null)}
+          onConfirm={confirmImportReview}
         />
       )}
     </div>
   );
 }
 
-function BankEntryModal({ initial, accounts, categories, suggestion, aiNote, previewDoc, onClose, onSubmit }) {
+function BankEntryModal({ initial, accounts, categories, entries = [], aiNote, previewDoc, onClose, onSubmit }) {
+  const isNew = !initial.id;
   const [form, setForm] = useState({
     data: todayISO(), contaId: accounts[0]?.id || "", tipo: "Saída", categoria: categories[0] || "",
-    descricao: "", valor: "", ...initial,
+    descricao: "", valor: "", repetirMeses: "1", ...initial,
   });
+  const [categoriaSugerida, setCategoriaSugerida] = useState(null);
   const valid = form.contaId && Number(form.valor) > 0;
+
+  const handleDescricaoBlur = () => {
+    if (!isNew || !form.descricao.trim()) return;
+    const acc = accounts.find((a) => a.id === form.contaId);
+    const guess = guessCategoria(form.descricao, entries, acc?.empresaId);
+    if (guess && guess.categoria !== form.categoria) {
+      setCategoriaSugerida(guess);
+      setForm((f) => ({ ...f, categoria: guess.categoria }));
+    }
+  };
+
   const submit = () => {
     const acc = accounts.find((a) => a.id === form.contaId);
-    onSubmit({ ...form, empresaId: acc?.empresaId || form.empresaId });
+    const empresaId = acc?.empresaId || form.empresaId;
+    const base = { ...form, empresaId };
+    const n = isNew ? Math.max(1, Math.min(36, Number(form.repetirMeses) || 1)) : 1;
+    delete base.repetirMeses;
+    if (n <= 1) {
+      onSubmit(base);
+    } else {
+      onSubmit(Array.from({ length: n }, (_, i) => ({ ...base, data: addMonthsToISODate(form.data, -i) })));
+    }
   };
   return (
     <Modal title={initial.id ? "Editar lançamento" : "Novo lançamento bancário"} onClose={onClose} wide={!previewDoc} xwide={!!previewDoc}>
@@ -3692,19 +3940,126 @@ function BankEntryModal({ initial, accounts, categories, suggestion, aiNote, pre
               {categories.map((c) => <option key={c} value={c}>{c}</option>)}
             </Select>
           </Field>
-          {suggestion && form.categoria === suggestion.categoria && (
+          {categoriaSugerida && form.categoria === categoriaSugerida.categoria && (
             <p className="text-xs -mt-2" style={{ color: COLORS.green }}>
-              Categoria sugerida automaticamente, com base em lançamento parecido: “{suggestion.exemplo}”. Confira antes de salvar.
+              Categoria sugerida automaticamente, com base em lançamento parecido: "{categoriaSugerida.exemplo}". Confira antes de salvar.
             </p>
           )}
-          <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} /></Field>
+          <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} onBlur={handleDescricaoBlur} /></Field>
           <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} /></Field>
+          {isNew && (
+            <Field label="Repetir também nos meses anteriores (opcional)">
+              <TextInput
+                type="number" min="1" max="36" step="1" value={form.repetirMeses}
+                onChange={(e) => setForm({ ...form, repetirMeses: e.target.value })}
+              />
+              <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>
+                Quantos meses no total, incluindo este. Útil pra lançar de uma vez uma tarifa ou rendimento fixo que se repete mês a mês e você ainda não tinha registrado.
+              </p>
+            </Field>
+          )}
         </div>
         <DocumentPreviewPanel doc={previewDoc} />
       </div>
       <div className="flex justify-end gap-2 pt-4">
         <Button variant="ghost" onClick={onClose}>Cancelar</Button>
         <Button onClick={() => valid && submit()} disabled={!valid}>Salvar</Button>
+      </div>
+    </Modal>
+  );
+}
+
+function BankStatementImportModal({ rows, categories, accounts, entries, onClose, onConfirm }) {
+  const [contaId, setContaId] = useState(accounts[0]?.id || "");
+  const [localRows, setLocalRows] = useState(() => rows.map((r, i) => ({ ...r, key: i, incluir: true, duplicado: false })));
+
+  useEffect(() => {
+    setLocalRows((rs) => rs.map((r) => {
+      const duplicado = entries.some((e) => !e.deletedAt && e.contaId === contaId && e.data === r.data && e.tipo === r.tipo && Math.abs(Number(e.valor) - Number(r.valor)) < 0.01);
+      return { ...r, duplicado, incluir: !duplicado };
+    }));
+  }, [contaId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const update = (key, patch) => setLocalRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const toggleAll = () => {
+    const allOn = localRows.length > 0 && localRows.every((r) => r.incluir);
+    setLocalRows((rs) => rs.map((r) => ({ ...r, incluir: !allOn })));
+  };
+
+  const incluidos = localRows.filter((r) => r.incluir);
+  const totalEntradas = incluidos.filter((r) => r.tipo === "Entrada").reduce((s, r) => s + (Number(r.valor) || 0), 0);
+  const totalSaidas = incluidos.filter((r) => r.tipo === "Saída").reduce((s, r) => s + (Number(r.valor) || 0), 0);
+
+  const confirmar = () => {
+    onConfirm(incluidos.map((r) => ({ data: r.data, tipo: r.tipo, categoria: r.categoria, descricao: r.descricao, valor: Number(r.valor) || 0 })), contaId);
+  };
+
+  return (
+    <Modal title="Importar extrato bancário" onClose={onClose} wide>
+      <div className="grid gap-3">
+        <Field label="Conta desse extrato">
+          <Select value={contaId} onChange={(e) => setContaId(e.target.value)}>
+            {accounts.length === 0 && <option value="">Cadastre uma conta primeiro</option>}
+            {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+          </Select>
+        </Field>
+        <p className="text-xs -mt-1" style={{ color: COLORS.inkSoft }}>
+          {rows.length} lançamento(s) encontrado(s) no arquivo. Confira data, categoria e valor de cada linha antes de salvar — as que parecem já lançadas vêm desmarcadas, pra evitar duplicidade.
+        </p>
+        {accounts.length === 0 ? null : (
+          <div className="rounded-lg border max-h-96 overflow-y-auto" style={{ borderColor: COLORS.border }}>
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}`, background: "#FAFAF7" }}>
+                  <th className="text-left font-medium px-3 py-2">
+                    <input type="checkbox" checked={localRows.length > 0 && localRows.every((r) => r.incluir)} onChange={toggleAll} />
+                  </th>
+                  <th className="text-left font-medium px-3 py-2">Data</th>
+                  <th className="text-left font-medium px-3 py-2">Tipo</th>
+                  <th className="text-left font-medium px-3 py-2">Categoria</th>
+                  <th className="text-left font-medium px-3 py-2">Descrição</th>
+                  <th className="text-right font-medium px-3 py-2">Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {localRows.map((r) => (
+                  <tr key={r.key} style={{ borderTop: `1px solid ${COLORS.border}`, opacity: r.incluir ? 1 : 0.5 }}>
+                    <td className="px-3 py-2"><input type="checkbox" checked={r.incluir} onChange={(e) => update(r.key, { incluir: e.target.checked })} /></td>
+                    <td className="px-3 py-2"><TextInput type="date" value={r.data} max={todayISO()} onChange={(e) => update(r.key, { data: e.target.value })} className="w-32" style={{ height: 32 }} /></td>
+                    <td className="px-3 py-2">
+                      <Select value={r.tipo} onChange={(e) => update(r.key, { tipo: e.target.value })} style={{ height: 32 }}>
+                        <option>Entrada</option><option>Saída</option>
+                      </Select>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Select value={r.categoria} onChange={(e) => update(r.key, { categoria: e.target.value })} style={{ height: 32 }}>
+                        {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </Select>
+                    </td>
+                    <td className="px-3 py-2">
+                      <TextInput value={r.descricao} onChange={(e) => update(r.key, { descricao: e.target.value })} style={{ height: 32 }} />
+                      {r.duplicado && <p className="text-xs mt-0.5" style={{ color: COLORS.amber }}>Parece já lançado nessa conta</p>}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <TextInput type="number" step="0.01" value={r.valor} onChange={(e) => update(r.key, { valor: e.target.value })} className="w-24 text-right" style={{ height: 32 }} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="flex items-center justify-between pt-1">
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>
+            {incluidos.length} selecionado(s) · <span style={{ color: COLORS.green }}>+{fmtBRL(totalEntradas)}</span> · <span style={{ color: COLORS.red }}>−{fmtBRL(totalSaidas)}</span>
+          </p>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+            <Button onClick={confirmar} disabled={incluidos.length === 0 || !contaId}>
+              Salvar {incluidos.length > 0 ? `(${incluidos.length})` : ""}
+            </Button>
+          </div>
+        </div>
       </div>
     </Modal>
   );
