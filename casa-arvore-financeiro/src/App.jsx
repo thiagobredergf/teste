@@ -1692,6 +1692,10 @@ function EmpresaOwnersPanel({ empresa }) {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Credencial recém-gerada (login novo ou reset de senha) — some assim
+  // que o gestor sai da tela ou fecha, nunca fica guardada em lugar
+  // nenhum além da memória desta sessão.
+  const [tempCred, setTempCred] = useState(null); // { email, password }
 
   const load = useCallback(async () => {
     const { data, error: err } = await supabase
@@ -1708,16 +1712,53 @@ function EmpresaOwnersPanel({ empresa }) {
     if (!email.trim()) return;
     setBusy(true);
     setError("");
-    const { error: err } = await supabase.rpc("assign_empresa_owner", { p_empresa_id: empresa.id, p_email: email.trim() });
+    setTempCred(null);
+    const { data, error: err } = await supabase.functions.invoke("manage-owner-login", {
+      body: { email: email.trim(), empresaId: empresa.id },
+    });
     setBusy(false);
-    if (err) { setError(err.message.includes("não encontrado") ? "Usuário não encontrado — crie o login dele no Supabase primeiro." : err.message); return; }
+    if (err) {
+      let detail = err.message;
+      if (err.context && typeof err.context.json === "function") {
+        try { const b = await err.context.clone().json(); if (b?.error) detail = b.error; } catch { /* corpo não era JSON */ }
+      }
+      setError(detail);
+      return;
+    }
     setEmail("");
+    if (data?.createdNew && data?.tempPassword) setTempCred({ email: email.trim(), password: data.tempPassword });
     load();
+  };
+
+  const resetPassword = async (ownerEmail) => {
+    if (!confirmDelete(`Gerar uma nova senha temporária pra "${ownerEmail}"? A senha antiga dela deixa de funcionar.`)) return;
+    setError("");
+    setTempCred(null);
+    const { data, error: err } = await supabase.functions.invoke("manage-owner-login", {
+      body: { email: ownerEmail, resetPassword: true },
+    });
+    if (err) {
+      let detail = err.message;
+      if (err.context && typeof err.context.json === "function") {
+        try { const b = await err.context.clone().json(); if (b?.error) detail = b.error; } catch { /* corpo não era JSON */ }
+      }
+      setError(detail);
+      return;
+    }
+    if (data?.tempPassword) setTempCred({ email: ownerEmail, password: data.tempPassword });
   };
 
   const removeOwner = async (ownerEmail) => {
     await supabase.rpc("remove_empresa_owner", { p_empresa_id: empresa.id, p_email: ownerEmail });
     load();
+  };
+
+  const sendCredByWhatsApp = () => {
+    if (!tempCred) return;
+    const mensagem = `Olá${empresa.proprietario ? `, ${empresa.proprietario}` : ""}! Seu acesso ao ESEK (gestão financeira da ${empresa.nome}) foi criado.\n\nLogin: ${tempCred.email}\nSenha temporária: ${tempCred.password}\n\nEntre e, se possível, troque a senha no primeiro acesso.`;
+    if (!openWhatsApp(empresa.contatoCelular, mensagem)) {
+      alert("Essa empresa não tem celular do proprietário cadastrado — copie a senha e envie manualmente.");
+    }
   };
 
   return (
@@ -1732,6 +1773,7 @@ function EmpresaOwnersPanel({ empresa }) {
           {owners.map((ownerEmail) => (
             <span key={ownerEmail} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs" style={{ background: "#EFEEE8", color: COLORS.ink }}>
               {ownerEmail}
+              <button onClick={() => resetPassword(ownerEmail)} title="Gerar nova senha temporária" className="hover:opacity-70"><RotateCcw size={11} /></button>
               <button onClick={() => removeOwner(ownerEmail)} title="Remover acesso" className="hover:opacity-70"><X size={11} /></button>
             </span>
           ))}
@@ -1751,6 +1793,19 @@ function EmpresaOwnersPanel({ empresa }) {
         </Button>
       </div>
       {error && <p className="text-xs mt-1" style={{ color: COLORS.red }}>{error}</p>}
+      {tempCred && (
+        <div className="mt-2 p-2 rounded-lg text-xs" style={{ background: COLORS.goldSoft }}>
+          <p className="font-medium mb-1" style={{ color: COLORS.ink }}>Login criado — repassa pro dono agora, essa senha não aparece de novo:</p>
+          <p style={{ color: COLORS.ink }}>Login: <span className="font-mono">{tempCred.email}</span></p>
+          <p style={{ color: COLORS.ink }}>Senha: <span className="font-mono font-semibold">{tempCred.password}</span></p>
+          <div className="flex gap-2 mt-1.5">
+            <Button variant="ghost" className="text-xs" style={{ height: 26, padding: "0 8px" }} onClick={sendCredByWhatsApp}>
+              <MessageCircle size={12} /> Enviar por WhatsApp
+            </Button>
+            <Button variant="ghost" className="text-xs" style={{ height: 26, padding: "0 8px" }} onClick={() => setTempCred(null)}>Ok, guardei</Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
