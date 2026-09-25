@@ -1113,6 +1113,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 bankEntries={bankEntriesF}
                 transfers={transfersF}
                 fiscalObligations={fiscalObligationsF}
+                contacts={contacts}
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
                 categoryBreakdown={categoryBreakdown}
@@ -2895,6 +2896,41 @@ function ReceivablesView({
   const [aiNote, setAiNote] = useState("");
   const [installmentsReview, setInstallmentsReview] = useState(null);
   const [previewDoc, setPreviewDoc] = useState(null);
+  const [cobrancas, setCobrancas] = useState({}); // { receivableId: created_at da última cobrança enviada }
+
+  // Régua de cobrança: quando cada conta a receber foi cobrada por
+  // último — não guarda estado próprio, só lê do mesmo log de auditoria
+  // que já registra baixa/cancelamento (ver logAudit), então a "régua"
+  // nunca fica fora de sincronia com o que realmente aconteceu.
+  const loadCobrancas = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("auditLog")
+      .select("entityId, created_at")
+      .eq("empresaId", selectedEmpresa)
+      .eq("entity", "receivable")
+      .eq("action", "cobranca")
+      .order("created_at", { ascending: false });
+    if (error) return;
+    const map = {};
+    for (const row of data) if (!map[row.entityId]) map[row.entityId] = row.created_at;
+    setCobrancas(map);
+  }, [selectedEmpresa]);
+  useEffect(() => { loadCobrancas(); }, [loadCobrancas]);
+
+  const notifyClient = (r) => {
+    const contact = contacts.find((c) => c.id === r.contactId);
+    const atrasado = r.statusDisplay === "Inadimplente";
+    const dias = Math.abs(daysUntil(r.vencimento));
+    const mensagem = atrasado
+      ? `Olá, ${r.cliente}! Identificamos que o pagamento de ${fmtBRL(r.valor)} (${r.descricao || r.categoria}), com vencimento em ${fmtDate(r.vencimento)}, está em aberto há ${dias} dia(s). Poderia regularizar ou nos dar um retorno sobre o pagamento?`
+      : `Olá, ${r.cliente}! Passando pra lembrar do pagamento de ${fmtBRL(r.valor)} (${r.descricao || r.categoria}), com vencimento em ${fmtDate(r.vencimento)}. Qualquer dúvida, estamos à disposição!`;
+    if (!openWhatsApp(contact?.contato, mensagem)) {
+      alert("Este cliente não tem telefone/WhatsApp cadastrado — edite o lançamento e preencha \"Contato do cliente\".");
+      return;
+    }
+    logAudit(selectedEmpresa, "receivable", r.id, "cobranca", `Cobrança enviada — ${fmtBRL(r.valor)}, vencimento ${fmtDate(r.vencimento)}`, userEmail);
+    loadCobrancas();
+  };
 
   const processExtractedDocument = async (fileBase64, mediaType) => {
     const ex = await callExtractDocument(fileBase64, mediaType, "receivable");
@@ -3092,11 +3128,19 @@ function ReceivablesView({
                       </p>
                     ) : null}
                   </td>
-                  <td className="px-4 py-2.5"><StatusBadge status={r.statusDisplay} /></td>
+                  <td className="px-4 py-2.5">
+                    <StatusBadge status={r.statusDisplay} />
+                    {cobrancas[r.id] && r.status !== "Recebido" && (
+                      <p className="text-[11px] mt-0.5" style={{ color: COLORS.inkSoft }}>Cobrado {timeAgo(cobrancas[r.id])}</p>
+                    )}
+                  </td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
                       {r.status !== "Recebido" ? (
-                        <Button variant="subtle" onClick={() => setRecModal(r)}><Check size={13} /> Dar baixa</Button>
+                        <>
+                          <Button variant="subtle" onClick={() => setRecModal(r)}><Check size={13} /> Dar baixa</Button>
+                          <button onClick={() => notifyClient(r)} title="Cobrar cliente via WhatsApp" className="p-1.5 rounded-md hover:bg-black/5"><MessageCircle size={14} color={COLORS.primary} /></button>
+                        </>
                       ) : (
                         <button onClick={() => cancelReceipt(r)} title="Cancelar recebimento (volta pra A Receber)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                       )}
@@ -3963,6 +4007,7 @@ const REPORT_TABS = [
   { id: "dre", label: "DRE", Comp: DREReport },
   { id: "fluxo", label: "Fluxo Projetado", Comp: FluxoProjetadoReport },
   { id: "ordem", label: "Ordem de Pagamento", Comp: PaymentOrderReport },
+  { id: "cobranca", label: "Relação de Cobrança", Comp: CollectionsReport },
   { id: "aging", label: "Aging", Comp: AgingReport },
   { id: "comparativo", label: "Comparativo entre Empresas", Comp: ComparativoReport },
   { id: "extrato", label: "Extrato de Conta", Comp: ExtratoContaReport },
@@ -4314,6 +4359,63 @@ function PaymentOrderReport({ payables, accounts }) {
   );
 }
 
+// Relação de cobrança — o espelho, do lado de receber, da Ordem de
+// Pagamento: tudo que ainda está em aberto, pra acompanhar inadimplência,
+// repassar pra quem for cobrar, ou levar numa reunião com o dono.
+function CollectionsReport({ receivables, contacts }) {
+  const today = todayISO();
+  const items = receivables
+    .filter((r) => r.status !== "Recebido")
+    .map((r) => {
+      let statusDisplay = r.status;
+      if (r.vencimento < today) statusDisplay = "Inadimplente";
+      else if (daysUntil(r.vencimento) <= 10) statusDisplay = "Próximo";
+      return { ...r, statusDisplay, contato: contacts.find((c) => c.id === r.contactId)?.contato || "" };
+    })
+    .sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""));
+  const total = items.reduce((s, r) => s + Number(r.valor || 0), 0);
+
+  return (
+    <ReportCard title="Relação de cobrança" subtitle="Contas a receber em aberto — pra acompanhar inadimplência, repassar pra quem for cobrar, ou levar numa reunião.">
+      {items.length === 0 ? (
+        <EmptyState icon={MessageCircle} title="Nada em aberto" subtitle="Todas as contas a receber estão em dia ou já recebidas." />
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+              <th className="text-left font-medium px-2 py-2">Cliente</th>
+              <th className="text-left font-medium px-2 py-2">Vencimento</th>
+              <th className="text-left font-medium px-2 py-2">Contato</th>
+              <th className="text-left font-medium px-2 py-2">Status</th>
+              <th className="text-right font-medium px-2 py-2">Valor</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((r) => (
+              <tr key={r.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                <td className="px-2 py-2" style={{ color: COLORS.ink }}>
+                  <p className="font-medium">{r.cliente}</p>
+                  <p className="text-xs" style={{ color: COLORS.inkSoft }}>{r.descricao}</p>
+                </td>
+                <td className="px-2 py-2" style={{ color: r.statusDisplay === "Inadimplente" ? COLORS.red : COLORS.ink }}>{fmtDate(r.vencimento)}</td>
+                <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{r.contato || "—"}</td>
+                <td className="px-2 py-2"><StatusBadge status={r.statusDisplay} /></td>
+                <td className="px-2 py-2 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(r.valor)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr style={{ borderTop: `2px solid ${COLORS.border}` }}>
+              <td colSpan={4} className="px-2 py-2 text-right font-semibold" style={{ color: COLORS.ink }}>Total em aberto</td>
+              <td className="px-2 py-2 text-right tabular-nums font-semibold" style={{ color: COLORS.ink }}>{fmtBRL(total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      )}
+    </ReportCard>
+  );
+}
+
 /* --- Aging de Pagáveis/Recebíveis --- */
 function agingBuckets(items, dateField) {
   const today = todayISO();
@@ -4565,7 +4667,22 @@ function ExtratoContaReport({ accounts, payables, receivables, bankEntries, tran
 }
 
 const AUDIT_ENTITY_LABEL = { payable: "Conta a pagar", receivable: "Conta a receber", fiscalObligation: "Obrigação fiscal" };
-const AUDIT_ACTION_LABEL = { baixa: "Dar baixa", cancelar_baixa: "Cancelar baixa" };
+const AUDIT_ACTION_LABEL = {
+  baixa: "Dar baixa",
+  cancelar_baixa: "Cancelar baixa",
+  agendar: "Agendar pagamento",
+  autorizar: "Autorizar pagamento",
+  cancelar_agendamento: "Cancelar agendamento",
+  cobranca: "Cobrança enviada",
+};
+const AUDIT_ACTION_TONE = {
+  baixa: "green",
+  cancelar_baixa: "amber",
+  agendar: "gold",
+  autorizar: "blue",
+  cancelar_agendamento: "amber",
+  cobranca: "neutral",
+};
 
 function fmtDateTime(iso) {
   if (!iso) return "—";
@@ -4618,7 +4735,7 @@ function AuditLogReport({ selectedEmpresa }) {
                 <td className="px-2 py-2 whitespace-nowrap" style={{ color: COLORS.inkSoft }}>{fmtDateTime(r.created_at)}</td>
                 <td className="px-2 py-2" style={{ color: COLORS.ink }}>{r.userEmail || "—"}</td>
                 <td className="px-2 py-2">
-                  <Badge tone={r.action === "cancelar_baixa" ? "amber" : "green"}>{AUDIT_ACTION_LABEL[r.action] || r.action}</Badge>
+                  <Badge tone={AUDIT_ACTION_TONE[r.action] || "neutral"}>{AUDIT_ACTION_LABEL[r.action] || r.action}</Badge>
                 </td>
                 <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{AUDIT_ENTITY_LABEL[r.entity] || r.entity}</td>
                 <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{r.detail}</td>
