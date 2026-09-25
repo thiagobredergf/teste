@@ -1755,7 +1755,8 @@ function EmpresaOwnersPanel({ empresa }) {
 
   const sendCredByWhatsApp = () => {
     if (!tempCred) return;
-    const mensagem = `Olá${empresa.proprietario ? `, ${empresa.proprietario}` : ""}! Seu acesso ao ESEK (gestão financeira da ${empresa.nome}) foi criado.\n\nLogin: ${tempCred.email}\nSenha temporária: ${tempCred.password}\n\nEntre e, se possível, troque a senha no primeiro acesso.`;
+    const loginUrl = `${window.location.origin}${window.location.pathname}`;
+    const mensagem = `Olá${empresa.proprietario ? `, ${empresa.proprietario}` : ""}! Seu acesso ao ESEK (gestão financeira da ${empresa.nome}) foi criado.\n\nAcesse: ${loginUrl}\nLogin: ${tempCred.email}\nSenha temporária: ${tempCred.password}\n\nEntre e, se possível, troque a senha no primeiro acesso.`;
     if (!openWhatsApp(empresa.contatoCelular, mensagem)) {
       alert("Essa empresa não tem celular do proprietário cadastrado — copie a senha e envie manualmente.");
     }
@@ -1796,6 +1797,7 @@ function EmpresaOwnersPanel({ empresa }) {
       {tempCred && (
         <div className="mt-2 p-2 rounded-lg text-xs" style={{ background: COLORS.goldSoft }}>
           <p className="font-medium mb-1" style={{ color: COLORS.ink }}>Login criado — repassa pro dono agora, essa senha não aparece de novo:</p>
+          <p style={{ color: COLORS.ink }}>Acesso: <span className="font-mono">{window.location.origin}{window.location.pathname}</span></p>
           <p style={{ color: COLORS.ink }}>Login: <span className="font-mono">{tempCred.email}</span></p>
           <p style={{ color: COLORS.ink }}>Senha: <span className="font-mono font-semibold">{tempCred.password}</span></p>
           <div className="flex gap-2 mt-1.5">
