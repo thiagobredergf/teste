@@ -366,6 +366,7 @@ const STORE_KEYS = {
   categories: "categories",
   settlementPartners: "settlementPartners",
   periodLocks: "periodLocks",
+  bpoTasks: "bpoTasks",
   selectedEmpresa: "selectedEmpresa",
 };
 
@@ -584,6 +585,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [categories, setCategories] = useState([]);
   const [settlementPartners, setSettlementPartners] = useState([]);
   const [periodLocks, setPeriodLocks] = useState([]);
+  const [bpoTasks, setBpoTasks] = useState([]);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
   const [navQuery, setNavQuery] = useState("");
@@ -615,6 +617,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setCategories(data.categories || []);
       setSettlementPartners(data.settlementPartners || []);
       setPeriodLocks(data.periodLocks || []);
+      setBpoTasks(data.bpoTasks || []);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
       // cards de todas), pra escolher com qual vai trabalhar.
@@ -1355,9 +1358,12 @@ function FinanceiroApp({ userEmail, onLogout }) {
             {view === "rotina" && (
               <RotinaView
                 periodLocks={periodLocks}
+                tasks={bpoTasks}
+                fiscalObligations={fiscalObligations}
                 empresaId={selectedEmpresa}
                 userEmail={userEmail}
                 onSavePeriodLocks={(v) => persist("periodLocks", v, setPeriodLocks)}
+                onSaveTasks={(v) => persist("bpoTasks", v, setBpoTasks)}
               />
             )}
 
@@ -3932,6 +3938,12 @@ function addMonthsToISODate(dateISO, delta) {
   const { y: ny, m: nm } = addMonths(y, m, delta);
   const lastDay = new Date(ny, nm, 0).getDate();
   return isoDate(ny, nm, Math.min(d, lastDay));
+}
+
+function addDaysToISODate(dateISO, days) {
+  const d = new Date(`${dateISO}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 function splitCSVLine(line, delim) {
@@ -7038,7 +7050,35 @@ function fmtCompetencia(comp) {
 /* ---------------------------------------------------------------------- */
 /*  Rotina — controle das ações recorrentes do BPO, por empresa           */
 /* ---------------------------------------------------------------------- */
-function RotinaView({ periodLocks, empresaId, userEmail, onSavePeriodLocks }) {
+const RECORRENCIA_LABEL = { pontual: "Pontual", diaria: "Diária", semanal: "Semanal", mensal: "Mensal" };
+
+function TaskModal({ initial, onClose, onSubmit }) {
+  const [form, setForm] = useState({ titulo: "", recorrencia: "pontual", proximaData: todayISO(), ...initial });
+  const valid = form.titulo.trim() && form.proximaData;
+  return (
+    <Modal title={initial?.id ? "Editar tarefa" : "Nova tarefa"} onClose={onClose}>
+      <div className="grid gap-3">
+        <Field label="Tarefa">
+          <TextInput value={form.titulo} onChange={(e) => setForm({ ...form, titulo: e.target.value })} autoFocus placeholder="Ex.: Conciliar extrato do mês" />
+        </Field>
+        <Field label="Recorrência">
+          <Select value={form.recorrencia} onChange={(e) => setForm({ ...form, recorrencia: e.target.value })}>
+            {Object.entries(RECORRENCIA_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </Select>
+        </Field>
+        <Field label={form.recorrencia === "pontual" ? "Data" : "Próxima ocorrência"}>
+          <TextInput type="date" value={form.proximaData} onChange={(e) => setForm({ ...form, proximaData: e.target.value })} />
+        </Field>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => valid && onSubmit(form)} disabled={!valid}>Salvar</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function RotinaView({ periodLocks, tasks, fiscalObligations, empresaId, userEmail, onSavePeriodLocks, onSaveTasks }) {
   const locksF = periodLocks.filter((l) => l.empresaId === empresaId);
   const lockOf = (competencia) => locksF.find((l) => l.competencia === competencia);
   const isLocked = (competencia) => {
@@ -7076,6 +7116,43 @@ function RotinaView({ periodLocks, empresaId, userEmail, onSavePeriodLocks }) {
     const existing = lockOf(competencia);
     if (!existing) return;
     onSavePeriodLocks(periodLocks.map((l) => (l.id === existing.id ? { ...l, reabertoEm: new Date().toISOString(), reabertoPor: userEmail } : l)));
+  };
+
+  const [taskModal, setTaskModal] = useState(null); // null | {} | tarefa
+  const tasksF = tasks.filter((t) => t.empresaId === empresaId && t.status !== "concluida");
+  // Só obrigação já validada (não "Sugerido", que ainda nem é real) entra
+  // na lista unificada — mistura com as tarefas manuais só pra dar uma
+  // visão única do que precisa acontecer, sem duplicar o dado: concluir a
+  // obrigação em si continua sendo feito no Calendário Fiscal.
+  const fiscalF = fiscalObligations.filter((o) => !o.deletedAt && o.empresaId === empresaId && o.status === "Pendente");
+
+  const itensRotina = [
+    ...tasksF.map((t) => ({ origem: "tarefa", data: t.proximaData, item: t })),
+    ...fiscalF.map((o) => ({ origem: "fiscal", data: o.vencimento, item: o })),
+  ].sort((a, b) => (a.data || "").localeCompare(b.data || ""));
+
+  const saveTask = (form) => {
+    if (form.id) onSaveTasks(tasks.map((t) => (t.id === form.id ? { ...t, ...form } : t)));
+    else onSaveTasks([...tasks, { id: uid(), empresaId, status: "pendente", ...form }]);
+    setTaskModal(null);
+  };
+  const deleteTask = (t) => {
+    if (!confirmDelete(`Excluir a tarefa "${t.titulo}"?`)) return;
+    onSaveTasks(tasks.filter((x) => x.id !== t.id));
+  };
+  // Tarefa pontual concluída some da lista (fica só marcada, pra histórico).
+  // Tarefa recorrente não "termina": avança a própria data pro próximo
+  // ciclo e continua pendente — é assim que ela vira uma rotina de verdade,
+  // sem acumular uma linha nova a cada vez que é feita.
+  const concluirTask = (t) => {
+    const agora = { concluidaEm: new Date().toISOString(), concluidaPor: userEmail };
+    if (t.recorrencia === "pontual") {
+      onSaveTasks(tasks.map((x) => (x.id === t.id ? { ...x, status: "concluida", ...agora } : x)));
+      return;
+    }
+    const dias = { diaria: 1, semanal: 7 }[t.recorrencia];
+    const proximaData = dias ? addDaysToISODate(t.proximaData, dias) : addMonthsToISODate(t.proximaData, 1);
+    onSaveTasks(tasks.map((x) => (x.id === t.id ? { ...x, proximaData, ...agora } : x)));
   };
 
   return (
@@ -7125,6 +7202,63 @@ function RotinaView({ periodLocks, empresaId, userEmail, onSavePeriodLocks }) {
           </tbody>
         </table>
       </ReportCard>
+
+      <ReportCard
+        title="Tarefas e obrigações"
+        subtitle="Tarefas manuais (diárias/semanais/mensais/pontuais) misturadas com as obrigações fiscais já validadas desta empresa — uma visão única do que precisa acontecer."
+      >
+        <div className="flex justify-end mb-2">
+          <Button onClick={() => setTaskModal({})}><Plus size={14} /> Nova tarefa</Button>
+        </div>
+        {itensRotina.length === 0 ? (
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nada pendente por aqui.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-2 py-1.5">Data</th>
+                <th className="text-left font-medium px-2 py-1.5">Item</th>
+                <th className="text-left font-medium px-2 py-1.5">Origem</th>
+                <th className="text-right font-medium px-2 py-1.5">Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {itensRotina.map(({ origem, data, item }) => (
+                <tr key={`${origem}-${item.id}`} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{fmtDate(data)}</td>
+                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{origem === "tarefa" ? item.titulo : item.tributo}</td>
+                  <td className="px-2 py-1.5">
+                    {origem === "tarefa" ? (
+                      <Badge tone="neutral">{RECORRENCIA_LABEL[item.recorrencia]}</Badge>
+                    ) : (
+                      <Badge tone="gold">Fiscal</Badge>
+                    )}
+                  </td>
+                  <td className="px-2 py-1.5 text-right">
+                    {origem === "tarefa" ? (
+                      <div className="flex justify-end gap-1.5">
+                        <Button variant="ghost" onClick={() => concluirTask(item)}><Check size={13} /> Concluir</Button>
+                        <button onClick={() => setTaskModal(item)} title="Editar"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                        <button onClick={() => deleteTask(item)} title="Excluir"><Trash2 size={14} color={COLORS.red} /></button>
+                      </div>
+                    ) : (
+                      <span className="text-xs" style={{ color: COLORS.inkSoft }}>Concluir no Calendário Fiscal</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </ReportCard>
+
+      {taskModal && (
+        <TaskModal
+          initial={taskModal.id ? taskModal : null}
+          onClose={() => setTaskModal(null)}
+          onSubmit={saveTask}
+        />
+      )}
     </div>
   );
 }
