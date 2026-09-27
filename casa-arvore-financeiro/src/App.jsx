@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -367,6 +367,7 @@ const STORE_KEYS = {
   settlementPartners: "settlementPartners",
   periodLocks: "periodLocks",
   bpoTasks: "bpoTasks",
+  timeSessions: "timeSessions",
   selectedEmpresa: "selectedEmpresa",
 };
 
@@ -586,6 +587,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [settlementPartners, setSettlementPartners] = useState([]);
   const [periodLocks, setPeriodLocks] = useState([]);
   const [bpoTasks, setBpoTasks] = useState([]);
+  const [timeSessions, setTimeSessions] = useState([]);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
   const [navQuery, setNavQuery] = useState("");
@@ -618,6 +620,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setSettlementPartners(data.settlementPartners || []);
       setPeriodLocks(data.periodLocks || []);
       setBpoTasks(data.bpoTasks || []);
+      setTimeSessions(data.timeSessions || []);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
       // cards de todas), pra escolher com qual vai trabalhar.
@@ -1360,10 +1363,12 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 periodLocks={periodLocks}
                 tasks={bpoTasks}
                 fiscalObligations={fiscalObligations}
+                timeSessions={timeSessions}
                 empresaId={selectedEmpresa}
                 userEmail={userEmail}
                 onSavePeriodLocks={(v) => persist("periodLocks", v, setPeriodLocks)}
                 onSaveTasks={(v) => persist("bpoTasks", v, setBpoTasks)}
+                onSaveTimeSessions={(v) => persist("timeSessions", v, setTimeSessions)}
               />
             )}
 
@@ -7079,7 +7084,16 @@ function TaskModal({ initial, onClose, onSubmit }) {
   );
 }
 
-function RotinaView({ periodLocks, tasks, fiscalObligations, empresaId, userEmail, onSavePeriodLocks, onSaveTasks }) {
+function fmtDuracao(segundos) {
+  const h = Math.floor(segundos / 3600);
+  const m = Math.floor((segundos % 3600) / 60);
+  return h > 0 ? `${h}h ${String(m).padStart(2, "0")}min` : `${m}min`;
+}
+
+function RotinaView({
+  periodLocks, tasks, fiscalObligations, timeSessions, empresaId, userEmail,
+  onSavePeriodLocks, onSaveTasks, onSaveTimeSessions,
+}) {
   const locksF = periodLocks.filter((l) => l.empresaId === empresaId);
   const lockOf = (competencia) => locksF.find((l) => l.competencia === competencia);
   const isLocked = (competencia) => {
@@ -7155,6 +7169,47 @@ function RotinaView({ periodLocks, tasks, fiscalObligations, empresaId, userEmai
     const proximaData = dias ? addDaysToISODate(t.proximaData, dias) : addMonthsToISODate(t.proximaData, 1);
     onSaveTasks(tasks.map((x) => (x.id === t.id ? { ...x, proximaData, ...agora } : x)));
   };
+
+  // Cronômetro: controle interno de eficiência, nunca visto pelo cliente.
+  // Só uma sessão aberta por usuário — iniciar em outra empresa fecha
+  // sozinho a que estava rodando, pra nunca ficar "esquecida" contando
+  // tempo pra empresa errada.
+  const minhaSessaoAberta = timeSessions.find((s) => s.userEmail === userEmail && !s.fim);
+  const sessoesEmpresa = timeSessions
+    .filter((s) => s.empresaId === empresaId && s.fim)
+    .sort((a, b) => (b.inicio || "").localeCompare(a.inicio || ""));
+
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (!minhaSessaoAberta || minhaSessaoAberta.empresaId !== empresaId) return;
+    const id = setInterval(() => forceTick((n) => n + 1), 30000);
+    return () => clearInterval(id);
+  }, [minhaSessaoAberta?.id, empresaId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const iniciarCronometro = () => {
+    const agora = new Date().toISOString();
+    const outrasFechadas = timeSessions.map((s) => (s.userEmail === userEmail && !s.fim ? { ...s, fim: agora } : s));
+    onSaveTimeSessions([...outrasFechadas, { id: uid(), empresaId, userEmail, inicio: agora }]);
+  };
+
+  const pararCronometro = () => {
+    if (!minhaSessaoAberta) return;
+    onSaveTimeSessions(timeSessions.map((s) => (s.id === minhaSessaoAberta.id ? { ...s, fim: new Date().toISOString() } : s)));
+  };
+
+  const elapsedSeconds = minhaSessaoAberta && minhaSessaoAberta.empresaId === empresaId
+    ? Math.floor((Date.now() - new Date(minhaSessaoAberta.inicio).getTime()) / 1000)
+    : 0;
+
+  const totalEmpresaSeg = sessoesEmpresa.reduce((s, x) => s + (new Date(x.fim) - new Date(x.inicio)) / 1000, 0);
+  const totalPorAnalista = useMemo(() => {
+    const map = new Map();
+    sessoesEmpresa.forEach((s) => {
+      const dur = (new Date(s.fim) - new Date(s.inicio)) / 1000;
+      map.set(s.userEmail, (map.get(s.userEmail) || 0) + dur);
+    });
+    return [...map.entries()].sort((a, b) => b[1] - a[1]);
+  }, [sessoesEmpresa]);
 
   return (
     <div className="space-y-4">
@@ -7251,6 +7306,50 @@ function RotinaView({ periodLocks, tasks, fiscalObligations, empresaId, userEmai
             </tbody>
           </table>
         )}
+      </ReportCard>
+
+      <ReportCard
+        title="Cronômetro"
+        subtitle="Controle interno de eficiência — tempo trabalhado por empresa e por analista. O cliente nunca vê isso; não tem relação nenhuma com cobrança."
+      >
+        {minhaSessaoAberta && minhaSessaoAberta.empresaId === empresaId ? (
+          <div className="flex items-center justify-between">
+            <p className="text-2xl font-semibold tabular-nums" style={{ color: COLORS.ink }}>{fmtDuracao(elapsedSeconds)}</p>
+            <Button variant="subtle" onClick={pararCronometro}><Square size={14} /> Pausar</Button>
+          </div>
+        ) : minhaSessaoAberta ? (
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-sm" style={{ color: COLORS.amber }}>Você tem um cronômetro rodando em outra empresa — iniciar aqui pausa o de lá automaticamente.</p>
+            <Button onClick={iniciarCronometro}><Play size={14} /> Iniciar aqui</Button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between">
+            <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhum cronômetro rodando nesta empresa.</p>
+            <Button onClick={iniciarCronometro}><Play size={14} /> Iniciar</Button>
+          </div>
+        )}
+
+        <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+          <p className="text-xs mb-2" style={{ color: COLORS.inkSoft }}>Total registrado nesta empresa: {fmtDuracao(totalEmpresaSeg)}</p>
+          {totalPorAnalista.length > 0 && (
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                  <th className="text-left font-medium px-2 py-1.5">Analista</th>
+                  <th className="text-right font-medium px-2 py-1.5">Tempo total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {totalPorAnalista.map(([email, seg]) => (
+                  <tr key={email} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{email}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtDuracao(seg)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
       </ReportCard>
 
       {taskModal && (

@@ -25,6 +25,7 @@ const TABLE_NAMES = {
   settlementPartners: "settlement_partners",
   periodLocks: "period_locks",
   bpoTasks: "bpo_tasks",
+  timeSessions: "time_sessions",
 };
 
 // selectedEmpresa é só preferência de navegação de quem está olhando a
