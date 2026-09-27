@@ -1782,6 +1782,16 @@ function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts, 
                   )}
                 </div>
               )}
+              {isGestor && (e.contratoValorMensal || e.contabilidadeNome) && (
+                <div className="pb-3 space-y-1">
+                  {e.contratoValorMensal != null && (
+                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>Contrato: {fmtBRL(e.contratoValorMensal)}/mês{e.contratoRenovacao ? ` · renovação ${e.contratoRenovacao}` : ""}</p>
+                  )}
+                  {e.contabilidadeNome && (
+                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>Contabilidade: {e.contabilidadeNome}{e.contabilidadeContato ? ` (${e.contabilidadeContato})` : ""}</p>
+                  )}
+                </div>
+              )}
               {isGestor && <EmpresaOwnersPanel empresa={e} />}
             </Card>
             );
@@ -2031,6 +2041,42 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
             <TextInput value={form.contatoCelular || ""} onChange={(e) => setForm({ ...form, contatoCelular: e.target.value })} placeholder="(00) 00000-0000" />
           </Field>
         </div>
+
+        <div className="pt-2 mt-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+          <p className="text-sm font-medium mb-3" style={{ color: COLORS.ink }}>Dados operacionais do BPO (uso interno)</p>
+          <div className="grid gap-3">
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="Valor mensal do contrato (R$)">
+                <TextInput type="number" step="0.01" value={form.contratoValorMensal ?? ""} onChange={(e) => setForm({ ...form, contratoValorMensal: e.target.value })} />
+              </Field>
+              <Field label="Início do contrato">
+                <TextInput type="date" value={form.contratoInicio || ""} onChange={(e) => setForm({ ...form, contratoInicio: e.target.value })} />
+              </Field>
+              <Field label="Renovação">
+                <TextInput value={form.contratoRenovacao || ""} onChange={(e) => setForm({ ...form, contratoRenovacao: e.target.value })} placeholder="Ex.: anual, indeterminado" />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Contabilidade responsável">
+                <TextInput value={form.contabilidadeNome || ""} onChange={(e) => setForm({ ...form, contabilidadeNome: e.target.value })} placeholder="Nome do escritório/contador" />
+              </Field>
+              <Field label="Contato da contabilidade">
+                <TextInput value={form.contabilidadeContato || ""} onChange={(e) => setForm({ ...form, contabilidadeContato: e.target.value })} placeholder="Telefone ou e-mail" />
+              </Field>
+            </div>
+            <Field label="Observações / POP (procedimento operacional padrão)">
+              <textarea
+                value={form.observacoesOperacionais || ""}
+                onChange={(e) => setForm({ ...form, observacoesOperacionais: e.target.value })}
+                rows={3}
+                className={inputCls}
+                style={inputStyle}
+                placeholder='Anotações de rotina desse cliente. Nunca anote senha/credencial aqui — só uma referência de onde encontrá-la (ex.: "senha do Simples Nacional está no cofre X").'
+              />
+            </Field>
+          </div>
+        </div>
+
         <Field label="Cor de identificação">
           <div className="flex gap-2 pt-1">
             {EMPRESA_CORES.map((c) => (
@@ -2068,7 +2114,15 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
         </Field>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => form.nome.trim() && onSubmit(form)} disabled={!form.nome.trim()}>Salvar</Button>
+          <Button
+            onClick={() => form.nome.trim() && onSubmit({
+              ...form,
+              contratoValorMensal: form.contratoValorMensal === "" || form.contratoValorMensal == null ? null : Number(form.contratoValorMensal),
+            })}
+            disabled={!form.nome.trim()}
+          >
+            Salvar
+          </Button>
         </div>
       </div>
     </Modal>
