@@ -1393,6 +1393,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 uploads={documentUploads}
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
+                userEmail={userEmail}
                 onSave={(v) => persist("documentUploads", v, setDocumentUploads)}
                 onProcess={processInboxDocument}
                 processError={inboxError}
@@ -7266,10 +7267,14 @@ function RotinaView({ periodLocks, tasks, fiscalObligations, empresaId, userEmai
 /* ---------------------------------------------------------------------- */
 /*  Documentos Recebidos — caixa de entrada do link de upload sem login   */
 /* ---------------------------------------------------------------------- */
-function DocumentUploadsView({ uploads, selectedEmpresa, onSave, onProcess, processError }) {
+function DocumentUploadsView({ uploads, empresas, selectedEmpresa, userEmail, onSave, onProcess, processError }) {
   const [preview, setPreview] = useState(null); // { item, url }
   const [previewError, setPreviewError] = useState("");
   const [processing, setProcessing] = useState(false);
+  const [replyModal, setReplyModal] = useState(null); // item sendo respondido
+  const [replyText, setReplyText] = useState("");
+
+  const empresaAtual = empresas.find((e) => e.id === selectedEmpresa);
 
   const visible = uploads
     .filter((u) => u.empresaId === selectedEmpresa)
@@ -7279,6 +7284,19 @@ function DocumentUploadsView({ uploads, selectedEmpresa, onSave, onProcess, proc
   const remove = (id) => {
     if (!confirmDelete("Excluir este documento da caixa de entrada? O arquivo enviado não pode ser recuperado depois.")) return;
     onSave(uploads.filter((u) => u.id !== id));
+  };
+
+  // A resposta fica salva no histórico (o cliente vê reabrindo o mesmo
+  // link de upload) e, se a empresa tiver celular cadastrado, abre o
+  // WhatsApp com o texto pronto — mesmo padrão zero-custo (wa.me, sem API
+  // paga) já usado no resto do sistema pra notificar o dono.
+  const enviarResposta = () => {
+    if (!replyText.trim()) return;
+    const agora = new Date().toISOString();
+    onSave(uploads.map((u) => (u.id === replyModal.id ? { ...u, respostaGestor: replyText.trim(), respostaEm: agora, respostaPor: userEmail } : u)));
+    if (empresaAtual?.contatoCelular) openWhatsApp(empresaAtual.contatoCelular, replyText.trim());
+    setReplyModal(null);
+    setReplyText("");
   };
 
   const openPreview = async (item) => {
@@ -7301,7 +7319,7 @@ function DocumentUploadsView({ uploads, selectedEmpresa, onSave, onProcess, proc
 
   return (
     <div className="space-y-4">
-      <Header title="Documentos Recebidos" subtitle="Arquivos que os clientes enviaram pelo link de upload, sem precisar logar no sistema." />
+      <Header title="Documentos Recebidos" subtitle="Arquivos e mensagens que os clientes enviaram pelo link sem precisar logar no sistema — responda por aqui, sem expor o financeiro a eles." />
       {processError && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
           <AlertTriangle size={15} /> {processError}
@@ -7311,14 +7329,14 @@ function DocumentUploadsView({ uploads, selectedEmpresa, onSave, onProcess, proc
         {visible.length === 0 ? (
           <EmptyState
             icon={Inbox}
-            title="Nenhum documento recebido"
-            subtitle='Copie o link de upload no ícone "🔗" do card da empresa (tela Empresas) e envie pro cliente — os arquivos que ele mandar aparecem aqui.'
+            title="Nenhum documento ou mensagem recebida"
+            subtitle='Copie o link de upload no ícone "🔗" do card da empresa (tela Empresas) e envie pro cliente — o que ele mandar (arquivo e/ou mensagem) aparece aqui.'
           />
         ) : (
           <table className="w-full text-sm min-w-[720px]">
             <thead>
               <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
-                <th className="text-left font-medium px-4 py-2.5">Arquivo</th>
+                <th className="text-left font-medium px-4 py-2.5">Arquivo / mensagem</th>
                 <th className="text-left font-medium px-4 py-2.5">Recebido</th>
                 <th className="text-left font-medium px-4 py-2.5">Status</th>
                 <th className="text-right font-medium px-4 py-2.5">Ações</th>
@@ -7328,9 +7346,17 @@ function DocumentUploadsView({ uploads, selectedEmpresa, onSave, onProcess, proc
               {visible.map((u) => (
                 <tr key={u.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
                   <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>
-                    <button onClick={() => openPreview(u)} className="hover:underline text-left" title="Visualizar documento e classificar">
-                      {u.fileName}
-                    </button>
+                    {u.fileName && (
+                      <button onClick={() => openPreview(u)} className="hover:underline text-left block" title="Visualizar documento e classificar">
+                        {u.fileName}
+                      </button>
+                    )}
+                    {u.mensagemCliente && (
+                      <p className={u.fileName ? "text-xs mt-0.5" : ""} style={{ color: u.fileName ? COLORS.inkSoft : COLORS.ink }}>{u.mensagemCliente}</p>
+                    )}
+                    {u.respostaGestor && (
+                      <p className="text-xs mt-0.5" style={{ color: COLORS.green }}>Respondido: "{u.respostaGestor}"</p>
+                    )}
                   </td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{timeAgo(u.created_at)}</td>
                   <td className="px-4 py-2.5">
@@ -7338,8 +7364,13 @@ function DocumentUploadsView({ uploads, selectedEmpresa, onSave, onProcess, proc
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
-                      <button onClick={() => openPreview(u)} title="Visualizar documento e classificar" className="p-1.5 rounded-md hover:bg-black/5">
-                        <FileText size={14} color={COLORS.inkSoft} />
+                      {u.fileName && (
+                        <button onClick={() => openPreview(u)} title="Visualizar documento e classificar" className="p-1.5 rounded-md hover:bg-black/5">
+                          <FileText size={14} color={COLORS.inkSoft} />
+                        </button>
+                      )}
+                      <button onClick={() => { setReplyModal(u); setReplyText(u.respostaGestor || ""); }} title="Responder" className="p-1.5 rounded-md hover:bg-black/5">
+                        <MessageCircle size={14} color={COLORS.primary} />
                       </button>
                       <button
                         onClick={() => setStatus(u.id, u.status === "processado" ? "pendente" : "processado")}
@@ -7392,6 +7423,30 @@ function DocumentUploadsView({ uploads, selectedEmpresa, onSave, onProcess, proc
             <Button variant="ghost" onClick={() => setPreview(null)} disabled={processing}>Cancelar</Button>
           </div>
           {processing && <p className="text-xs mt-2" style={{ color: COLORS.inkSoft }}>Lendo documento com IA…</p>}
+        </Modal>
+      )}
+
+      {replyModal && (
+        <Modal title="Responder" onClose={() => setReplyModal(null)}>
+          <div className="grid gap-3">
+            {replyModal.mensagemCliente && (
+              <div className="px-3 py-2 rounded-lg text-sm" style={{ background: "#FAFAF7", color: COLORS.inkSoft }}>
+                "{replyModal.mensagemCliente}"
+              </div>
+            )}
+            <Field label="Sua resposta">
+              <textarea value={replyText} onChange={(e) => setReplyText(e.target.value)} rows={3} className={inputCls} style={inputStyle} autoFocus />
+            </Field>
+            {!empresaAtual?.contatoCelular && (
+              <p className="text-xs" style={{ color: COLORS.amber }}>Essa empresa não tem celular de contato cadastrado — a resposta fica salva no histórico (o cliente vê reabrindo o link de upload), mas não abre o WhatsApp automaticamente.</p>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setReplyModal(null)}>Cancelar</Button>
+              <Button onClick={enviarResposta} disabled={!replyText.trim()}>
+                <MessageCircle size={14} /> {empresaAtual?.contatoCelular ? "Salvar e enviar por WhatsApp" : "Salvar resposta"}
+              </Button>
+            </div>
+          </div>
         </Modal>
       )}
     </div>
@@ -7828,6 +7883,41 @@ function PublicUploadPage({ token }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const [sent, setSent] = useState([]); // [{fileName, empresaNome}]
+  const [chamados, setChamados] = useState([]);
+  const [empresaNomeHist, setEmpresaNomeHist] = useState("");
+  const [mensagem, setMensagem] = useState("");
+  const [sendingMsg, setSendingMsg] = useState(false);
+
+  // Sem login, esse link é a única "identidade" — recarrega o histórico de
+  // chamados dessa empresa toda vez que algo novo é enviado, pra quem
+  // reabrir o mesmo link depois ver a conversa (inclusive resposta do
+  // analista, se já tiver alguma).
+  const loadChamados = async () => {
+    try {
+      const { data } = await supabase.functions.invoke("public-upload", { body: { token, action: "list" } });
+      if (data?.ok) {
+        setChamados(data.chamados || []);
+        setEmpresaNomeHist(data.empresaNome || "");
+      }
+    } catch {
+      // histórico é um extra — se falhar, o envio continua funcionando normalmente
+    }
+  };
+
+  useEffect(() => { loadChamados(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const extractErr = async (err) => {
+    let detail = err.message;
+    if (err.context && typeof err.context.json === "function") {
+      try {
+        const b = await err.context.clone().json();
+        if (b?.error) detail = b.error;
+      } catch {
+        // corpo não era JSON — mantém a mensagem genérica
+      }
+    }
+    return detail;
+  };
 
   const handleFiles = async (fileList) => {
     setError("");
@@ -7844,18 +7934,7 @@ function PublicUploadPage({ token }) {
         const { data, error: err } = await supabase.functions.invoke("public-upload", {
           body: { token, fileBase64, mediaType: file.type, fileName: file.name },
         });
-        if (err) {
-          let detail = err.message;
-          if (err.context && typeof err.context.json === "function") {
-            try {
-              const b = await err.context.clone().json();
-              if (b?.error) detail = b.error;
-            } catch {
-              // corpo não era JSON — mantém a mensagem genérica
-            }
-          }
-          throw new Error(detail);
-        }
+        if (err) throw new Error(await extractErr(err));
         if (!data?.ok) throw new Error(data?.error || "Não consegui enviar o arquivo.");
         setSent((prev) => [...prev, { fileName: file.name, empresaNome: data.empresaNome }]);
       } catch (err) {
@@ -7863,9 +7942,27 @@ function PublicUploadPage({ token }) {
       }
     }
     setUploading(false);
+    loadChamados();
   };
 
-  const empresaNome = sent[0]?.empresaNome;
+  const enviarMensagem = async () => {
+    if (!mensagem.trim()) return;
+    setError("");
+    setSendingMsg(true);
+    try {
+      const { data, error: err } = await supabase.functions.invoke("public-upload", { body: { token, mensagemCliente: mensagem.trim() } });
+      if (err) throw new Error(await extractErr(err));
+      if (!data?.ok) throw new Error(data?.error || "Não consegui enviar a mensagem.");
+      setMensagem("");
+      loadChamados();
+    } catch (err) {
+      setError(err?.message || "Erro ao enviar a mensagem.");
+    } finally {
+      setSendingMsg(false);
+    }
+  };
+
+  const empresaNome = sent[0]?.empresaNome || empresaNomeHist;
 
   return (
     <div className="w-full min-h-screen flex items-center justify-center p-4" style={{ background: COLORS.bg, fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
@@ -7877,7 +7974,7 @@ function PublicUploadPage({ token }) {
           <p className="font-semibold text-base" style={{ color: COLORS.ink }}>ESEK</p>
         </div>
         <p className="text-sm mb-5" style={{ color: COLORS.inkSoft }}>
-          {empresaNome ? `Envio de documentos — ${empresaNome}` : "Envie boletos, notas fiscais e comprovantes pro seu analista, sem precisar de login."}
+          {empresaNome ? `Envio de documentos — ${empresaNome}` : "Envie boletos, notas fiscais, comprovantes ou uma mensagem pro seu analista, sem precisar de login."}
         </p>
 
         <label
@@ -7897,6 +7994,21 @@ function PublicUploadPage({ token }) {
           />
         </label>
 
+        <div className="mt-3 flex gap-2">
+          <textarea
+            value={mensagem}
+            onChange={(e) => setMensagem(e.target.value)}
+            rows={2}
+            placeholder="Ou escreva uma mensagem (ex.: uma dúvida, um recado)…"
+            className={inputCls}
+            style={inputStyle}
+            disabled={sendingMsg}
+          />
+          <Button onClick={enviarMensagem} disabled={sendingMsg || !mensagem.trim()} className="shrink-0 self-end">
+            <MessageCircle size={14} /> Enviar
+          </Button>
+        </div>
+
         {error && (
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm mt-3" style={{ background: COLORS.redSoft, color: COLORS.red }}>
             <AlertTriangle size={15} /> {error}
@@ -7913,8 +8025,30 @@ function PublicUploadPage({ token }) {
           </div>
         )}
 
+        {chamados.length > 0 && (
+          <div className="mt-5 pt-4 space-y-2.5" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+            <p className="text-xs font-medium" style={{ color: COLORS.inkSoft }}>Histórico</p>
+            <div className="max-h-64 overflow-y-auto space-y-2.5">
+              {[...chamados].reverse().map((c) => (
+                <div key={c.id} className="text-sm">
+                  <p style={{ color: COLORS.ink }}>
+                    {c.mensagemCliente || (c.fileName ? `Arquivo enviado: "${c.fileName}"` : "")}
+                  </p>
+                  <p className="text-xs" style={{ color: COLORS.inkSoft }}>{fmtDateTime(c.created_at)}</p>
+                  {c.respostaGestor && (
+                    <div className="mt-1 px-3 py-2 rounded-lg" style={{ background: COLORS.greenSoft }}>
+                      <p style={{ color: COLORS.green }}>{c.respostaGestor}</p>
+                      <p className="text-xs mt-0.5" style={{ color: COLORS.inkSoft }}>Resposta do analista · {fmtDateTime(c.respostaEm)}</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <p className="text-xs mt-5" style={{ color: COLORS.inkSoft }}>
-          Pode enviar mais de um arquivo. Seu analista financeiro vai revisar e lançar cada documento no sistema.
+          Pode enviar mais de um arquivo ou mensagem. Seu analista financeiro vai revisar e responder por aqui.
         </p>
       </Card>
     </div>
