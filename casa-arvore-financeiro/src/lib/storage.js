@@ -23,6 +23,7 @@ const TABLE_NAMES = {
   documentUploads: "documentUploads",
   categories: "categories",
   settlementPartners: "settlement_partners",
+  periodLocks: "period_locks",
 };
 
 // selectedEmpresa é só preferência de navegação de quem está olhando a

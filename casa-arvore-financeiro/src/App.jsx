@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -365,6 +365,7 @@ const STORE_KEYS = {
   documentUploads: "documentUploads",
   categories: "categories",
   settlementPartners: "settlementPartners",
+  periodLocks: "periodLocks",
   selectedEmpresa: "selectedEmpresa",
 };
 
@@ -389,6 +390,54 @@ async function saveKey(key, value) {
     console.error("Erro ao salvar", key, e);
     return false;
   }
+}
+
+// Fechamento mensal (Rotina): qual data de cada entidade representa o "mês"
+// pra efeito de trava — não é sempre a mesma coluna, porque cada lista usa a
+// própria data como referência principal.
+const PERIOD_DATE_FIELD = {
+  payables: (r) => r.dataLanc || r.vencimento,
+  receivables: (r) => r.dataLanc || r.vencimento,
+  bankEntries: (r) => r.data,
+  transfers: (r) => r.data,
+  fiscalObligations: (r) => r.vencimento,
+};
+
+const competenciaOf = (dateStr) => (dateStr || "").slice(0, 7);
+
+// Recusa salvar qualquer linha nova/alterada/excluída cuja data caia dentro
+// de um mês fechado daquela empresa — olha tanto a data antiga quanto a
+// nova (pra ninguém contornar o fechamento só mudando a data do
+// lançamento pra fora do mês travado). Se nada mudou de fato numa linha
+// (mesmo conteúdo de antes), ela passa batido mesmo que esteja num mês
+// fechado — senão toda gravação futura do array inteiro (ex.: adicionar 1
+// lançamento novo em outro mês) esbarraria em meses fechados antigos que
+// nem foram tocados.
+function findLockedViolation(key, oldArray, newArray, periodLocks) {
+  const dateFn = PERIOD_DATE_FIELD[key];
+  if (!dateFn) return null;
+  const lockedSet = new Set(
+    periodLocks.filter((l) => !l.reabertoEm).map((l) => `${l.empresaId}|${l.competencia}`)
+  );
+  if (lockedSet.size === 0) return null;
+
+  const oldById = new Map(oldArray.map((r) => [r.id, r]));
+  for (const row of newArray) {
+    const old = oldById.get(row.id);
+    if (old && JSON.stringify(old) === JSON.stringify(row)) continue;
+    const datesToCheck = old ? [dateFn(old), dateFn(row)] : [dateFn(row)];
+    for (const d of datesToCheck) {
+      const comp = competenciaOf(d);
+      if (comp && lockedSet.has(`${row.empresaId}|${comp}`)) return { competencia: comp };
+    }
+  }
+  const newIds = new Set(newArray.map((r) => r.id));
+  for (const old of oldArray) {
+    if (newIds.has(old.id)) continue;
+    const comp = competenciaOf(dateFn(old));
+    if (comp && lockedSet.has(`${old.empresaId}|${comp}`)) return { competencia: comp };
+  }
+  return null;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -534,6 +583,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [documentUploads, setDocumentUploads] = useState([]);
   const [categories, setCategories] = useState([]);
   const [settlementPartners, setSettlementPartners] = useState([]);
+  const [periodLocks, setPeriodLocks] = useState([]);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
   const [navQuery, setNavQuery] = useState("");
@@ -564,6 +614,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setDocumentUploads(data.documentUploads || []);
       setCategories(data.categories || []);
       setSettlementPartners(data.settlementPartners || []);
+      setPeriodLocks(data.periodLocks || []);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
       // cards de todas), pra escolher com qual vai trabalhar.
@@ -573,12 +624,25 @@ function FinanceiroApp({ userEmail, onLogout }) {
     })();
   }, []);
 
+  // Fechamento mensal: antes de gravar qualquer array financeiro, checa se
+  // alguma linha nova/alterada/excluída cai num mês já fechado da empresa
+  // dela — se cair, recusa o save inteiro (nada é gravado) e mostra o
+  // motivo, em vez de deixar passar e o operador só descobrir depois que
+  // "sumiu" um lançamento do relatório fechado.
   const persist = useCallback(async (key, value, setter) => {
+    const currentArray = { payables, receivables, bankEntries, transfers, fiscalObligations }[key];
+    if (currentArray) {
+      const violation = findLockedViolation(key, currentArray, value, periodLocks);
+      if (violation) {
+        setSaveError(`Não foi possível salvar: o mês ${violation.competencia} está fechado para esta empresa. Reabra o fechamento em "Rotina" antes de editar esse lançamento.`);
+        return;
+      }
+    }
     setter(value);
     const ok = await saveKey(key, value);
     if (!ok) setSaveError("Não foi possível salvar agora. Suas alterações podem não persistir — tente novamente em instantes.");
     else setSaveError(null);
-  }, []);
+  }, [payables, receivables, bankEntries, transfers, fiscalObligations, periodLocks]);
 
   // Toda empresa nova já nasce com o Plano de Contas do segmento dela
   // (ver PLANO_CONTAS_TEMPLATES) — sem isso a empresa ficaria sem
@@ -889,6 +953,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "categories", label: "Plano de Contas", icon: ListTree },
     { id: "reconciliation", label: "Conciliação Bancária", icon: CheckCircle2 },
     ...(role === "gestor" ? [{ id: "settlementPartners", label: "Repasses de Terceiros", icon: Percent }] : []),
+    ...(role === "gestor" ? [{ id: "rotina", label: "Rotina", icon: ListChecks }] : []),
     { id: "reports", label: "Relatórios", icon: FileText },
     { id: "documentUploads", label: "Documentos Recebidos", icon: Inbox },
     { id: "lixeira", label: "Lixeira", icon: Trash2 },
@@ -902,6 +967,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "lancamentos", label: "Lançamentos", icon: Wallet, items: ["payables", "receivables", "bank", "transfers"] },
     { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
     { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "settlementPartners", "reports", "documentUploads", "lixeira"] },
+    ...(role === "gestor" ? [{ id: "rotinaSecao", label: "Rotina", icon: ListChecks, items: ["rotina"] }] : []),
   ].map((s) => ({ ...s, items: s.items.map((id) => navById[id]).filter(Boolean) }));
 
   const activeSection = RAIL_SECTIONS.find((s) => s.items.some((n) => n.id === view)) || RAIL_SECTIONS[0];
@@ -1283,6 +1349,15 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 onSaveContacts={(v) => persist("contacts", v, setContacts)}
                 onSavePayables={(v) => persist("payables", v, setPayables)}
                 onSaveReceivables={(v) => persist("receivables", v, setReceivables)}
+              />
+            )}
+
+            {view === "rotina" && (
+              <RotinaView
+                periodLocks={periodLocks}
+                empresaId={selectedEmpresa}
+                userEmail={userEmail}
+                onSavePeriodLocks={(v) => persist("periodLocks", v, setPeriodLocks)}
               />
             )}
 
@@ -6896,6 +6971,106 @@ function SettlementPartnersView({
           onSubmit={savePartner}
         />
       )}
+    </div>
+  );
+}
+
+const MESES_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+function fmtCompetencia(comp) {
+  const [ano, mes] = (comp || "").split("-");
+  const nome = MESES_PT[Number(mes) - 1];
+  return nome ? `${nome}/${ano}` : comp;
+}
+/* ---------------------------------------------------------------------- */
+/*  Rotina — controle das ações recorrentes do BPO, por empresa           */
+/* ---------------------------------------------------------------------- */
+function RotinaView({ periodLocks, empresaId, userEmail, onSavePeriodLocks }) {
+  const locksF = periodLocks.filter((l) => l.empresaId === empresaId);
+  const lockOf = (competencia) => locksF.find((l) => l.competencia === competencia);
+  const isLocked = (competencia) => {
+    const l = lockOf(competencia);
+    return !!l && !l.reabertoEm;
+  };
+
+  // Últimos 12 meses, do mais recente pro mais antigo — fechar um mês
+  // futuro não faz sentido (ainda não tem lançamento nele), mas não
+  // impeço: quem decide fechar sabe o que está fazendo.
+  const meses = useMemo(() => {
+    const out = [];
+    const base = new Date();
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(base.getFullYear(), base.getMonth() - i, 1);
+      out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    }
+    return out;
+  }, []);
+
+  const fecharMes = (competencia) => {
+    if (!confirmDelete(`Fechar ${fmtCompetencia(competencia)}? Depois de fechado, nenhum lançamento datado dentro desse mês (Contas a Pagar/Receber, Lançamentos Bancários, Transferências, Calendário Fiscal) poderá ser criado, editado, excluído ou baixado até reabrir.`)) return;
+    const existing = lockOf(competencia);
+    if (existing) {
+      onSavePeriodLocks(periodLocks.map((l) => (l.id === existing.id
+        ? { ...l, fechadoEm: new Date().toISOString(), fechadoPor: userEmail, reabertoEm: null, reabertoPor: null }
+        : l)));
+    } else {
+      onSavePeriodLocks([...periodLocks, { id: uid(), empresaId, competencia, fechadoEm: new Date().toISOString(), fechadoPor: userEmail }]);
+    }
+  };
+
+  const reabrirMes = (competencia) => {
+    if (!confirmDelete(`Reabrir ${fmtCompetencia(competencia)}? Os lançamentos desse mês voltam a poder ser editados normalmente.`)) return;
+    const existing = lockOf(competencia);
+    if (!existing) return;
+    onSavePeriodLocks(periodLocks.map((l) => (l.id === existing.id ? { ...l, reabertoEm: new Date().toISOString(), reabertoPor: userEmail } : l)));
+  };
+
+  return (
+    <div className="space-y-4">
+      <Header title="Rotina" subtitle="Controle das ações recorrentes do BPO para esta empresa." />
+
+      <ReportCard
+        title="Fechamento mensal"
+        subtitle='Fecha um mês depois de entregar o relatório ao cliente — protege contra edição/exclusão/baixa acidental de um lançamento que já foi reportado. "Mês" aqui é a data do lançamento (data de lançamento, ou vencimento quando não houver), não a data de pagamento.'
+      >
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+              <th className="text-left font-medium px-2 py-1.5">Mês</th>
+              <th className="text-left font-medium px-2 py-1.5">Situação</th>
+              <th className="text-right font-medium px-2 py-1.5">Ação</th>
+            </tr>
+          </thead>
+          <tbody>
+            {meses.map((m) => {
+              const lock = lockOf(m);
+              const locked = isLocked(m);
+              return (
+                <tr key={m} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                  <td className="px-2 py-1.5 capitalize" style={{ color: COLORS.ink }}>{fmtCompetencia(m)}</td>
+                  <td className="px-2 py-1.5">
+                    {locked ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+                        <Lock size={11} /> Fechado em {fmtDateTime(lock.fechadoEm)} por {lock.fechadoPor}
+                      </span>
+                    ) : lock ? (
+                      <span className="text-xs" style={{ color: COLORS.inkSoft }}>Reaberto em {fmtDateTime(lock.reabertoEm)} por {lock.reabertoPor} (fechado antes em {fmtDateTime(lock.fechadoEm)})</span>
+                    ) : (
+                      <span className="text-xs" style={{ color: COLORS.inkSoft }}>Aberto</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1.5 text-right">
+                    {locked ? (
+                      <Button variant="ghost" onClick={() => reabrirMes(m)}><Unlock size={13} /> Reabrir</Button>
+                    ) : (
+                      <Button variant="subtle" onClick={() => fecharMes(m)}><Lock size={13} /> Fechar mês</Button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </ReportCard>
     </div>
   );
 }
