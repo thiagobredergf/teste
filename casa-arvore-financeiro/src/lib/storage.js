@@ -26,6 +26,8 @@ const TABLE_NAMES = {
   periodLocks: "period_locks",
   bpoTasks: "bpo_tasks",
   timeSessions: "time_sessions",
+  bpoSkills: "bpo_skills",
+  skillRuns: "skill_runs",
 };
 
 // selectedEmpresa é só preferência de navegação de quem está olhando a

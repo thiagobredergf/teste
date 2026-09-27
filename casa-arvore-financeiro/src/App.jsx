@@ -278,6 +278,28 @@ async function callExtractDocument(fileBase64, mediaType, context) {
   return { ...(data.extracted || {}), _truncated: !!data.truncated };
 }
 
+// Roda uma skill da Biblioteca (Hub de Skills) — o prompt já vem com as
+// variáveis {{campo}} substituídas pelo texto que o gestor preencheu; a
+// função escolhe o modelo pelo "tier" (economico/padrao) indicado na
+// própria skill, sem o operador precisar escolher modelo manualmente.
+async function callRunSkill(prompt, tier) {
+  const { data, error } = await supabase.functions.invoke("run-skill", { body: { prompt, tier } });
+  if (error) {
+    let detail = error.message;
+    if (error.context && typeof error.context.json === "function") {
+      try {
+        const body = await error.context.clone().json();
+        if (body?.error) detail = body.error;
+      } catch {
+        // corpo não era JSON — mantém a mensagem genérica
+      }
+    }
+    throw new Error(detail);
+  }
+  if (!data?.ok) throw new Error(data?.error || "Não consegui gerar a análise.");
+  return data.resultado;
+}
+
 // Abre o WhatsApp Web/app com uma mensagem pronta pro celular cadastrado
 // — sem precisar de API/credenciais do WhatsApp Business, é só o link
 // público wa.me. Assume DDI 55 (Brasil) quando o número não vier com um.
@@ -368,6 +390,8 @@ const STORE_KEYS = {
   periodLocks: "periodLocks",
   bpoTasks: "bpoTasks",
   timeSessions: "timeSessions",
+  bpoSkills: "bpoSkills",
+  skillRuns: "skillRuns",
   selectedEmpresa: "selectedEmpresa",
 };
 
@@ -588,6 +612,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [periodLocks, setPeriodLocks] = useState([]);
   const [bpoTasks, setBpoTasks] = useState([]);
   const [timeSessions, setTimeSessions] = useState([]);
+  const [bpoSkills, setBpoSkills] = useState([]);
+  const [skillRuns, setSkillRuns] = useState([]);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
   const [navQuery, setNavQuery] = useState("");
@@ -621,6 +647,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setPeriodLocks(data.periodLocks || []);
       setBpoTasks(data.bpoTasks || []);
       setTimeSessions(data.timeSessions || []);
+      setBpoSkills(data.bpoSkills || []);
+      setSkillRuns(data.skillRuns || []);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
       // cards de todas), pra escolher com qual vai trabalhar.
@@ -960,6 +988,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "reconciliation", label: "Conciliação Bancária", icon: CheckCircle2 },
     ...(role === "gestor" ? [{ id: "settlementPartners", label: "Repasses de Terceiros", icon: Percent }] : []),
     ...(role === "gestor" ? [{ id: "rotina", label: "Rotina", icon: ListChecks }] : []),
+    ...(role === "gestor" ? [{ id: "hubSkills", label: "Hub de Skills", icon: Zap }] : []),
     { id: "reports", label: "Relatórios", icon: FileText },
     { id: "documentUploads", label: "Documentos Recebidos", icon: Inbox },
     { id: "lixeira", label: "Lixeira", icon: Trash2 },
@@ -973,7 +1002,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "lancamentos", label: "Lançamentos", icon: Wallet, items: ["payables", "receivables", "bank", "transfers"] },
     { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
     { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "settlementPartners", "reports", "documentUploads", "lixeira"] },
-    ...(role === "gestor" ? [{ id: "rotinaSecao", label: "Rotina", icon: ListChecks, items: ["rotina"] }] : []),
+    ...(role === "gestor" ? [{ id: "rotinaSecao", label: "Rotina", icon: ListChecks, items: ["rotina", "hubSkills"] }] : []),
   ].map((s) => ({ ...s, items: s.items.map((id) => navById[id]).filter(Boolean) }));
 
   const activeSection = RAIL_SECTIONS.find((s) => s.items.some((n) => n.id === view)) || RAIL_SECTIONS[0];
@@ -1369,6 +1398,17 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 onSavePeriodLocks={(v) => persist("periodLocks", v, setPeriodLocks)}
                 onSaveTasks={(v) => persist("bpoTasks", v, setBpoTasks)}
                 onSaveTimeSessions={(v) => persist("timeSessions", v, setTimeSessions)}
+              />
+            )}
+
+            {view === "hubSkills" && (
+              <HubSkillsView
+                skills={bpoSkills}
+                runs={skillRuns}
+                empresaId={selectedEmpresa}
+                userEmail={userEmail}
+                onSaveSkills={(v) => persist("bpoSkills", v, setBpoSkills)}
+                onSaveRuns={(v) => persist("skillRuns", v, setSkillRuns)}
               />
             )}
 
@@ -7358,6 +7398,305 @@ function RotinaView({
           onClose={() => setTaskModal(null)}
           onSubmit={saveTask}
         />
+      )}
+    </div>
+  );
+}
+
+const NIVEL_BADGE_TONE = { "Básico": "green", "Intermediário": "amber", "Avançado": "gold" };
+const humanizeCampo = (campo) => {
+  const s = (campo || "").replace(/_/g, " ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+};
+
+function SkillModal({ initial, onClose, onSubmit }) {
+  const [form, setForm] = useState({
+    titulo: "", nivel: "Básico", tagsText: "", resumo: "", modelo_sugerido: "", modelo_tier: "padrao", prompt_template: "",
+    ...(initial ? { ...initial, tagsText: (initial.tags || []).join(", ") } : {}),
+  });
+  const valid = form.titulo.trim() && form.prompt_template.trim();
+
+  const submit = () => {
+    const campos = [...new Set([...form.prompt_template.matchAll(/\{\{([a-zA-Z0-9_]+)\}\}/g)].map((m) => m[1]))];
+    const tags = form.tagsText.split(",").map((t) => t.trim()).filter(Boolean);
+    onSubmit({
+      id: form.id,
+      codigo: form.codigo,
+      titulo: form.titulo.trim(),
+      nivel: form.nivel,
+      tags,
+      campos,
+      resumo: form.resumo.trim(),
+      modelo_sugerido: form.modelo_sugerido.trim(),
+      modelo_tier: form.modelo_tier,
+      prompt_template: form.prompt_template,
+    });
+  };
+
+  return (
+    <Modal title={initial ? "Editar skill" : "Nova skill"} onClose={onClose} wide>
+      <div className="grid gap-3">
+        <Field label="Título">
+          <TextInput value={form.titulo} onChange={(e) => setForm({ ...form, titulo: e.target.value })} autoFocus />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Nível">
+            <Select value={form.nivel} onChange={(e) => setForm({ ...form, nivel: e.target.value })}>
+              <option>Básico</option><option>Intermediário</option><option>Avançado</option>
+            </Select>
+          </Field>
+          <Field label="Modelo de IA">
+            <Select value={form.modelo_tier} onChange={(e) => setForm({ ...form, modelo_tier: e.target.value })}>
+              <option value="economico">Econômico (tarefa simples)</option>
+              <option value="padrao">Padrão (raciocínio mais complexo)</option>
+            </Select>
+          </Field>
+        </div>
+        <Field label="Tags (separadas por vírgula)">
+          <TextInput value={form.tagsText} onChange={(e) => setForm({ ...form, tagsText: e.target.value })} placeholder="ex.: dre, análise, resultado" />
+        </Field>
+        <Field label='"O que você recebe" (vitrine, uma linha)'>
+          <TextInput value={form.resumo} onChange={(e) => setForm({ ...form, resumo: e.target.value })} />
+        </Field>
+        <Field label="Modelo sugerido (texto livre, opcional)">
+          <TextInput value={form.modelo_sugerido} onChange={(e) => setForm({ ...form, modelo_sugerido: e.target.value })} />
+        </Field>
+        <Field label="Prompt (use {{campo}} para cada variável a preencher na hora de rodar)">
+          <textarea
+            value={form.prompt_template}
+            onChange={(e) => setForm({ ...form, prompt_template: e.target.value })}
+            rows={12}
+            className={inputCls}
+            style={{ ...inputStyle, fontFamily: "ui-monospace, monospace", fontSize: 13 }}
+          />
+        </Field>
+        <p className="text-xs" style={{ color: COLORS.inkSoft }}>
+          Campos detectados: {[...new Set([...form.prompt_template.matchAll(/\{\{([a-zA-Z0-9_]+)\}\}/g)].map((m) => m[1]))].join(", ") || "nenhum ainda"}
+        </p>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => valid && submit()} disabled={!valid}>Salvar</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function RunSkillModal({ skill, onClose, onRun }) {
+  const [valores, setValores] = useState({});
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState("");
+  const [resultado, setResultado] = useState(null);
+
+  const gerar = async () => {
+    setError("");
+    setRunning(true);
+    try {
+      const texto = await onRun(skill, valores);
+      setResultado(texto);
+    } catch (err) {
+      setError(err?.message || "Erro ao gerar a análise.");
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const copiar = async () => {
+    try {
+      await navigator.clipboard.writeText(resultado);
+    } catch {
+      window.prompt("Copie o texto:", resultado);
+    }
+  };
+
+  return (
+    <Modal title={skill.titulo} onClose={onClose} xwide>
+      {!resultado ? (
+        <div className="grid gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge tone={NIVEL_BADGE_TONE[skill.nivel] || "neutral"}>{skill.nivel}</Badge>
+            {(skill.tags || []).map((t) => <Badge key={t} tone="neutral">{t}</Badge>)}
+          </div>
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>{skill.resumo}</p>
+          {(skill.campos || []).map((campo) => (
+            <Field key={campo} label={humanizeCampo(campo)}>
+              <textarea
+                value={valores[campo] || ""}
+                onChange={(e) => setValores((v) => ({ ...v, [campo]: e.target.value }))}
+                rows={3}
+                className={inputCls}
+                style={inputStyle}
+                placeholder="Cole ou digite os dados aqui"
+              />
+            </Field>
+          ))}
+          {error && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+              <AlertTriangle size={15} /> {error}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+            <Button onClick={gerar} disabled={running}>
+              <Sparkles size={14} /> {running ? "Gerando…" : "Gerar análise"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          <div className="rounded-lg p-4 whitespace-pre-wrap text-sm max-h-[60vh] overflow-y-auto" style={{ background: "#FAFAF7", border: `1px solid ${COLORS.border}`, color: COLORS.ink }}>
+            {resultado}
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setResultado(null)}>Rodar de novo</Button>
+            <Button variant="subtle" onClick={copiar}><Copy size={14} /> Copiar</Button>
+            <Button onClick={onClose}>Fechar</Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function HubSkillsView({ skills, runs, empresaId, userEmail, onSaveSkills, onSaveRuns }) {
+  const [nivelFiltro, setNivelFiltro] = useState("");
+  const [busca, setBusca] = useState("");
+  const [skillModal, setSkillModal] = useState(null); // null | {} | skill
+  const [runModal, setRunModal] = useState(null); // skill
+  const [viewRun, setViewRun] = useState(null); // run sendo visualizada
+
+  const skillsFiltradas = skills
+    .filter((s) => !nivelFiltro || s.nivel === nivelFiltro)
+    .filter((s) => {
+      if (!busca.trim()) return true;
+      const alvo = `${s.titulo} ${(s.tags || []).join(" ")}`.toLowerCase();
+      return alvo.includes(busca.trim().toLowerCase());
+    })
+    .sort((a, b) => (a.codigo || "").localeCompare(b.codigo || ""));
+
+  const runsEmpresa = runs
+    .filter((r) => r.empresaId === empresaId)
+    .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+
+  const saveSkill = (form) => {
+    if (form.id) {
+      onSaveSkills(skills.map((s) => (s.id === form.id ? { ...s, ...form } : s)));
+    } else {
+      const id = uid();
+      onSaveSkills([...skills, { ...form, id, codigo: id.toUpperCase() }]);
+    }
+    setSkillModal(null);
+  };
+
+  const deleteSkill = (s) => {
+    if (!confirmDelete(`Excluir a skill "${s.titulo}"? Isso não apaga o histórico de análises já geradas com ela.`)) return;
+    onSaveSkills(skills.filter((x) => x.id !== s.id));
+  };
+
+  // Monta o prompt final substituindo cada {{campo}} pelo texto preenchido,
+  // chama a IA, e já grava no histórico dessa empresa — pra quem quiser
+  // revisitar a análise depois sem ter que rodar de novo.
+  const executarSkill = async (skill, valores) => {
+    const promptFinal = (skill.campos || []).reduce(
+      (txt, campo) => txt.split(`{{${campo}}}`).join(valores[campo] || ""),
+      skill.prompt_template
+    );
+    const resultado = await callRunSkill(promptFinal, skill.modelo_tier);
+    onSaveRuns([...runs, {
+      id: uid(), empresaId, skillId: skill.id, skillCodigo: skill.codigo, skillTitulo: skill.titulo,
+      camposPreenchidos: valores, resultado, userEmail,
+    }]);
+    return resultado;
+  };
+
+  return (
+    <div className="space-y-4">
+      <Header title="Hub de Skills" subtitle="Biblioteca de prompts prontos de gestão financeira/contábil — gere uma análise sob demanda pra apresentar ao dono da empresa.">
+        <Button onClick={() => setSkillModal({})}><Plus size={15} /> Nova skill</Button>
+      </Header>
+
+      <Card className="p-4">
+        <div className="flex items-end gap-3 flex-wrap">
+          <Field label="Nível">
+            <Select value={nivelFiltro} onChange={(e) => setNivelFiltro(e.target.value)}>
+              <option value="">Todos</option>
+              <option>Básico</option><option>Intermediário</option><option>Avançado</option>
+            </Select>
+          </Field>
+          <Field label="Buscar por título ou tag">
+            <TextInput value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="ex.: fluxo de caixa, inadimplência..." />
+          </Field>
+        </div>
+      </Card>
+
+      {skillsFiltradas.length === 0 ? (
+        <EmptyState icon={Sparkles} title="Nenhuma skill encontrada" subtitle="Ajuste o filtro ou cadastre uma nova skill." />
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {skillsFiltradas.map((s) => (
+            <Card key={s.id} className="p-4 flex flex-col gap-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-mono" style={{ color: COLORS.inkSoft }}>{s.codigo}</p>
+                  <p className="font-medium text-sm" style={{ color: COLORS.ink }}>{s.titulo}</p>
+                </div>
+                <div className="flex gap-1 shrink-0">
+                  <button title="Editar" onClick={() => setSkillModal(s)}><Pencil size={14} color={COLORS.inkSoft} /></button>
+                  <button title="Excluir" onClick={() => deleteSkill(s)}><Trash2 size={14} color={COLORS.red} /></button>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Badge tone={NIVEL_BADGE_TONE[s.nivel] || "neutral"}>{s.nivel}</Badge>
+                {(s.tags || []).slice(0, 3).map((t) => <Badge key={t} tone="neutral">{t}</Badge>)}
+              </div>
+              <p className="text-xs flex-1" style={{ color: COLORS.inkSoft }}>{s.resumo}</p>
+              <Button onClick={() => setRunModal(s)}><Sparkles size={14} /> Usar</Button>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <ReportCard title="Histórico de análises geradas" subtitle="Por esta empresa — reabra sem precisar rodar de novo.">
+        {runsEmpresa.length === 0 ? (
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma análise gerada ainda para esta empresa.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-2 py-1.5">Data</th>
+                <th className="text-left font-medium px-2 py-1.5">Skill</th>
+                <th className="text-left font-medium px-2 py-1.5">Quem gerou</th>
+                <th className="text-right font-medium px-2 py-1.5">Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runsEmpresa.map((r) => (
+                <tr key={r.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{fmtDateTime(r.created_at)}</td>
+                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{r.skillCodigo} — {r.skillTitulo}</td>
+                  <td className="px-2 py-1.5" style={{ color: COLORS.inkSoft }}>{r.userEmail}</td>
+                  <td className="px-2 py-1.5 text-right">
+                    <Button variant="ghost" onClick={() => setViewRun(r)}>Ver</Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </ReportCard>
+
+      {skillModal && (
+        <SkillModal initial={skillModal.id ? skillModal : null} onClose={() => setSkillModal(null)} onSubmit={saveSkill} />
+      )}
+      {runModal && (
+        <RunSkillModal skill={runModal} onClose={() => setRunModal(null)} onRun={executarSkill} />
+      )}
+      {viewRun && (
+        <Modal title={`${viewRun.skillCodigo} — ${viewRun.skillTitulo}`} onClose={() => setViewRun(null)} xwide>
+          <div className="rounded-lg p-4 whitespace-pre-wrap text-sm max-h-[70vh] overflow-y-auto" style={{ background: "#FAFAF7", border: `1px solid ${COLORS.border}`, color: COLORS.ink }}>
+            {viewRun.resultado}
+          </div>
+        </Modal>
       )}
     </div>
   );
