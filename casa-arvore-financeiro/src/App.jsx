@@ -431,6 +431,16 @@ const PERIOD_DATE_FIELD = {
 
 const competenciaOf = (dateStr) => (dateStr || "").slice(0, 7);
 
+// Telas que contam como "trabalho de rotina numa empresa" pro cronômetro
+// automático — as operacionais do dia a dia mais o próprio Fechamento e a
+// auditoria de Pendências daquela empresa. Visão Geral/Resumo/Painel/ADM/
+// Relatórios/Hub de Skills ficam de fora: não são "rotina" de uma empresa
+// específica.
+const ROTINA_TRACK_VIEWS = new Set([
+  "documentUploads", "reconciliation", "accounts", "contacts", "payables", "receivables",
+  "bank", "transfers", "settlementPartners", "fiscal", "categories", "fechamento", "pendencias",
+]);
+
 // Recusa salvar qualquer linha nova/alterada/excluída cuja data caia dentro
 // de um mês fechado daquela empresa — olha tanto a data antiga quanto a
 // nova (pra ninguém contornar o fechamento só mudando a data do
@@ -704,6 +714,29 @@ function FinanceiroApp({ userEmail, onLogout }) {
       recDue.forEach((r) => logAudit(r.empresaId, "receivable", r.id, "baixa_automatica", `Confirmação automática no vencimento — ${fmtBRL(r.valor)} em ${fmtDate(r.vencimento)}`, "sistema"));
     }
   }, [ready, payables, receivables, persist]);
+
+  // Cronômetro automático: abre uma sessão em time_sessions quando o
+  // usuário passa a ter uma empresa selecionada e está numa tela de
+  // ROTINA_TRACK_VIEWS, e fecha quando isso deixa de ser verdade (mudou de
+  // empresa, saiu pra uma tela não-operacional, ou é dono — que não tem
+  // "rotina" cronometrada). Sem botão Iniciar/Pausar: é o próprio uso do
+  // sistema que liga e desliga o relógio. Só uma sessão aberta por usuário
+  // — trocar de empresa no meio do trabalho fecha sozinho a de antes.
+  useEffect(() => {
+    if (!ready || role === "owner") return;
+    const devoContar = !!selectedEmpresa && ROTINA_TRACK_VIEWS.has(view);
+    const aberta = timeSessions.find((s) => s.userEmail === userEmail && !s.fim);
+
+    if (devoContar) {
+      if (aberta && aberta.empresaId === selectedEmpresa) return;
+      const agora = new Date().toISOString();
+      const semAberta = timeSessions.filter((s) => !(s.userEmail === userEmail && !s.fim));
+      const comAntigaFechada = aberta ? [...semAberta, { ...aberta, fim: agora }] : semAberta;
+      persist("timeSessions", [...comAntigaFechada, { id: uid(), empresaId: selectedEmpresa, userEmail, inicio: agora }], setTimeSessions);
+    } else if (aberta) {
+      persist("timeSessions", timeSessions.map((s) => (s.id === aberta.id ? { ...s, fim: new Date().toISOString() } : s)), setTimeSessions);
+    }
+  }, [ready, role, selectedEmpresa, view, userEmail, timeSessions, persist]);
 
   // Toda empresa nova já nasce com o Plano de Contas do segmento dela
   // (ver PLANO_CONTAS_TEMPLATES) — sem isso a empresa ficaria sem
@@ -1043,6 +1076,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "documentUploads", label: "Documentos Recebidos", icon: Inbox },
     ...(role === "gestor" ? [{ id: "lixeira", label: "Lixeira", icon: Trash2 }] : []),
     ...(role === "gestor" ? [{ id: "adm", label: "ADM", icon: ShieldCheck }] : []),
+    ...(role === "gestor" ? [{ id: "produtividade", label: "Produtividade", icon: TrendingUp }] : []),
   ];
   const navById = Object.fromEntries(nav.map((n) => [n.id, n]));
 
@@ -1063,7 +1097,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     }] : []),
     // Acompanhamento: o que o Dono/Sócio acompanha da própria empresa.
     ...(role === "owner" ? [{ id: "acompanhamento", label: "Acompanhamento", icon: Inbox, items: ["documentUploads", "payables"] }] : []),
-    ...(role === "gestor" ? [{ id: "admSecao", label: "ADM", icon: ShieldCheck, items: ["adm"] }] : []),
+    ...(role === "gestor" ? [{ id: "admSecao", label: "ADM", icon: ShieldCheck, items: ["adm", "produtividade"] }] : []),
   ].map((s) => ({ ...s, items: s.items.map((id) => navById[id]).filter(Boolean) }));
 
   const activeSection = RAIL_SECTIONS.find((s) => s.items.some((n) => n.id === view)) || RAIL_SECTIONS[0];
@@ -1478,7 +1512,6 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 userEmail={userEmail}
                 onSavePeriodLocks={(v) => persist("periodLocks", v, setPeriodLocks)}
                 onSaveTasks={(v) => persist("bpoTasks", v, setBpoTasks)}
-                onSaveTimeSessions={(v) => persist("timeSessions", v, setTimeSessions)}
               />
             )}
 
@@ -1494,6 +1527,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
             )}
 
             {view === "adm" && <AdmView role={role} empresas={empresasAtivas} />}
+
+            {view === "produtividade" && <ProdutividadeView role={role} empresas={empresasAtivas} timeSessions={timeSessions} />}
 
             {view === "reports" && (
               <ReportsView
@@ -2338,6 +2373,174 @@ function StaffAccessModal({ usuario, empresas, empresaIdsAtuais, onClose, onSubm
         </div>
       </div>
     </Modal>
+  );
+}
+
+// Produtividade: cruza o cronômetro automático (tempo) com o log de
+// auditoria (quantidade de ações — baixa, agendar, autorizar, etc., já
+// registradas em todo lançamento) por analista e por empresa. Existe pro
+// gestor achar gargalo (quem/qual empresa consome mais tempo do que devia)
+// ou desequilíbrio de carteira — nunca é visto pelo cliente.
+function ProdutividadeView({ role, empresas = [], timeSessions = [] }) {
+  const [profiles, setProfiles] = useState(null);
+  const [logs, setLogs] = useState(null);
+  const [mes, setMes] = useState(""); // "" = todo o período
+
+  useEffect(() => {
+    (async () => {
+      const { data: profs } = await supabase.from("profiles").select("id, email, nome, role");
+      setProfiles(profs || []);
+      const { data: rows } = await supabase
+        .from("auditLog")
+        .select("empresaId, userEmail, created_at")
+        .order("created_at", { ascending: false })
+        .limit(5000);
+      setLogs(rows || []);
+    })();
+  }, []);
+
+  const meses = useMemo(() => {
+    const out = [];
+    const base = new Date();
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(base.getFullYear(), base.getMonth() - i, 1);
+      out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    }
+    return out;
+  }, []);
+
+  if (role !== "gestor") {
+    return <EmptyState icon={ShieldCheck} title="Só gestor acessa Produtividade" subtitle="Peça pra um gestor consultar tempo e ações por analista/empresa." />;
+  }
+  if (profiles === null || logs === null) {
+    return <p className="text-sm" style={{ color: COLORS.inkSoft }}>Carregando…</p>;
+  }
+
+  const nomePorEmail = new Map(profiles.map((p) => [p.email, p.nome || p.email]));
+  const empresaNome = (id) => empresas.find((e) => e.id === id)?.nome || id;
+
+  const sessoesF = timeSessions.filter((s) => s.fim && (!mes || (s.inicio || "").slice(0, 7) === mes));
+  const logsF = (logs || []).filter((l) => l.userEmail !== "sistema" && (!mes || (l.created_at || "").slice(0, 7) === mes));
+
+  const acumular = (chave) => {
+    const map = new Map();
+    sessoesF.forEach((s) => {
+      const k = chave === "analista" ? s.userEmail : s.empresaId;
+      if (!map.has(k)) map.set(k, { segundos: 0, acoes: 0 });
+      map.get(k).segundos += (new Date(s.fim) - new Date(s.inicio)) / 1000;
+    });
+    logsF.forEach((l) => {
+      const k = chave === "analista" ? l.userEmail : l.empresaId;
+      if (!map.has(k)) map.set(k, { segundos: 0, acoes: 0 });
+      map.get(k).acoes += 1;
+    });
+    return [...map.entries()].sort((a, b) => b[1].segundos - a[1].segundos);
+  };
+
+  const porAnalista = acumular("analista");
+  const porEmpresa = acumular("empresa");
+
+  const chartAnalista = porAnalista.map(([email, v]) => ({ nome: nomePorEmail.get(email) || email, Horas: +(v.segundos / 3600).toFixed(1) }));
+  const chartEmpresa = porEmpresa.map(([id, v]) => ({ nome: empresaNome(id), Horas: +(v.segundos / 3600).toFixed(1) }));
+
+  return (
+    <div className="space-y-4">
+      <Header title="Produtividade" subtitle="Tempo (cronômetro automático) e ações registradas, por analista e por empresa — controle interno, nunca visto pelo cliente.">
+        <Select value={mes} onChange={(e) => setMes(e.target.value)} style={{ width: 180 }}>
+          <option value="">Todo o período</option>
+          {meses.map((m) => <option key={m} value={m}>{fmtCompetencia(m)}</option>)}
+        </Select>
+      </Header>
+
+      <div className="grid md:grid-cols-2 gap-3">
+        <Card className="p-4">
+          <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.ink }}>Horas por analista</h2>
+          {chartAnalista.length === 0 ? (
+            <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft }}>Sem cronômetro registrado nesse período.</p>
+          ) : (
+            <div style={{ width: "100%", height: 220 }}>
+              <ResponsiveContainer>
+                <ComposedChart data={chartAnalista} layout="vertical" margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 11, fill: COLORS.inkSoft }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
+                  <YAxis type="category" dataKey="nome" tick={{ fontSize: 12, fill: COLORS.inkSoft }} axisLine={false} tickLine={false} width={110} />
+                  <Tooltip formatter={(v) => `${v} h`} contentStyle={{ borderRadius: 8, border: `1px solid ${COLORS.border}`, fontSize: 12 }} />
+                  <Bar dataKey="Horas" fill={COLORS.primary} radius={[0, 3, 3, 0]} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </Card>
+        <Card className="p-4">
+          <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.ink }}>Horas por empresa</h2>
+          {chartEmpresa.length === 0 ? (
+            <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft }}>Sem cronômetro registrado nesse período.</p>
+          ) : (
+            <div style={{ width: "100%", height: 220 }}>
+              <ResponsiveContainer>
+                <ComposedChart data={chartEmpresa} layout="vertical" margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 11, fill: COLORS.inkSoft }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
+                  <YAxis type="category" dataKey="nome" tick={{ fontSize: 12, fill: COLORS.inkSoft }} axisLine={false} tickLine={false} width={110} />
+                  <Tooltip formatter={(v) => `${v} h`} contentStyle={{ borderRadius: 8, border: `1px solid ${COLORS.border}`, fontSize: 12 }} />
+                  <Bar dataKey="Horas" fill={COLORS.gold} radius={[0, 3, 3, 0]} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <ReportCard title="Detalhe por analista" subtitle="Tempo total (cronômetro automático) e quantidade de ações registradas (baixas, agendamentos, autorizações...) no período.">
+        {porAnalista.length === 0 ? (
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nada registrado nesse período.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-2 py-1.5">Analista</th>
+                <th className="text-right font-medium px-2 py-1.5">Tempo</th>
+                <th className="text-right font-medium px-2 py-1.5">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {porAnalista.map(([email, v]) => (
+                <tr key={email} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{nomePorEmail.get(email) || email}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtDuracao(v.segundos)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{v.acoes}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </ReportCard>
+
+      <ReportCard title="Detalhe por empresa" subtitle="Quais clientes consomem mais tempo/ações — ajuda a identificar gargalo ou carteira desequilibrada entre analistas.">
+        {porEmpresa.length === 0 ? (
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nada registrado nesse período.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-2 py-1.5">Empresa</th>
+                <th className="text-right font-medium px-2 py-1.5">Tempo</th>
+                <th className="text-right font-medium px-2 py-1.5">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {porEmpresa.map(([id, v]) => (
+                <tr key={id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{empresaNome(id)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtDuracao(v.segundos)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{v.acoes}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </ReportCard>
+    </div>
   );
 }
 
@@ -7731,7 +7934,7 @@ function RotinaView({
   periodLocks, tasks, fiscalObligations, timeSessions,
   payables, receivables, bankEntries, transfers,
   empresaId, empresaNome, userEmail,
-  onSavePeriodLocks, onSaveTasks, onSaveTimeSessions,
+  onSavePeriodLocks, onSaveTasks,
 }) {
   const locksF = periodLocks.filter((l) => l.empresaId === empresaId);
   const lockOf = (competencia) => locksF.find((l) => l.competencia === competencia);
@@ -7843,9 +8046,9 @@ function RotinaView({
   };
 
   // Cronômetro: controle interno de eficiência, nunca visto pelo cliente.
-  // Só uma sessão aberta por usuário — iniciar em outra empresa fecha
-  // sozinho a que estava rodando, pra nunca ficar "esquecida" contando
-  // tempo pra empresa errada.
+  // Automático desde a Etapa de produtividade — liga/desliga sozinho
+  // conforme o usuário navega (ver ROTINA_TRACK_VIEWS no FinanceiroApp),
+  // então aqui só exibe o que já está registrado, sem botão nenhum.
   const minhaSessaoAberta = timeSessions.find((s) => s.userEmail === userEmail && !s.fim);
   const sessoesEmpresa = timeSessions
     .filter((s) => s.empresaId === empresaId && s.fim)
@@ -7857,17 +8060,6 @@ function RotinaView({
     const id = setInterval(() => forceTick((n) => n + 1), 30000);
     return () => clearInterval(id);
   }, [minhaSessaoAberta?.id, empresaId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const iniciarCronometro = () => {
-    const agora = new Date().toISOString();
-    const outrasFechadas = timeSessions.map((s) => (s.userEmail === userEmail && !s.fim ? { ...s, fim: agora } : s));
-    onSaveTimeSessions([...outrasFechadas, { id: uid(), empresaId, userEmail, inicio: agora }]);
-  };
-
-  const pararCronometro = () => {
-    if (!minhaSessaoAberta) return;
-    onSaveTimeSessions(timeSessions.map((s) => (s.id === minhaSessaoAberta.id ? { ...s, fim: new Date().toISOString() } : s)));
-  };
 
   const elapsedSeconds = minhaSessaoAberta && minhaSessaoAberta.empresaId === empresaId
     ? Math.floor((Date.now() - new Date(minhaSessaoAberta.inicio).getTime()) / 1000)
@@ -8030,23 +8222,18 @@ function RotinaView({
 
       <ReportCard
         title="Cronômetro"
-        subtitle="Controle interno de eficiência — tempo trabalhado por empresa e por analista. O cliente nunca vê isso; não tem relação nenhuma com cobrança."
+        subtitle="Controle interno de eficiência — tempo trabalhado por empresa e por analista, contado automaticamente conforme o uso do sistema. O cliente nunca vê isso; não tem relação nenhuma com cobrança."
       >
         {minhaSessaoAberta && minhaSessaoAberta.empresaId === empresaId ? (
-          <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: COLORS.green }} />
             <p className="text-2xl font-semibold tabular-nums" style={{ color: COLORS.ink }}>{fmtDuracao(elapsedSeconds)}</p>
-            <Button variant="subtle" onClick={pararCronometro}><Square size={14} /> Pausar</Button>
-          </div>
-        ) : minhaSessaoAberta ? (
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <p className="text-sm" style={{ color: COLORS.amber }}>Você tem um cronômetro rodando em outra empresa — iniciar aqui pausa o de lá automaticamente.</p>
-            <Button onClick={iniciarCronometro}><Play size={14} /> Iniciar aqui</Button>
+            <p className="text-xs" style={{ color: COLORS.inkSoft }}>contando automaticamente</p>
           </div>
         ) : (
-          <div className="flex items-center justify-between">
-            <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhum cronômetro rodando nesta empresa.</p>
-            <Button onClick={iniciarCronometro}><Play size={14} /> Iniciar</Button>
-          </div>
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>
+            Nenhum cronômetro rodando nesta empresa agora — começa sozinho quando você abre uma tela de rotina (Documentos, Conciliação, Contas a Pagar/Receber, Lançamentos, Fechamento, Pendências…).
+          </p>
         )}
 
         <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${COLORS.border}` }}>
