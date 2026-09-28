@@ -992,6 +992,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "reports", label: "Relatórios", icon: FileText },
     { id: "documentUploads", label: "Documentos Recebidos", icon: Inbox },
     { id: "lixeira", label: "Lixeira", icon: Trash2 },
+    ...(role === "gestor" ? [{ id: "adm", label: "ADM", icon: ShieldCheck }] : []),
   ];
   const navById = Object.fromEntries(nav.map((n) => [n.id, n]));
 
@@ -1003,6 +1004,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
     { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "settlementPartners", "reports", "documentUploads", "lixeira"] },
     ...(role === "gestor" ? [{ id: "rotinaSecao", label: "Rotina", icon: ListChecks, items: ["rotina", "hubSkills"] }] : []),
+    ...(role === "gestor" ? [{ id: "admSecao", label: "ADM", icon: ShieldCheck, items: ["adm"] }] : []),
   ].map((s) => ({ ...s, items: s.items.map((id) => navById[id]).filter(Boolean) }));
 
   const activeSection = RAIL_SECTIONS.find((s) => s.items.some((n) => n.id === view)) || RAIL_SECTIONS[0];
@@ -1411,6 +1413,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 onSaveRuns={(v) => persist("skillRuns", v, setSkillRuns)}
               />
             )}
+
+            {view === "adm" && <AdmView role={role} />}
 
             {view === "reports" && (
               <ReportsView
@@ -1981,6 +1985,180 @@ function EmpresaOwnersPanel({ empresa }) {
   );
 }
 
+async function extractFunctionError(err) {
+  let detail = err.message;
+  if (err.context && typeof err.context.json === "function") {
+    try { const b = await err.context.clone().json(); if (b?.error) detail = b.error; } catch { /* corpo não era JSON */ }
+  }
+  return detail;
+}
+
+function NovoUsuarioModal({ onClose, onSubmit, busy }) {
+  const [form, setForm] = useState({ email: "", nome: "", cpf: "", role: "operador" });
+  const valid = form.email.trim() && form.nome.trim();
+  return (
+    <Modal title="Novo usuário" onClose={onClose}>
+      <div className="grid gap-3">
+        <Field label="Nome">
+          <TextInput value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} autoFocus />
+        </Field>
+        <Field label="E-mail">
+          <TextInput type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+        </Field>
+        <Field label="CPF (opcional)">
+          <TextInput value={form.cpf} onChange={(e) => setForm({ ...form, cpf: formatCPF(e.target.value) })} placeholder="000.000.000-00" />
+        </Field>
+        <Field label="Papel">
+          <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+            <option value="operador">Operador (rotina do dia a dia do BPO)</option>
+            <option value="gestor">Gestor (supervisão + ADM)</option>
+          </Select>
+        </Field>
+        <p className="text-xs" style={{ color: COLORS.inkSoft }}>
+          Pra dar acesso a um Dono/Sócio, use o ícone de link na tela Empresas — lá o acesso já nasce vinculado à empresa certa.
+        </p>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => valid && onSubmit(form)} disabled={!valid || busy}>{busy ? "Criando…" : "Criar usuário"}</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function AdmView({ role }) {
+  const [users, setUsers] = useState(null);
+  const [empresasByOwner, setEmpresasByOwner] = useState({});
+  const [modal, setModal] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [tempCred, setTempCred] = useState(null);
+
+  const load = useCallback(async () => {
+    const { data, error: err } = await supabase.from("profiles").select("id, email, role, nome, cpf").order("email");
+    if (err) { setUsers([]); return; }
+    setUsers(data || []);
+    const { data: owners } = await supabase.from("empresa_owners").select("user_id, empresas(nome)");
+    const map = {};
+    (owners || []).forEach((o) => {
+      const nomeEmpresa = o.empresas?.nome;
+      if (!nomeEmpresa) return;
+      map[o.user_id] = [...(map[o.user_id] || []), nomeEmpresa];
+    });
+    setEmpresasByOwner(map);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const criarUsuario = async (form) => {
+    setBusy(true);
+    setError("");
+    setTempCred(null);
+    const { data, error: err } = await supabase.functions.invoke("manage-staff-login", {
+      body: { email: form.email.trim(), nome: form.nome.trim(), cpf: form.cpf.trim(), role: form.role },
+    });
+    setBusy(false);
+    if (err) { setError(await extractFunctionError(err)); return; }
+    if (data?.tempPassword) setTempCred({ email: form.email.trim(), password: data.tempPassword });
+    setModal(null);
+    load();
+  };
+
+  // Owner não passa por aqui — vira dono vinculando ele a uma empresa
+  // específica na tela Empresas (é lá que faz sentido escolher qual
+  // empresa), não soltando um dono sem empresa nenhuma no ADM.
+  const mudarPapel = async (u, novoPapel) => {
+    if (novoPapel === u.role) return;
+    if (u.role === "gestor" && users.filter((x) => x.role === "gestor").length <= 1) {
+      if (!confirmDelete(`"${u.email}" é o único gestor do sistema — trocar o papel dele pode tirar o acesso ao ADM de todo mundo. Continuar mesmo assim?`)) return;
+    }
+    setError("");
+    const { error: err } = await supabase.rpc("upsert_staff_profile", { p_email: u.email, p_role: novoPapel, p_nome: u.nome, p_cpf: u.cpf });
+    if (err) { setError(err.message); return; }
+    load();
+  };
+
+  const resetSenha = async (u) => {
+    if (!confirmDelete(`Gerar uma nova senha temporária pra "${u.email}"? A senha antiga dela deixa de funcionar.`)) return;
+    setError("");
+    setTempCred(null);
+    const { data, error: err } = await supabase.functions.invoke("manage-staff-login", { body: { email: u.email, resetPassword: true } });
+    if (err) { setError(await extractFunctionError(err)); return; }
+    if (data?.tempPassword) setTempCred({ email: u.email, password: data.tempPassword });
+  };
+
+  if (role !== "gestor") {
+    return <EmptyState icon={ShieldCheck} title="Só gestor acessa o ADM" subtitle="Peça pra um gestor gerenciar usuários e papéis de acesso." />;
+  }
+
+  return (
+    <div className="space-y-4">
+      <Header title="ADM" subtitle="Cadastro de usuários, papel de acesso (Gestor, Operador ou Dono) e troca de senha.">
+        <Button onClick={() => setModal({})}><Plus size={15} /> Novo usuário</Button>
+      </Header>
+
+      {error && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+          <AlertTriangle size={15} /> {error}
+        </div>
+      )}
+      {tempCred && (
+        <div className="p-3 rounded-lg text-sm" style={{ background: COLORS.goldSoft }}>
+          <p className="font-medium mb-1" style={{ color: COLORS.ink }}>Credencial gerada — repassa agora, não aparece de novo:</p>
+          <p style={{ color: COLORS.ink }}>Login: <span className="font-mono">{tempCred.email}</span> · Senha: <span className="font-mono font-semibold">{tempCred.password}</span></p>
+          <Button variant="ghost" className="mt-1.5" onClick={() => setTempCred(null)}>Ok, guardei</Button>
+        </div>
+      )}
+
+      <Card className="overflow-x-auto">
+        {users === null ? (
+          <p className="text-sm p-4" style={{ color: COLORS.inkSoft }}>Carregando…</p>
+        ) : (
+          <table className="w-full text-sm min-w-[720px]">
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-4 py-2.5">Nome</th>
+                <th className="text-left font-medium px-4 py-2.5">E-mail</th>
+                <th className="text-left font-medium px-4 py-2.5">CPF</th>
+                <th className="text-left font-medium px-4 py-2.5">Papel</th>
+                <th className="text-left font-medium px-4 py-2.5">Empresas (se Dono)</th>
+                <th className="text-right font-medium px-4 py-2.5">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{u.nome || "—"}</td>
+                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{u.email}</td>
+                  <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{u.cpf || "—"}</td>
+                  <td className="px-4 py-2.5">
+                    {u.role === "owner" ? (
+                      <Badge tone="blue">Dono</Badge>
+                    ) : (
+                      <Select value={u.role} onChange={(e) => mudarPapel(u, e.target.value)} style={{ height: 32 }}>
+                        <option value="gestor">Gestor</option>
+                        <option value="operador">Operador</option>
+                      </Select>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>
+                    {u.role === "owner" ? ((empresasByOwner[u.id] || []).join(", ") || "Nenhuma vinculada") : "—"}
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    <Button variant="ghost" onClick={() => resetSenha(u)}><RotateCcw size={13} /> Redefinir senha</Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      {modal && <NovoUsuarioModal onClose={() => setModal(null)} onSubmit={criarUsuario} busy={busy} />}
+    </div>
+  );
+}
+
 function formatCNPJ(digits) {
   const d = digits.replace(/\D/g, "").slice(0, 14);
   return d
@@ -1988,6 +2166,14 @@ function formatCNPJ(digits) {
     .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
     .replace(/\.(\d{3})(\d)/, ".$1/$2")
     .replace(/(\d{4})(\d)/, "$1-$2");
+}
+
+function formatCPF(digits) {
+  const d = digits.replace(/\D/g, "").slice(0, 11);
+  return d
+    .replace(/^(\d{3})(\d)/, "$1.$2")
+    .replace(/^(\d{3})\.(\d{3})(\d)/, "$1.$2.$3")
+    .replace(/\.(\d{3})(\d{1,2})$/, ".$1-$2");
 }
 
 function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
