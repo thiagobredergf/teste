@@ -732,13 +732,16 @@ function FinanceiroApp({ userEmail, onLogout }) {
   }, []);
 
   // Navegação genérica do menu (rail, painel de itens, botões "Ir para
-  // Empresas"): ao voltar pra Cadastro de Empresas ou Visão Geral, a empresa
-  // selecionada é esquecida de propósito — senão o operador clicava numa
-  // ação (lançamento, fiscal, análise) sem escolher empresa e o sistema
-  // silenciosamente reaproveitava a última empresa que ele tinha olhado.
+  // Empresas"): ao voltar pra Cadastro de Empresas, a empresa selecionada é
+  // esquecida de propósito — senão o operador clicava numa ação (lançamento,
+  // fiscal, análise) sem escolher empresa e o sistema silenciosamente
+  // reaproveitava a última empresa que ele tinha olhado. Visão Geral NÃO
+  // entra mais nessa lista: ela mora dentro do mesmo Painel que
+  // Resumo/Dashboard, e limpar a seleção ao clicar nela quebrava esses dois
+  // vizinhos (voltavam "vazios" até escolher a empresa de novo).
   const goToView = useCallback((id) => {
     setView(id);
-    if (id === "empresas" || id === "gestor") setSelectedEmpresa(null);
+    if (id === "empresas") setSelectedEmpresa(null);
   }, []);
 
   // Processa um documento já recebido pelo link de upload sem login: baixa
