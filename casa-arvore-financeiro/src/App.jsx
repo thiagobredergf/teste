@@ -1022,7 +1022,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "empresas", label: "Empresas", icon: Building2 },
     ...(role === "gestor" ? [{ id: "gestor", label: "Visão Geral", icon: Users }] : []),
     { id: "resumo", label: "Resumo", icon: CalendarClock },
-    { id: "dashboard", label: "Painel", icon: LayoutDashboard },
+    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     ...(role !== "owner" ? [{ id: "accounts", label: "Contas", icon: Landmark }] : []),
     ...(role !== "owner" ? [{ id: "contacts", label: "Contatos", icon: Contact }] : []),
     { id: "payables", label: role === "owner" ? "Agendamentos" : "Contas a Pagar", icon: ArrowUpCircle },
@@ -1045,8 +1045,9 @@ function FinanceiroApp({ userEmail, onLogout }) {
 
   const RAIL_SECTIONS = [
     { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas"] },
-    ...(role === "gestor" ? [{ id: "visao", label: "Visão Geral", icon: Users, items: ["gestor"] }] : []),
-    { id: "painel", label: "Painel", icon: LayoutDashboard, items: ["resumo", "dashboard"] },
+    // Visão Geral (portfólio do gestor) vive dentro do Painel, junto de
+    // Resumo/Dashboard — não é mais uma trilha própria.
+    { id: "painel", label: "Painel", icon: LayoutDashboard, items: [...(role === "gestor" ? ["gestor"] : []), "resumo", "dashboard"] },
     // Rotina: operações do dia a dia do BPO — Gestor e Operador.
     ...(role !== "owner" ? [{
       id: "rotina", label: "Rotina", icon: ListChecks,
@@ -1806,6 +1807,8 @@ function BreakdownTable({ data, columns }) {
 function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts, onOpenEmpresa }) {
   const [modal, setModal] = useState(null);
   const isGestor = role === "gestor";
+  const activeCount = empresas.filter((e) => e.ativa !== false).length;
+  const segmentoCount = new Set(empresas.filter((e) => e.ativa !== false && e.segmento).map((e) => e.segmento)).size;
 
   const submit = (form) => {
     if (form.id) onSave(empresas.map((e) => (e.id === form.id ? form : e)));
@@ -1839,7 +1842,17 @@ function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts, 
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex items-end justify-between gap-3 flex-wrap">
+        <div className="flex gap-3">
+          <Card className="p-3 px-4">
+            <p className="text-xs" style={{ color: COLORS.inkSoft }}>Clientes ativos</p>
+            <p className="text-lg font-semibold" style={{ color: COLORS.ink }}>{activeCount}</p>
+          </Card>
+          <Card className="p-3 px-4">
+            <p className="text-xs" style={{ color: COLORS.inkSoft }}>Segmentos atendidos</p>
+            <p className="text-lg font-semibold" style={{ color: COLORS.ink }}>{segmentoCount || "—"}</p>
+          </Card>
+        </div>
         {isGestor && <Button onClick={() => setModal({})}><Plus size={15} /> Nova empresa</Button>}
       </div>
 
