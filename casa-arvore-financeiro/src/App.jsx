@@ -1488,7 +1488,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
               />
             )}
 
-            {view === "adm" && <AdmView role={role} />}
+            {view === "adm" && <AdmView role={role} empresas={empresasAtivas} />}
 
             {view === "reports" && (
               <ReportsView
@@ -2116,10 +2116,12 @@ function NovoUsuarioModal({ onClose, onSubmit, busy }) {
   );
 }
 
-function AdmView({ role }) {
+function AdmView({ role, empresas = [] }) {
   const [users, setUsers] = useState(null);
   const [empresasByOwner, setEmpresasByOwner] = useState({});
+  const [staffAccess, setStaffAccess] = useState({}); // { userId: Set(empresaId) }
   const [modal, setModal] = useState(null);
+  const [accessModal, setAccessModal] = useState(null); // usuário sendo editado
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [tempCred, setTempCred] = useState(null);
@@ -2136,9 +2138,24 @@ function AdmView({ role }) {
       map[o.user_id] = [...(map[o.user_id] || []), nomeEmpresa];
     });
     setEmpresasByOwner(map);
+    const { data: access } = await supabase.from("staff_empresa_access").select("user_id, empresaId");
+    const accessMap = {};
+    (access || []).forEach((a) => {
+      if (!accessMap[a.user_id]) accessMap[a.user_id] = new Set();
+      accessMap[a.user_id].add(a.empresaId);
+    });
+    setStaffAccess(accessMap);
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const salvarAcesso = async (userId, empresaIds) => {
+    setError("");
+    const { error: err } = await supabase.rpc("set_staff_empresa_access", { p_user_id: userId, p_empresa_ids: empresaIds });
+    if (err) { setError(err.message); return; }
+    setAccessModal(null);
+    load();
+  };
 
   const criarUsuario = async (form) => {
     setBusy(true);
@@ -2211,12 +2228,15 @@ function AdmView({ role }) {
                 <th className="text-left font-medium px-4 py-2.5">E-mail</th>
                 <th className="text-left font-medium px-4 py-2.5">CPF</th>
                 <th className="text-left font-medium px-4 py-2.5">Papel</th>
-                <th className="text-left font-medium px-4 py-2.5">Empresas (se Dono)</th>
+                <th className="text-left font-medium px-4 py-2.5">Empresas com acesso</th>
                 <th className="text-right font-medium px-4 py-2.5">Ações</th>
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => (
+              {users.map((u) => {
+                const meusIds = staffAccess[u.id];
+                const restrito = meusIds && meusIds.size > 0;
+                return (
                 <tr key={u.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
                   <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{u.nome || "—"}</td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{u.email}</td>
@@ -2232,20 +2252,87 @@ function AdmView({ role }) {
                     )}
                   </td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>
-                    {u.role === "owner" ? ((empresasByOwner[u.id] || []).join(", ") || "Nenhuma vinculada") : "—"}
+                    {u.role === "owner" ? (
+                      (empresasByOwner[u.id] || []).join(", ") || "Nenhuma vinculada"
+                    ) : restrito ? (
+                      <span>{[...meusIds].map((id) => empresas.find((e) => e.id === id)?.nome || id).join(", ")}</span>
+                    ) : (
+                      <Badge tone="green">Todas as empresas</Badge>
+                    )}
                   </td>
                   <td className="px-4 py-2.5 text-right">
-                    <Button variant="ghost" onClick={() => resetSenha(u)}><RotateCcw size={13} /> Redefinir senha</Button>
+                    <div className="flex justify-end gap-1.5">
+                      {u.role !== "owner" && (
+                        <Button variant="ghost" onClick={() => setAccessModal(u)}><Building2 size={13} /> Gerenciar acesso</Button>
+                      )}
+                      <Button variant="ghost" onClick={() => resetSenha(u)}><RotateCcw size={13} /> Redefinir senha</Button>
+                    </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}
       </Card>
 
       {modal && <NovoUsuarioModal onClose={() => setModal(null)} onSubmit={criarUsuario} busy={busy} />}
+      {accessModal && (
+        <StaffAccessModal
+          usuario={accessModal}
+          empresas={empresas}
+          empresaIdsAtuais={staffAccess[accessModal.id] || new Set()}
+          onClose={() => setAccessModal(null)}
+          onSubmit={(ids) => salvarAcesso(accessModal.id, ids)}
+        />
+      )}
     </div>
+  );
+}
+
+// Acesso por empresa de um Gestor/Operador — "Todas as empresas" é o padrão
+// (nenhuma linha em staff_empresa_access) pra não quebrar quem já existia
+// antes dessa função existir; escolher "Somente as selecionadas" só grava
+// as marcadas, virando allowlist a partir daí.
+function StaffAccessModal({ usuario, empresas, empresaIdsAtuais, onClose, onSubmit }) {
+  const [restrito, setRestrito] = useState(empresaIdsAtuais.size > 0);
+  const [checked, setChecked] = useState(() => new Set(empresaIdsAtuais));
+
+  const toggle = (id) => setChecked((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  return (
+    <Modal title={`Acesso de ${usuario.nome || usuario.email}`} onClose={onClose}>
+      <div className="grid gap-3">
+        <div className="flex gap-4 text-sm">
+          <label className="flex items-center gap-1.5">
+            <input type="radio" checked={!restrito} onChange={() => setRestrito(false)} /> Todas as empresas
+          </label>
+          <label className="flex items-center gap-1.5">
+            <input type="radio" checked={restrito} onChange={() => setRestrito(true)} /> Somente as selecionadas
+          </label>
+        </div>
+        {restrito && (
+          <div className="max-h-64 overflow-y-auto rounded-lg border" style={{ borderColor: COLORS.border }}>
+            {empresas.length === 0 ? (
+              <p className="text-sm p-3" style={{ color: COLORS.inkSoft }}>Nenhuma empresa cadastrada.</p>
+            ) : empresas.map((e) => (
+              <label key={e.id} className="flex items-center gap-2 px-3 py-2 text-sm" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                <input type="checkbox" checked={checked.has(e.id)} onChange={() => toggle(e.id)} />
+                {e.nome}
+              </label>
+            ))}
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => onSubmit(restrito ? [...checked] : [])}>Salvar</Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -7758,7 +7845,7 @@ function RotinaView({
 
   return (
     <div className="space-y-4">
-      <Header title="Rotina" subtitle="Controle das ações recorrentes do BPO para esta empresa." />
+      <Header title="Fechamento" subtitle="Controle das ações recorrentes do BPO para esta empresa." />
 
       <ReportCard
         title="Fechamento mensal"
