@@ -1305,6 +1305,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
               <EmpresasView
                 empresas={empresas}
                 role={role}
+                documentUploads={documentUploads}
                 onSave={saveEmpresas}
                 onOpenAccounts={(id) => { changeEmpresa(id); setView("accounts"); }}
                 onOpenContacts={(id) => { changeEmpresa(id); setView("contacts"); }}
@@ -1804,11 +1805,12 @@ function BreakdownTable({ data, columns }) {
 /* ---------------------------------------------------------------------- */
 /*  Empresas                                                               */
 /* ---------------------------------------------------------------------- */
-function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts, onOpenEmpresa }) {
+function EmpresasView({ empresas, role, documentUploads = [], onSave, onOpenAccounts, onOpenContacts, onOpenEmpresa }) {
   const [modal, setModal] = useState(null);
   const isGestor = role === "gestor";
   const activeCount = empresas.filter((e) => e.ativa !== false).length;
   const segmentoCount = new Set(empresas.filter((e) => e.ativa !== false && e.segmento).map((e) => e.segmento)).size;
+  const pendentesPorEmpresa = (empId) => documentUploads.filter((u) => u.empresaId === empId && u.status !== "processado").length;
 
   const submit = (form) => {
     if (form.id) onSave(empresas.map((e) => (e.id === form.id ? form : e)));
@@ -1877,6 +1879,9 @@ function EmpresasView({ empresas, role, onSave, onOpenAccounts, onOpenContacts, 
                   <div className="min-w-0">
                     <p className="font-semibold text-sm flex items-center gap-1.5" style={{ color: COLORS.ink }}>
                       {e.nome} {e.ativa === false && <Badge tone="neutral">Inativa</Badge>}
+                      {pendentesPorEmpresa(e.id) > 0 && (
+                        <Badge tone="amber"><Inbox size={11} /> {pendentesPorEmpresa(e.id)} pendente{pendentesPorEmpresa(e.id) > 1 ? "s" : ""}</Badge>
+                      )}
                     </p>
                     {e.cnpj && <p className="text-xs" style={{ color: COLORS.inkSoft }}>{e.cnpj}</p>}
                   </div>
@@ -8512,13 +8517,16 @@ function GestorDashboard({ empresas, empresaBreakdown, year, documentUploads, on
     if (e.segmento) acc[e.segmento] = (acc[e.segmento] || 0) + 1;
     return acc;
   }, {});
-  const pendentesTotal = documentUploads.filter((u) => u.status !== "processado").length;
+  // Documentos pendentes deixou de ser um total agregado do portfólio —
+  // agora é um badge por empresa (nos cards abaixo), mais fácil de agir em
+  // cima do que um número solto que não diz qual cliente está parado.
+  const pendentesPorEmpresa = (empId) => documentUploads.filter((u) => u.empresaId === empId && u.status !== "processado").length;
 
   return (
     <div className="space-y-4">
       <Header title="Visão Geral" subtitle="Seu portfólio de empresas atendidas." />
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         <Card className="p-4">
           <p className="text-xs" style={{ color: COLORS.inkSoft }}>Clientes ativos</p>
           <p className="text-lg font-semibold" style={{ color: COLORS.ink }}>{empresas.length}</p>
@@ -8526,10 +8534,6 @@ function GestorDashboard({ empresas, empresaBreakdown, year, documentUploads, on
         <Card className="p-4">
           <p className="text-xs" style={{ color: COLORS.inkSoft }}>Segmentos atendidos</p>
           <p className="text-lg font-semibold" style={{ color: COLORS.ink }}>{Object.keys(segmentoCounts).length || "—"}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Documentos pendentes no portfólio</p>
-          <p className="text-lg font-semibold" style={{ color: pendentesTotal > 0 ? COLORS.amber : COLORS.ink }}>{pendentesTotal}</p>
         </Card>
       </div>
 
@@ -8560,7 +8564,12 @@ function GestorDashboard({ empresas, empresaBreakdown, year, documentUploads, on
                     {empresa.nome.slice(0, 1).toUpperCase()}
                   </span>
                 )}
-                <p className="font-semibold text-sm" style={{ color: COLORS.ink }}>{empresa.nome}</p>
+                <p className="font-semibold text-sm flex items-center gap-1.5 min-w-0" style={{ color: COLORS.ink }}>
+                  <span className="truncate">{empresa.nome}</span>
+                  {pendentesPorEmpresa(empresa.id) > 0 && (
+                    <Badge tone="amber"><Inbox size={11} /> {pendentesPorEmpresa(empresa.id)}</Badge>
+                  )}
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div>
