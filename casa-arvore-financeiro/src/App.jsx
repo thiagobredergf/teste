@@ -828,6 +828,25 @@ function FinanceiroApp({ userEmail, onLogout }) {
     [accountsF, accountBalance]
   );
 
+  // Saldo disponível = saldo atual da conta menos os pagamentos já
+  // agendados/autorizados pra ela (que ainda não viraram baixa) — sem isso
+  // o saldo "livre" mostrado em Contas/Resumo parece maior do que realmente
+  // é quando já existe uma ordem de pagamento em andamento.
+  const accountAvailableBalance = useCallback(
+    (accId) => {
+      const agendado = payables
+        .filter((p) => !p.deletedAt && (p.status === "Agendado" || p.status === "Autorizado") && p.contaAgendadaId === accId)
+        .reduce((s, p) => s + Number(p.valor || 0), 0);
+      return accountBalance(accId) - agendado;
+    },
+    [payables, accountBalance]
+  );
+
+  const totalAvailableBalance = useMemo(
+    () => accountsF.reduce((s, a) => s + accountAvailableBalance(a.id), 0),
+    [accountsF, accountAvailableBalance]
+  );
+
   // monthly realized cash flow for selected year: {entradas[12], saidas[12]}
   const buildMonthlyFlow = useCallback((recArr, payArr, bankArr, fiscalArr, yr) => {
     const entradas = Array(12).fill(0);
@@ -1260,6 +1279,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 transfers={transfersF}
                 accountBalance={accountBalance}
                 totalBalance={totalBalance}
+                accountAvailableBalance={accountAvailableBalance}
+                totalAvailableBalance={totalAvailableBalance}
               />
             )}
 
@@ -1296,6 +1317,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
                 accountBalance={accountBalance}
+                accountAvailableBalance={accountAvailableBalance}
                 onSave={(v) => persist("accounts", v, setAccounts)}
               />
             )}
@@ -2414,7 +2436,7 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
   );
 }
 
-function AccountsView({ accounts, selectedEmpresa, accountBalance, onSave }) {
+function AccountsView({ accounts, selectedEmpresa, accountBalance, accountAvailableBalance, onSave }) {
   const [modal, setModal] = useState(null); // account being edited, or {} for new
   const visible = accounts.filter((a) => a.empresaId === selectedEmpresa);
 
@@ -2459,6 +2481,11 @@ function AccountsView({ accounts, selectedEmpresa, accountBalance, onSave }) {
               <p className="text-xl font-semibold tabular-nums" style={{ color: accountBalance(a.id) >= 0 ? COLORS.green : COLORS.red }}>
                 {fmtBRL(accountBalance(a.id))}
               </p>
+              {accountAvailableBalance(a.id) !== accountBalance(a.id) && (
+                <p className="text-xs tabular-nums" style={{ color: accountAvailableBalance(a.id) >= 0 ? COLORS.inkSoft : COLORS.red }}>
+                  Saldo disponível (após agendamentos): <span className="font-medium">{fmtBRL(accountAvailableBalance(a.id))}</span>
+                </p>
+              )}
               <p className="text-xs" style={{ color: COLORS.inkSoft }}>
                 Saldo inicial {fmtBRL(a.saldoInicial)} em {fmtDate(a.dataInicial)}
               </p>
@@ -8655,7 +8682,7 @@ function ExposureCard({ title, items, nameField }) {
   );
 }
 
-function ResumoView({ accounts, payables, receivables, bankEntries, transfers, accountBalance, totalBalance }) {
+function ResumoView({ accounts, payables, receivables, bankEntries, transfers, accountBalance, totalBalance, accountAvailableBalance, totalAvailableBalance }) {
   const [monthOffset, setMonthOffset] = useState(0);
   const now = new Date();
 
@@ -8671,10 +8698,15 @@ function ResumoView({ accounts, payables, receivables, bankEntries, transfers, a
 
       <div className="grid md:grid-cols-2 gap-3">
         <Card className="p-4">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-1">
             <h2 className="text-sm font-semibold" style={{ color: COLORS.ink }}>Saldo</h2>
             <p className="text-lg font-semibold tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(totalBalance)}</p>
           </div>
+          {totalAvailableBalance !== totalBalance && (
+            <p className="text-xs mb-2" style={{ color: COLORS.inkSoft }}>
+              Disponível após agendamentos: <span className="font-medium">{fmtBRL(totalAvailableBalance)}</span>
+            </p>
+          )}
           {accounts.length === 0 ? (
             <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma conta cadastrada.</p>
           ) : (
@@ -8685,7 +8717,12 @@ function ResumoView({ accounts, payables, receivables, bankEntries, transfers, a
                     <p style={{ color: COLORS.ink }}>{a.nome}</p>
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>{a.tipo}</p>
                   </div>
-                  <p className="font-medium tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(accountBalance(a.id))}</p>
+                  <div className="text-right">
+                    <p className="font-medium tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(accountBalance(a.id))}</p>
+                    {accountAvailableBalance(a.id) !== accountBalance(a.id) && (
+                      <p className="text-xs tabular-nums" style={{ color: COLORS.inkSoft }}>disp. {fmtBRL(accountAvailableBalance(a.id))}</p>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
