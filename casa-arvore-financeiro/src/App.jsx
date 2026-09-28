@@ -775,7 +775,46 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const goToView = useCallback((id) => {
     setView(id);
     if (id === "empresas") setSelectedEmpresa(null);
+    // Sair de Fechamento/Pendências por qualquer outro caminho (menu,
+    // busca) esquece a competência que estava em análise — evitar que uma
+    // visita futura, direta, a Pendências reapareça presa num mês antigo.
+    if (id !== "fechamento" && id !== "pendencias") setClosingCompetencia(null);
   }, []);
+
+  // Fechamento mensal: "Fechar mês" (em Análise → Fechamento) não trava
+  // de cara — leva pra Análise → Pendências, recortada pra essa
+  // competência, pro operador ver o que falta (ou "não há pendência")
+  // antes de confirmar. closingCompetencia é o que diferencia essa visita
+  // "vindo de um fechamento" de uma navegação direta pelo menu (que mostra
+  // a auditoria de sempre, sem recorte de mês).
+  const [closingCompetencia, setClosingCompetencia] = useState(null);
+  const solicitarFechamento = useCallback((competencia) => {
+    setClosingCompetencia(competencia);
+    setView("pendencias");
+  }, []);
+  const cancelarFechamento = useCallback(() => {
+    setClosingCompetencia(null);
+    setView("fechamento");
+  }, []);
+  const fecharMes = useCallback((competencia) => {
+    if (!confirmDelete(`Fechar ${fmtCompetencia(competencia)}? Depois de fechado, nenhum lançamento datado dentro desse mês (Contas a Pagar/Receber, Lançamentos Bancários, Transferências, Calendário Fiscal) poderá ser criado, editado, excluído ou baixado até reabrir.`)) return;
+    const existing = periodLocks.find((l) => l.empresaId === selectedEmpresa && l.competencia === competencia);
+    if (existing) {
+      persist("periodLocks", periodLocks.map((l) => (l.id === existing.id
+        ? { ...l, fechadoEm: new Date().toISOString(), fechadoPor: userEmail, reabertoEm: null, reabertoPor: null }
+        : l)), setPeriodLocks);
+    } else {
+      persist("periodLocks", [...periodLocks, { id: uid(), empresaId: selectedEmpresa, competencia, fechadoEm: new Date().toISOString(), fechadoPor: userEmail }], setPeriodLocks);
+    }
+    setClosingCompetencia(null);
+    setView("fechamento");
+  }, [periodLocks, selectedEmpresa, userEmail, persist]);
+  const reabrirMes = useCallback((competencia) => {
+    if (!confirmDelete(`Reabrir ${fmtCompetencia(competencia)}? Os lançamentos desse mês voltam a poder ser editados normalmente.`)) return;
+    const existing = periodLocks.find((l) => l.empresaId === selectedEmpresa && l.competencia === competencia);
+    if (!existing) return;
+    persist("periodLocks", periodLocks.map((l) => (l.id === existing.id ? { ...l, reabertoEm: new Date().toISOString(), reabertoPor: userEmail } : l)), setPeriodLocks);
+  }, [periodLocks, selectedEmpresa, userEmail, persist]);
 
   // Processa um documento já recebido pelo link de upload sem login: baixa
   // o arquivo do Storage, navega pra tela de destino e entrega o base64 já
@@ -1093,7 +1132,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     // Análise: supervisão e auditoria — só Gestor.
     ...(role === "gestor" ? [{
       id: "analise", label: "Análise", icon: FileText,
-      items: ["pendencias", "fechamento", "reports", "hubSkills", "lixeira"],
+      items: ["fechamento", "pendencias", "reports", "hubSkills", "lixeira"],
     }] : []),
     // Acompanhamento: o que o Dono/Sócio acompanha da própria empresa.
     ...(role === "owner" ? [{ id: "acompanhamento", label: "Acompanhamento", icon: Inbox, items: ["documentUploads", "payables"] }] : []),
@@ -1494,6 +1533,10 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 bankEntries={bankEntries}
                 transfers={transfers}
                 empresaId={selectedEmpresa}
+                empresaNome={currentEmpresa?.nome}
+                competenciaFechamento={closingCompetencia}
+                onFecharMes={fecharMes}
+                onCancelarFechamento={cancelarFechamento}
               />
             )}
 
@@ -1503,15 +1546,11 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 tasks={bpoTasks}
                 fiscalObligations={fiscalObligations}
                 timeSessions={timeSessions}
-                payables={payables}
-                receivables={receivables}
-                bankEntries={bankEntries}
-                transfers={transfers}
                 empresaId={selectedEmpresa}
-                empresaNome={currentEmpresa?.nome}
                 userEmail={userEmail}
-                onSavePeriodLocks={(v) => persist("periodLocks", v, setPeriodLocks)}
                 onSaveTasks={(v) => persist("bpoTasks", v, setBpoTasks)}
+                onSolicitarFechamento={solicitarFechamento}
+                onReabrirMes={reabrirMes}
               />
             )}
 
@@ -1695,7 +1734,7 @@ function Dashboard({
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold" style={{ color: COLORS.ink }}>Painel financeiro</h1>
+          <h1 className="text-xl font-semibold" style={{ color: COLORS.ink }}>Dashboard</h1>
           <p className="text-sm" style={{ color: COLORS.inkSoft }}>Regime de caixa · visão do ano desta empresa</p>
         </div>
         <Select value={year} onChange={(e) => setYear(Number(e.target.value))} className="w-28">
@@ -7769,12 +7808,28 @@ function fmtDuracao(segundos) {
 /* ---------------------------------------------------------------------- */
 /*  Inconsistência/Pendências — auditoria do operador antes do fechamento */
 /* ---------------------------------------------------------------------- */
-function PendenciasView({ payables, receivables, bankEntries, transfers, empresaId }) {
+function PendenciasView({
+  payables, receivables, bankEntries, transfers, empresaId, empresaNome,
+  competenciaFechamento, onFecharMes, onCancelarFechamento,
+}) {
   const scope = (arr) => arr.filter((x) => !x.deletedAt && x.empresaId === empresaId);
-  const payablesF = scope(payables);
-  const receivablesF = scope(receivables);
-  const bankEntriesF = scope(bankEntries);
-  const transfersF = scope(transfers);
+  let payablesF = scope(payables);
+  let receivablesF = scope(receivables);
+  let bankEntriesF = scope(bankEntries);
+  let transfersF = scope(transfers);
+
+  // Chegando aqui a partir de "Fechar mês" (Análise → Fechamento), a
+  // auditoria é recortada só pra competência sendo fechada — inclui todo
+  // lançamento ainda não pago/recebido daquele mês, não só o vencido. Sem
+  // isso vindo de lá (navegação direta pelo menu), continua sendo a
+  // auditoria de sempre: tudo em aberto na empresa, independente do mês.
+  if (competenciaFechamento) {
+    const doMes = (arr, dateFn) => arr.filter((x) => competenciaOf(dateFn(x)) === competenciaFechamento);
+    payablesF = doMes(payablesF, PERIOD_DATE_FIELD.payables);
+    receivablesF = doMes(receivablesF, PERIOD_DATE_FIELD.receivables);
+    bankEntriesF = doMes(bankEntriesF, PERIOD_DATE_FIELD.bankEntries);
+    transfersF = doMes(transfersF, PERIOD_DATE_FIELD.transfers);
+  }
 
   // "Regra de preenchimento completo": nada deveria chegar no fechamento
   // sem pelo menos a categoria definida — cobre lançamento bancário "A
@@ -7797,17 +7852,42 @@ function PendenciasView({ payables, receivables, bankEntries, transfers, empresa
     ...receivablesF.filter((r) => r.status === "Recebido" && !r.conciliado).map((r) => ({ id: r.id, origem: "Conta a Receber (recebida)", data: r.dataReceb, descricao: r.cliente, valor: r.valorRecebido ?? r.valor })),
   ].sort((a, b) => (a.data || "").localeCompare(b.data || ""));
 
-  const payablesVencidos = payablesF.filter((p) => p.status !== "Pago" && (p.vencimento || "") < todayISO());
-  const receivablesVencidos = receivablesF.filter((r) => r.status !== "Recebido" && (r.vencimento || "") < todayISO());
+  const payablesVencidos = competenciaFechamento
+    ? payablesF.filter((p) => p.status !== "Pago")
+    : payablesF.filter((p) => p.status !== "Pago" && (p.vencimento || "") < todayISO());
+  const receivablesVencidos = competenciaFechamento
+    ? receivablesF.filter((r) => r.status !== "Recebido")
+    : receivablesF.filter((r) => r.status !== "Recebido" && (r.vencimento || "") < todayISO());
 
   const total = semCategoria.length + naoConciliados.length + payablesVencidos.length + receivablesVencidos.length;
+  const rotuloPagar = competenciaFechamento ? "A pagar ainda não pagas" : "A pagar vencidas";
+  const rotuloReceber = competenciaFechamento ? "A receber ainda não recebidas" : "A receber vencidas";
 
   return (
     <div className="space-y-4">
       <Header title="Inconsistência/Pendências" subtitle="Auditoria desta empresa antes de fechar o mês — o que ainda precisa ser resolvido com o operador." />
 
+      {competenciaFechamento && (
+        <div className="flex items-center justify-between gap-3 flex-wrap px-3 py-2.5 rounded-lg" style={{ background: total === 0 ? COLORS.greenSoft : COLORS.amberSoft }}>
+          <p className="text-sm flex items-center gap-1.5" style={{ color: total === 0 ? COLORS.green : COLORS.amber }}>
+            {total === 0 ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+            {total === 0
+              ? `Não há inconsistência ou pendência para ${empresaNome || "esta empresa"} em ${fmtCompetencia(competenciaFechamento)}.`
+              : `${total} pendência(s) em ${empresaNome || "esta empresa"} — ${fmtCompetencia(competenciaFechamento)}. Revise abaixo antes de fechar, ou feche mesmo assim.`}
+          </p>
+          <div className="flex gap-2 shrink-0">
+            <Button variant="ghost" onClick={onCancelarFechamento}>Cancelar</Button>
+            <Button variant={total === 0 ? "primary" : "subtle"} onClick={() => onFecharMes(competenciaFechamento)}>
+              <Lock size={13} /> {total === 0 ? "Fechar mês" : "Fechar mesmo assim"}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {total === 0 ? (
-        <EmptyState icon={CheckCircle2} title="Nada pendente" subtitle="Não encontrei inconsistência nenhuma nessa empresa — pode fechar o mês com tranquilidade em Análise → Fechamento." />
+        !competenciaFechamento && (
+          <EmptyState icon={CheckCircle2} title="Nada pendente" subtitle="Não encontrei inconsistência nenhuma nessa empresa — pode fechar o mês com tranquilidade em Análise → Fechamento." />
+        )
       ) : (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -7820,11 +7900,11 @@ function PendenciasView({ payables, receivables, bankEntries, transfers, empresa
               <p className="text-xl font-semibold" style={{ color: naoConciliados.length ? COLORS.amber : COLORS.green }}>{naoConciliados.length}</p>
             </Card>
             <Card className="p-3 text-center">
-              <p className="text-xs" style={{ color: COLORS.inkSoft }}>A pagar vencidas</p>
+              <p className="text-xs" style={{ color: COLORS.inkSoft }}>{rotuloPagar}</p>
               <p className="text-xl font-semibold" style={{ color: payablesVencidos.length ? COLORS.red : COLORS.green }}>{payablesVencidos.length}</p>
             </Card>
             <Card className="p-3 text-center">
-              <p className="text-xs" style={{ color: COLORS.inkSoft }}>A receber vencidas</p>
+              <p className="text-xs" style={{ color: COLORS.inkSoft }}>{rotuloReceber}</p>
               <p className="text-xl font-semibold" style={{ color: receivablesVencidos.length ? COLORS.red : COLORS.green }}>{receivablesVencidos.length}</p>
             </Card>
           </div>
@@ -7880,7 +7960,7 @@ function PendenciasView({ payables, receivables, bankEntries, transfers, empresa
           )}
 
           {payablesVencidos.length > 0 && (
-            <ReportCard title="Contas a pagar vencidas" subtitle="Passaram do vencimento sem baixa — confirme se já foram pagas fora do sistema ou se estão realmente atrasadas.">
+            <ReportCard title={rotuloPagar === "A pagar vencidas" ? "Contas a pagar vencidas" : "Contas a pagar ainda não pagas neste mês"} subtitle="Confirme se já foram pagas fora do sistema ou se estão realmente em aberto.">
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
@@ -7903,7 +7983,7 @@ function PendenciasView({ payables, receivables, bankEntries, transfers, empresa
           )}
 
           {receivablesVencidos.length > 0 && (
-            <ReportCard title="Contas a receber vencidas" subtitle="Passaram do vencimento sem baixa — confirme se já foram recebidas fora do sistema ou se o cliente está atrasado.">
+            <ReportCard title={rotuloReceber === "A receber vencidas" ? "Contas a receber vencidas" : "Contas a receber ainda não recebidas neste mês"} subtitle="Confirme se já foram recebidas fora do sistema ou se o cliente está mesmo em aberto.">
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
@@ -7932,9 +8012,8 @@ function PendenciasView({ payables, receivables, bankEntries, transfers, empresa
 
 function RotinaView({
   periodLocks, tasks, fiscalObligations, timeSessions,
-  payables, receivables, bankEntries, transfers,
-  empresaId, empresaNome, userEmail,
-  onSavePeriodLocks, onSaveTasks,
+  empresaId, userEmail,
+  onSaveTasks, onSolicitarFechamento, onReabrirMes,
 }) {
   const locksF = periodLocks.filter((l) => l.empresaId === empresaId);
   const lockOf = (competencia) => locksF.find((l) => l.competencia === competencia);
@@ -7955,58 +8034,6 @@ function RotinaView({
     }
     return out;
   }, []);
-
-  const fecharMes = (competencia) => {
-    if (!confirmDelete(`Fechar ${fmtCompetencia(competencia)}? Depois de fechado, nenhum lançamento datado dentro desse mês (Contas a Pagar/Receber, Lançamentos Bancários, Transferências, Calendário Fiscal) poderá ser criado, editado, excluído ou baixado até reabrir.`)) return;
-    const existing = lockOf(competencia);
-    if (existing) {
-      onSavePeriodLocks(periodLocks.map((l) => (l.id === existing.id
-        ? { ...l, fechadoEm: new Date().toISOString(), fechadoPor: userEmail, reabertoEm: null, reabertoPor: null }
-        : l)));
-    } else {
-      onSavePeriodLocks([...periodLocks, { id: uid(), empresaId, competencia, fechadoEm: new Date().toISOString(), fechadoPor: userEmail }]);
-    }
-    setCheckComp(null);
-  };
-
-  // Solicitar o fechamento não fecha de cara — primeiro mostra, aqui mesmo
-  // no submenu, as inconsistências/pendências daquele mês específico (a
-  // mesma auditoria de Análise → Pendências, só que recortada pela
-  // competência sendo fechada), pro operador resolver antes ou pro gestor
-  // decidir se fecha mesmo assim.
-  const [checkComp, setCheckComp] = useState(null);
-  const pendenciasDoMes = useMemo(() => {
-    if (!checkComp) return null;
-    const doMes = (arr, dateFn) => arr.filter((x) => !x.deletedAt && x.empresaId === empresaId && competenciaOf(dateFn(x)) === checkComp);
-    const payablesM = doMes(payables, PERIOD_DATE_FIELD.payables);
-    const receivablesM = doMes(receivables, PERIOD_DATE_FIELD.receivables);
-    const bankM = doMes(bankEntries, PERIOD_DATE_FIELD.bankEntries);
-    const transfersM = doMes(transfers, PERIOD_DATE_FIELD.transfers);
-
-    const semCategoria = [
-      ...bankM.filter((b) => !b.categoria || b.categoria === "A classificar").map((b) => ({ id: b.id, origem: "Lançamento Bancário", descricao: b.descricao, valor: b.valor })),
-      ...payablesM.filter((p) => !p.categoria).map((p) => ({ id: p.id, origem: "Conta a Pagar", descricao: p.fornecedor, valor: p.valor })),
-      ...receivablesM.filter((r) => !r.categoria).map((r) => ({ id: r.id, origem: "Conta a Receber", descricao: r.cliente, valor: r.valor })),
-    ];
-    const naoConciliados = [
-      ...bankM.filter((b) => !b.conciliado).map((b) => ({ id: b.id, origem: "Lançamento Bancário", descricao: b.descricao, valor: b.valor })),
-      ...transfersM.filter((t) => !t.conciliado).map((t) => ({ id: t.id, origem: "Transferência", descricao: t.descricao, valor: t.valor })),
-      ...payablesM.filter((p) => p.status === "Pago" && !p.conciliado).map((p) => ({ id: p.id, origem: "Conta a Pagar (paga)", descricao: p.fornecedor, valor: p.valorPago ?? p.valor })),
-      ...receivablesM.filter((r) => r.status === "Recebido" && !r.conciliado).map((r) => ({ id: r.id, origem: "Conta a Receber (recebida)", descricao: r.cliente, valor: r.valorRecebido ?? r.valor })),
-    ];
-    const naoResolvidos = [
-      ...payablesM.filter((p) => p.status !== "Pago").map((p) => ({ id: p.id, origem: "Conta a Pagar", descricao: p.fornecedor, valor: p.valor, status: p.status })),
-      ...receivablesM.filter((r) => r.status !== "Recebido").map((r) => ({ id: r.id, origem: "Conta a Receber", descricao: r.cliente, valor: r.valor, status: r.status })),
-    ];
-    return { semCategoria, naoConciliados, naoResolvidos, total: semCategoria.length + naoConciliados.length + naoResolvidos.length };
-  }, [checkComp, payables, receivables, bankEntries, transfers, empresaId]);
-
-  const reabrirMes = (competencia) => {
-    if (!confirmDelete(`Reabrir ${fmtCompetencia(competencia)}? Os lançamentos desse mês voltam a poder ser editados normalmente.`)) return;
-    const existing = lockOf(competencia);
-    if (!existing) return;
-    onSavePeriodLocks(periodLocks.map((l) => (l.id === existing.id ? { ...l, reabertoEm: new Date().toISOString(), reabertoPor: userEmail } : l)));
-  };
 
   const [taskModal, setTaskModal] = useState(null); // null | {} | tarefa
   const tasksF = tasks.filter((t) => t.empresaId === empresaId && t.status !== "concluida");
@@ -8111,9 +8138,9 @@ function RotinaView({
                   </td>
                   <td className="px-2 py-1.5 text-right">
                     {locked ? (
-                      <Button variant="ghost" onClick={() => reabrirMes(m)}><Unlock size={13} /> Reabrir</Button>
+                      <Button variant="ghost" onClick={() => onReabrirMes(m)}><Unlock size={13} /> Reabrir</Button>
                     ) : (
-                      <Button variant="subtle" onClick={() => setCheckComp(m)}><Lock size={13} /> Fechar mês</Button>
+                      <Button variant="subtle" onClick={() => onSolicitarFechamento(m)}><Lock size={13} /> Fechar mês</Button>
                     )}
                   </td>
                 </tr>
@@ -8121,54 +8148,9 @@ function RotinaView({
             })}
           </tbody>
         </table>
-
-        {checkComp && pendenciasDoMes && (
-          <div className="mt-3 pt-3 space-y-3" style={{ borderTop: `1px solid ${COLORS.border}` }}>
-            {pendenciasDoMes.total === 0 ? (
-              <div className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg" style={{ background: COLORS.greenSoft }}>
-                <p className="text-sm flex items-center gap-1.5" style={{ color: COLORS.green }}>
-                  <CheckCircle2 size={15} /> Não há inconsistência ou pendência para {empresaNome || "esta empresa"} em {fmtCompetencia(checkComp)}.
-                </p>
-                <div className="flex gap-2 shrink-0">
-                  <Button variant="ghost" onClick={() => setCheckComp(null)}>Cancelar</Button>
-                  <Button onClick={() => fecharMes(checkComp)}><Lock size={13} /> Fechar mês</Button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg" style={{ background: COLORS.amberSoft }}>
-                  <p className="text-sm flex items-center gap-1.5" style={{ color: COLORS.amber }}>
-                    <AlertTriangle size={15} /> {pendenciasDoMes.total} pendência(s) em {empresaNome || "esta empresa"} — {fmtCompetencia(checkComp)}. Revise antes de fechar, ou feche mesmo assim.
-                  </p>
-                  <div className="flex gap-2 shrink-0">
-                    <Button variant="ghost" onClick={() => setCheckComp(null)}>Cancelar</Button>
-                    <Button variant="subtle" onClick={() => fecharMes(checkComp)}><Lock size={13} /> Fechar mesmo assim</Button>
-                  </div>
-                </div>
-                {[
-                  { titulo: "Sem categoria", itens: pendenciasDoMes.semCategoria },
-                  { titulo: "Não conciliados", itens: pendenciasDoMes.naoConciliados },
-                  { titulo: "Ainda não pagos/recebidos", itens: pendenciasDoMes.naoResolvidos },
-                ].filter((g) => g.itens.length > 0).map((g) => (
-                  <div key={g.titulo} className="rounded-lg border" style={{ borderColor: COLORS.border }}>
-                    <p className="text-xs font-semibold px-3 py-1.5" style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>{g.titulo} ({g.itens.length})</p>
-                    <table className="w-full text-sm">
-                      <tbody>
-                        {g.itens.map((it) => (
-                          <tr key={`${it.origem}-${it.id}`} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                            <td className="px-3 py-1.5"><Badge tone="neutral">{it.origem}</Badge></td>
-                            <td className="px-3 py-1.5" style={{ color: COLORS.inkSoft }}>{it.descricao}</td>
-                            <td className="px-3 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(it.valor)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+        <p className="text-xs mt-2" style={{ color: COLORS.inkSoft }}>
+          "Fechar mês" leva pra Análise → Inconsistência/Pendências, recortada pra essa competência, antes de travar de verdade.
+        </p>
       </ReportCard>
 
       <ReportCard
@@ -8271,6 +8253,7 @@ function RotinaView({
 }
 
 const NIVEL_BADGE_TONE = { "Básico": "green", "Intermediário": "amber", "Avançado": "gold" };
+const NIVEL_ORDEM = { "Avançado": 0, "Intermediário": 1, "Básico": 2 };
 const humanizeCampo = (campo) => {
   const s = (campo || "").replace(/_/g, " ");
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -8439,7 +8422,10 @@ function HubSkillsView({ skills, runs, empresaId, userEmail, onSaveSkills, onSav
       const alvo = `${s.titulo} ${(s.tags || []).join(" ")}`.toLowerCase();
       return alvo.includes(busca.trim().toLowerCase());
     })
-    .sort((a, b) => (a.codigo || "").localeCompare(b.codigo || ""));
+    .sort((a, b) => {
+      const ordem = (NIVEL_ORDEM[a.nivel] ?? 99) - (NIVEL_ORDEM[b.nivel] ?? 99);
+      return ordem !== 0 ? ordem : (a.codigo || "").localeCompare(b.codigo || "");
+    });
 
   const runsEmpresa = runs
     .filter((r) => r.empresaId === empresaId)
