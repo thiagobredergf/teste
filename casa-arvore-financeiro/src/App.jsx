@@ -977,21 +977,22 @@ function FinanceiroApp({ userEmail, onLogout }) {
     ...(role === "gestor" ? [{ id: "gestor", label: "Visão Geral", icon: Users }] : []),
     { id: "resumo", label: "Resumo", icon: CalendarClock },
     { id: "dashboard", label: "Painel", icon: LayoutDashboard },
-    { id: "accounts", label: "Contas", icon: Landmark },
-    { id: "contacts", label: "Contatos", icon: Contact },
-    { id: "payables", label: "Contas a Pagar", icon: ArrowUpCircle },
-    { id: "receivables", label: "Contas a Receber", icon: ArrowDownCircle },
-    { id: "bank", label: "Lançamentos Bancários", icon: Wallet },
-    { id: "transfers", label: "Transferências", icon: ArrowLeftRight },
-    { id: "fiscal", label: "Calendário Fiscal", icon: Calendar },
-    { id: "categories", label: "Plano de Contas", icon: ListTree },
-    { id: "reconciliation", label: "Conciliação Bancária", icon: CheckCircle2 },
+    ...(role !== "owner" ? [{ id: "accounts", label: "Contas", icon: Landmark }] : []),
+    ...(role !== "owner" ? [{ id: "contacts", label: "Contatos", icon: Contact }] : []),
+    { id: "payables", label: role === "owner" ? "Agendamentos" : "Contas a Pagar", icon: ArrowUpCircle },
+    ...(role !== "owner" ? [{ id: "receivables", label: "Contas a Receber", icon: ArrowDownCircle }] : []),
+    ...(role !== "owner" ? [{ id: "bank", label: "Lançamentos Bancários", icon: Wallet }] : []),
+    ...(role !== "owner" ? [{ id: "transfers", label: "Transferências", icon: ArrowLeftRight }] : []),
+    ...(role !== "owner" ? [{ id: "fiscal", label: "Calendário Fiscal", icon: Calendar }] : []),
+    ...(role !== "owner" ? [{ id: "categories", label: "Plano de Contas", icon: ListTree }] : []),
+    ...(role !== "owner" ? [{ id: "reconciliation", label: "Conciliação Bancária", icon: CheckCircle2 }] : []),
     ...(role !== "owner" ? [{ id: "settlementPartners", label: "Repasses de Terceiros", icon: Percent }] : []),
-    ...(role === "gestor" ? [{ id: "rotina", label: "Rotina", icon: ListChecks }] : []),
+    ...(role === "gestor" ? [{ id: "pendencias", label: "Inconsistência/Pendências", icon: AlertTriangle }] : []),
+    ...(role === "gestor" ? [{ id: "fechamento", label: "Fechamento", icon: ListChecks }] : []),
     ...(role === "gestor" ? [{ id: "hubSkills", label: "Hub de Skills", icon: Zap }] : []),
-    { id: "reports", label: "Relatórios", icon: FileText },
+    ...(role === "gestor" ? [{ id: "reports", label: "Relatórios", icon: FileText }] : []),
     { id: "documentUploads", label: "Documentos Recebidos", icon: Inbox },
-    { id: "lixeira", label: "Lixeira", icon: Trash2 },
+    ...(role === "gestor" ? [{ id: "lixeira", label: "Lixeira", icon: Trash2 }] : []),
     ...(role === "gestor" ? [{ id: "adm", label: "ADM", icon: ShieldCheck }] : []),
   ];
   const navById = Object.fromEntries(nav.map((n) => [n.id, n]));
@@ -1000,10 +1001,18 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "cadastros", label: "Cadastros", icon: Building2, items: ["empresas"] },
     ...(role === "gestor" ? [{ id: "visao", label: "Visão Geral", icon: Users, items: ["gestor"] }] : []),
     { id: "painel", label: "Painel", icon: LayoutDashboard, items: ["resumo", "dashboard"] },
-    { id: "lancamentos", label: "Lançamentos", icon: Wallet, items: ["payables", "receivables", "bank", "transfers"] },
-    { id: "fiscal", label: "Fiscal", icon: Calendar, items: ["fiscal", "categories"] },
-    { id: "analise", label: "Análise", icon: FileText, items: ["reconciliation", "settlementPartners", "reports", "documentUploads", "lixeira"] },
-    ...(role === "gestor" ? [{ id: "rotinaSecao", label: "Rotina", icon: ListChecks, items: ["rotina", "hubSkills"] }] : []),
+    // Rotina: operações do dia a dia do BPO — Gestor e Operador.
+    ...(role !== "owner" ? [{
+      id: "rotina", label: "Rotina", icon: ListChecks,
+      items: ["documentUploads", "reconciliation", "accounts", "contacts", "payables", "receivables", "bank", "transfers", "settlementPartners", "fiscal", "categories"],
+    }] : []),
+    // Análise: supervisão e auditoria — só Gestor.
+    ...(role === "gestor" ? [{
+      id: "analise", label: "Análise", icon: FileText,
+      items: ["pendencias", "fechamento", "reports", "hubSkills", "lixeira"],
+    }] : []),
+    // Acompanhamento: o que o Dono/Sócio acompanha da própria empresa.
+    ...(role === "owner" ? [{ id: "acompanhamento", label: "Acompanhamento", icon: Inbox, items: ["documentUploads", "payables"] }] : []),
     ...(role === "gestor" ? [{ id: "admSecao", label: "ADM", icon: ShieldCheck, items: ["adm"] }] : []),
   ].map((s) => ({ ...s, items: s.items.map((id) => navById[id]).filter(Boolean) }));
 
@@ -1390,7 +1399,17 @@ function FinanceiroApp({ userEmail, onLogout }) {
               />
             )}
 
-            {view === "rotina" && (
+            {view === "pendencias" && (
+              <PendenciasView
+                payables={payables}
+                receivables={receivables}
+                bankEntries={bankEntries}
+                transfers={transfers}
+                empresaId={selectedEmpresa}
+              />
+            )}
+
+            {view === "fechamento" && (
               <RotinaView
                 periodLocks={periodLocks}
                 tasks={bpoTasks}
@@ -7323,6 +7342,160 @@ function fmtDuracao(segundos) {
   const h = Math.floor(segundos / 3600);
   const m = Math.floor((segundos % 3600) / 60);
   return h > 0 ? `${h}h ${String(m).padStart(2, "0")}min` : `${m}min`;
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Inconsistência/Pendências — auditoria do operador antes do fechamento */
+/* ---------------------------------------------------------------------- */
+function PendenciasView({ payables, receivables, bankEntries, transfers, empresaId }) {
+  const scope = (arr) => arr.filter((x) => !x.deletedAt && x.empresaId === empresaId);
+  const payablesF = scope(payables);
+  const receivablesF = scope(receivables);
+  const bankEntriesF = scope(bankEntries);
+  const transfersF = scope(transfers);
+
+  const semCategoria = bankEntriesF.filter((b) => !b.categoria || b.categoria === "A classificar");
+
+  // Dinheiro que já andou (lançamento avulso, transferência, ou uma baixa
+  // de conta a pagar/receber) mas ainda não foi batido contra o extrato —
+  // é exatamente o que a Conciliação Bancária resolve, então cada item
+  // aqui aponta pra lá.
+  const naoConciliados = [
+    ...bankEntriesF.filter((b) => !b.conciliado).map((b) => ({ id: b.id, origem: "Lançamento Bancário", data: b.data, descricao: b.descricao, valor: b.valor })),
+    ...transfersF.filter((t) => !t.conciliado).map((t) => ({ id: t.id, origem: "Transferência", data: t.data, descricao: t.descricao, valor: t.valor })),
+    ...payablesF.filter((p) => p.status === "Pago" && !p.conciliado).map((p) => ({ id: p.id, origem: "Conta a Pagar (paga)", data: p.dataPgto, descricao: p.fornecedor, valor: p.valorPago ?? p.valor })),
+    ...receivablesF.filter((r) => r.status === "Recebido" && !r.conciliado).map((r) => ({ id: r.id, origem: "Conta a Receber (recebida)", data: r.dataReceb, descricao: r.cliente, valor: r.valorRecebido ?? r.valor })),
+  ].sort((a, b) => (a.data || "").localeCompare(b.data || ""));
+
+  const payablesVencidos = payablesF.filter((p) => p.status !== "Pago" && (p.vencimento || "") < todayISO());
+  const receivablesVencidos = receivablesF.filter((r) => r.status !== "Recebido" && (r.vencimento || "") < todayISO());
+
+  const total = semCategoria.length + naoConciliados.length + payablesVencidos.length + receivablesVencidos.length;
+
+  return (
+    <div className="space-y-4">
+      <Header title="Inconsistência/Pendências" subtitle="Auditoria desta empresa antes de fechar o mês — o que ainda precisa ser resolvido com o operador." />
+
+      {total === 0 ? (
+        <EmptyState icon={CheckCircle2} title="Nada pendente" subtitle="Não encontrei inconsistência nenhuma nessa empresa — pode fechar o mês com tranquilidade em Análise → Fechamento." />
+      ) : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Card className="p-3 text-center">
+              <p className="text-xs" style={{ color: COLORS.inkSoft }}>Sem categoria</p>
+              <p className="text-xl font-semibold" style={{ color: semCategoria.length ? COLORS.amber : COLORS.green }}>{semCategoria.length}</p>
+            </Card>
+            <Card className="p-3 text-center">
+              <p className="text-xs" style={{ color: COLORS.inkSoft }}>Não conciliados</p>
+              <p className="text-xl font-semibold" style={{ color: naoConciliados.length ? COLORS.amber : COLORS.green }}>{naoConciliados.length}</p>
+            </Card>
+            <Card className="p-3 text-center">
+              <p className="text-xs" style={{ color: COLORS.inkSoft }}>A pagar vencidas</p>
+              <p className="text-xl font-semibold" style={{ color: payablesVencidos.length ? COLORS.red : COLORS.green }}>{payablesVencidos.length}</p>
+            </Card>
+            <Card className="p-3 text-center">
+              <p className="text-xs" style={{ color: COLORS.inkSoft }}>A receber vencidas</p>
+              <p className="text-xl font-semibold" style={{ color: receivablesVencidos.length ? COLORS.red : COLORS.green }}>{receivablesVencidos.length}</p>
+            </Card>
+          </div>
+
+          {semCategoria.length > 0 && (
+            <ReportCard title="Lançamentos bancários sem categoria" subtitle='Ficaram como "A classificar" — vá em Lançamentos Bancários e defina a categoria de cada um.'>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                    <th className="text-left font-medium px-2 py-1.5">Data</th>
+                    <th className="text-left font-medium px-2 py-1.5">Descrição</th>
+                    <th className="text-right font-medium px-2 py-1.5">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {semCategoria.map((b) => (
+                    <tr key={b.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{fmtDate(b.data)}</td>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.inkSoft }}>{b.descricao}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(b.valor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </ReportCard>
+          )}
+
+          {naoConciliados.length > 0 && (
+            <ReportCard title="Não conciliados" subtitle="Já movimentaram dinheiro mas ainda não foram batidos contra o extrato — resolva em Conciliação Bancária.">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                    <th className="text-left font-medium px-2 py-1.5">Data</th>
+                    <th className="text-left font-medium px-2 py-1.5">Origem</th>
+                    <th className="text-left font-medium px-2 py-1.5">Descrição</th>
+                    <th className="text-right font-medium px-2 py-1.5">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {naoConciliados.map((x) => (
+                    <tr key={`${x.origem}-${x.id}`} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{fmtDate(x.data)}</td>
+                      <td className="px-2 py-1.5"><Badge tone="neutral">{x.origem}</Badge></td>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.inkSoft }}>{x.descricao}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(x.valor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </ReportCard>
+          )}
+
+          {payablesVencidos.length > 0 && (
+            <ReportCard title="Contas a pagar vencidas" subtitle="Passaram do vencimento sem baixa — confirme se já foram pagas fora do sistema ou se estão realmente atrasadas.">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                    <th className="text-left font-medium px-2 py-1.5">Vencimento</th>
+                    <th className="text-left font-medium px-2 py-1.5">Fornecedor</th>
+                    <th className="text-right font-medium px-2 py-1.5">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payablesVencidos.map((p) => (
+                    <tr key={p.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.red }}>{fmtDate(p.vencimento)}</td>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{p.fornecedor}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(p.valor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </ReportCard>
+          )}
+
+          {receivablesVencidos.length > 0 && (
+            <ReportCard title="Contas a receber vencidas" subtitle="Passaram do vencimento sem baixa — confirme se já foram recebidas fora do sistema ou se o cliente está atrasado.">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                    <th className="text-left font-medium px-2 py-1.5">Vencimento</th>
+                    <th className="text-left font-medium px-2 py-1.5">Cliente</th>
+                    <th className="text-right font-medium px-2 py-1.5">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {receivablesVencidos.map((r) => (
+                    <tr key={r.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.red }}>{fmtDate(r.vencimento)}</td>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{r.cliente}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(r.valor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </ReportCard>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 function RotinaView({
