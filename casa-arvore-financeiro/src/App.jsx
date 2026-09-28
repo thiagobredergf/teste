@@ -678,6 +678,33 @@ function FinanceiroApp({ userEmail, onLogout }) {
     else setSaveError(null);
   }, [payables, receivables, bankEntries, transfers, fiscalObligations, periodLocks]);
 
+  // Confirmação automática na data prevista: contas marcadas com
+  // confirmarAutomaticamente que já bateram o vencimento dão baixa sozinhas,
+  // na conta padrão escolhida no cadastro — sem esperar alguém clicar "Dar
+  // baixa". Roda a cada carregamento/atualização dos arrays; é idempotente
+  // porque, assim que uma conta é confirmada, ela vira "Pago"/"Recebido" e
+  // deixa de bater no filtro abaixo, então não há risco de loop.
+  useEffect(() => {
+    if (!ready) return;
+    const today = todayISO();
+    const payDue = payables.filter((p) => p.confirmarAutomaticamente && !p.deletedAt && p.status !== "Pago" && p.contaPadraoId && (p.vencimento || "") <= today);
+    const recDue = receivables.filter((r) => r.confirmarAutomaticamente && !r.deletedAt && r.status !== "Recebido" && r.contaPadraoId && (r.vencimento || "") <= today);
+    if (payDue.length) {
+      const dueIds = new Set(payDue.map((p) => p.id));
+      persist("payables", payables.map((p) => (dueIds.has(p.id)
+        ? { ...p, status: "Pago", dataPgto: p.vencimento, valorPago: p.valor, contaPgtoId: p.contaPadraoId }
+        : p)), setPayables);
+      payDue.forEach((p) => logAudit(p.empresaId, "payable", p.id, "baixa_automatica", `Confirmação automática no vencimento — ${fmtBRL(p.valor)} em ${fmtDate(p.vencimento)}`, "sistema"));
+    }
+    if (recDue.length) {
+      const dueIds = new Set(recDue.map((r) => r.id));
+      persist("receivables", receivables.map((r) => (dueIds.has(r.id)
+        ? { ...r, status: "Recebido", dataReceb: r.vencimento, valorRecebido: r.valor, contaRecebId: r.contaPadraoId }
+        : r)), setReceivables);
+      recDue.forEach((r) => logAudit(r.empresaId, "receivable", r.id, "baixa_automatica", `Confirmação automática no vencimento — ${fmtBRL(r.valor)} em ${fmtDate(r.vencimento)}`, "sistema"));
+    }
+  }, [ready, payables, receivables, persist]);
+
   // Toda empresa nova já nasce com o Plano de Contas do segmento dela
   // (ver PLANO_CONTAS_TEMPLATES) — sem isso a empresa ficaria sem
   // categoria nenhuma pra classificar lançamento até alguém cadastrar
@@ -3090,7 +3117,7 @@ function PayablesView({
 
       {modal && (
         <PayableModal
-          initial={modal} categories={categories} contacts={contacts} aiNote={aiNote} previewDoc={previewDoc}
+          initial={modal} categories={categories} contacts={contacts} accounts={accounts.filter((a) => a.empresaId === modal.empresaId)} aiNote={aiNote} previewDoc={previewDoc}
           onClose={() => { setModal(null); setAiNote(""); setPreviewDoc(null); pendingUploadRef.current = null; }}
           onSubmit={submit}
         />
@@ -3237,12 +3264,13 @@ function StatusBadge({ status }) {
   return <Badge tone="neutral">{status}</Badge>;
 }
 
-function PayableModal({ initial, categories, contacts = [], aiNote, previewDoc, onClose, onSubmit }) {
+function PayableModal({ initial, categories, contacts = [], accounts = [], aiNote, previewDoc, onClose, onSubmit }) {
   const linkedContact = contacts.find((c) => c.id === initial.contactId);
   const [form, setForm] = useState({
     dataLanc: todayISO(), vencimento: todayISO(), fornecedor: "", categoria: categories[0]?.nome || "",
     descricao: "", valor: "", formaPgto: "PIX", status: "A Pagar",
-    documento: linkedContact?.documento || "", contato: linkedContact?.contato || "", ...initial,
+    documento: linkedContact?.documento || "", contato: linkedContact?.contato || "",
+    centroCusto: "", projeto: "", confirmarAutomaticamente: false, contaPadraoId: "", ...initial,
   });
   const valid = form.fornecedor.trim() && Number(form.valor) > 0 && form.empresaId;
   const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId);
@@ -3296,6 +3324,31 @@ function PayableModal({ initial, categories, contacts = [], aiNote, previewDoc, 
           <Field label="Contato do fornecedor">
             <TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone/WhatsApp" />
           </Field>
+          <Field label="Centro de Custo">
+            <TextInput value={form.centroCusto} onChange={(e) => setForm({ ...form, centroCusto: e.target.value })} placeholder="Opcional — área interna responsável" />
+          </Field>
+          <Field label="Projeto">
+            <TextInput value={form.projeto} onChange={(e) => setForm({ ...form, projeto: e.target.value })} placeholder="Opcional" />
+          </Field>
+          <div className="md:col-span-2 flex items-start gap-2 pt-1">
+            <input
+              type="checkbox" id="confirmarAutoPay" className="mt-1"
+              checked={form.confirmarAutomaticamente}
+              onChange={(e) => setForm({ ...form, confirmarAutomaticamente: e.target.checked, contaPadraoId: e.target.checked ? form.contaPadraoId : "" })}
+            />
+            <label htmlFor="confirmarAutoPay" className="text-sm" style={{ color: COLORS.ink }}>
+              Confirmar automaticamente no vencimento
+              <span className="block text-xs" style={{ color: COLORS.inkSoft }}>Pra contas cujo valor e data já são certos (assinatura, mensalidade) — dá baixa sozinho na conta padrão abaixo, sem esperar clique.</span>
+            </label>
+          </div>
+          {form.confirmarAutomaticamente && (
+            <Field label="Conta padrão pra baixa automática">
+              <Select value={form.contaPadraoId} onChange={(e) => setForm({ ...form, contaPadraoId: e.target.value })}>
+                <option value="">Selecione uma conta</option>
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+              </Select>
+            </Field>
+          )}
           {!initial.id && <InstallmentFields form={form} setForm={setForm} />}
         </div>
         <DocumentPreviewPanel doc={previewDoc} />
@@ -3304,7 +3357,7 @@ function PayableModal({ initial, categories, contacts = [], aiNote, previewDoc, 
         <Button variant="ghost" onClick={onClose}>Cancelar</Button>
         <Button
           onClick={() => valid && onSubmit(initial.id ? stripInstallmentMeta(form) : expandEntries(form), { documento: form.documento, contato: form.contato })}
-          disabled={!valid}
+          disabled={!valid || (form.confirmarAutomaticamente && !form.contaPadraoId)}
         >
           Salvar
         </Button>
@@ -3998,7 +4051,7 @@ function ReceivablesView({
 
       {modal && (
         <ReceivableModal
-          initial={modal} categories={categories} contacts={contacts} aiNote={aiNote} previewDoc={previewDoc}
+          initial={modal} categories={categories} contacts={contacts} accounts={accounts.filter((a) => a.empresaId === modal.empresaId)} aiNote={aiNote} previewDoc={previewDoc}
           onClose={() => { setModal(null); setAiNote(""); setPreviewDoc(null); pendingUploadRef.current = null; }}
           onSubmit={submit}
         />
@@ -4073,12 +4126,13 @@ function ReceivablesView({
   );
 }
 
-function ReceivableModal({ initial, categories, contacts = [], aiNote, previewDoc, onClose, onSubmit }) {
+function ReceivableModal({ initial, categories, contacts = [], accounts = [], aiNote, previewDoc, onClose, onSubmit }) {
   const linkedContact = contacts.find((c) => c.id === initial.contactId);
   const [form, setForm] = useState({
     dataLanc: todayISO(), vencimento: todayISO(), cliente: "", categoria: categories[0]?.nome || "",
     descricao: "", valor: "", formaReceb: "PIX", status: "A Receber",
-    documento: linkedContact?.documento || "", contato: linkedContact?.contato || "", ...initial,
+    documento: linkedContact?.documento || "", contato: linkedContact?.contato || "",
+    centroCusto: "", projeto: "", confirmarAutomaticamente: false, contaPadraoId: "", ...initial,
   });
   const valid = form.cliente.trim() && Number(form.valor) > 0 && form.empresaId;
   const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId);
@@ -4131,6 +4185,31 @@ function ReceivableModal({ initial, categories, contacts = [], aiNote, previewDo
           <Field label="Contato do cliente">
             <TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone/WhatsApp" />
           </Field>
+          <Field label="Centro de Custo">
+            <TextInput value={form.centroCusto} onChange={(e) => setForm({ ...form, centroCusto: e.target.value })} placeholder="Opcional — área interna responsável" />
+          </Field>
+          <Field label="Projeto">
+            <TextInput value={form.projeto} onChange={(e) => setForm({ ...form, projeto: e.target.value })} placeholder="Opcional" />
+          </Field>
+          <div className="md:col-span-2 flex items-start gap-2 pt-1">
+            <input
+              type="checkbox" id="confirmarAutoRec" className="mt-1"
+              checked={form.confirmarAutomaticamente}
+              onChange={(e) => setForm({ ...form, confirmarAutomaticamente: e.target.checked, contaPadraoId: e.target.checked ? form.contaPadraoId : "" })}
+            />
+            <label htmlFor="confirmarAutoRec" className="text-sm" style={{ color: COLORS.ink }}>
+              Confirmar automaticamente no vencimento
+              <span className="block text-xs" style={{ color: COLORS.inkSoft }}>Pra contas cujo valor e data já são certos (assinatura, mensalidade) — dá baixa sozinho na conta padrão abaixo, sem esperar clique.</span>
+            </label>
+          </div>
+          {form.confirmarAutomaticamente && (
+            <Field label="Conta padrão pra baixa automática">
+              <Select value={form.contaPadraoId} onChange={(e) => setForm({ ...form, contaPadraoId: e.target.value })}>
+                <option value="">Selecione uma conta</option>
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+              </Select>
+            </Field>
+          )}
           {!initial.id && <InstallmentFields form={form} setForm={setForm} />}
         </div>
         <DocumentPreviewPanel doc={previewDoc} />
@@ -4139,7 +4218,7 @@ function ReceivableModal({ initial, categories, contacts = [], aiNote, previewDo
         <Button variant="ghost" onClick={onClose}>Cancelar</Button>
         <Button
           onClick={() => valid && onSubmit(initial.id ? stripInstallmentMeta(form) : expandEntries(form), { documento: form.documento, contato: form.contato })}
-          disabled={!valid}
+          disabled={!valid || (form.confirmarAutomaticamente && !form.contaPadraoId)}
         >
           Salvar
         </Button>
@@ -7354,7 +7433,15 @@ function PendenciasView({ payables, receivables, bankEntries, transfers, empresa
   const bankEntriesF = scope(bankEntries);
   const transfersF = scope(transfers);
 
-  const semCategoria = bankEntriesF.filter((b) => !b.categoria || b.categoria === "A classificar");
+  // "Regra de preenchimento completo": nada deveria chegar no fechamento
+  // sem pelo menos a categoria definida — cobre lançamento bancário "A
+  // classificar" e também conta a pagar/receber sem categoria (que passa
+  // batido no formulário se o Plano de Contas dela estiver vazio).
+  const semCategoria = [
+    ...bankEntriesF.filter((b) => !b.categoria || b.categoria === "A classificar").map((b) => ({ id: b.id, origem: "Lançamento Bancário", data: b.data, descricao: b.descricao, valor: b.valor })),
+    ...payablesF.filter((p) => !p.categoria).map((p) => ({ id: p.id, origem: "Conta a Pagar", data: p.vencimento, descricao: p.fornecedor, valor: p.valor })),
+    ...receivablesF.filter((r) => !r.categoria).map((r) => ({ id: r.id, origem: "Conta a Receber", data: r.vencimento, descricao: r.cliente, valor: r.valor })),
+  ].sort((a, b) => (a.data || "").localeCompare(b.data || ""));
 
   // Dinheiro que já andou (lançamento avulso, transferência, ou uma baixa
   // de conta a pagar/receber) mas ainda não foi batido contra o extrato —
@@ -7400,19 +7487,21 @@ function PendenciasView({ payables, receivables, bankEntries, transfers, empresa
           </div>
 
           {semCategoria.length > 0 && (
-            <ReportCard title="Lançamentos bancários sem categoria" subtitle='Ficaram como "A classificar" — vá em Lançamentos Bancários e defina a categoria de cada um.'>
+            <ReportCard title="Sem categoria" subtitle="Preenchimento incompleto — defina a categoria de cada um antes de fechar o mês.">
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
                     <th className="text-left font-medium px-2 py-1.5">Data</th>
+                    <th className="text-left font-medium px-2 py-1.5">Origem</th>
                     <th className="text-left font-medium px-2 py-1.5">Descrição</th>
                     <th className="text-right font-medium px-2 py-1.5">Valor</th>
                   </tr>
                 </thead>
                 <tbody>
                   {semCategoria.map((b) => (
-                    <tr key={b.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <tr key={`${b.origem}-${b.id}`} style={{ borderTop: `1px solid ${COLORS.border}` }}>
                       <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{fmtDate(b.data)}</td>
+                      <td className="px-2 py-1.5"><Badge tone="neutral">{b.origem}</Badge></td>
                       <td className="px-2 py-1.5" style={{ color: COLORS.inkSoft }}>{b.descricao}</td>
                       <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(b.valor)}</td>
                     </tr>
