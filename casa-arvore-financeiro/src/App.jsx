@@ -355,6 +355,17 @@ const daysUntil = (iso) => {
   return Math.round((b - a) / 86400000);
 };
 
+// Certificado vencido = empresa não emite nota — aviso com 30 dias de
+// antecedência (mesma margem que a apostila recomenda), pra dar tempo de
+// renovar antes de travar a operação.
+const certificadoAlerta = (empresa) => {
+  if (!empresa?.certificadoDigitalValidade) return null;
+  const dias = daysUntil(empresa.certificadoDigitalValidade);
+  if (dias < 0) return { nivel: "vencido", dias };
+  if (dias <= 30) return { nivel: "vencendo", dias };
+  return null;
+};
+
 const monthIndex = (iso) => (iso ? parseInt(iso.slice(5, 7), 10) - 1 : -1);
 const yearOf = (iso) => (iso ? parseInt(iso.slice(0, 4), 10) : null);
 
@@ -1534,6 +1545,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 transfers={transfers}
                 empresaId={selectedEmpresa}
                 empresaNome={currentEmpresa?.nome}
+                empresa={currentEmpresa}
                 competenciaFechamento={closingCompetencia}
                 onFecharMes={fecharMes}
                 onCancelarFechamento={cancelarFechamento}
@@ -1964,6 +1976,11 @@ function EmpresasView({ empresas, role, documentUploads = [], onSave, onOpenAcco
                       {pendentesPorEmpresa(e.id) > 0 && (
                         <Badge tone="amber"><Inbox size={11} /> {pendentesPorEmpresa(e.id)} pendente{pendentesPorEmpresa(e.id) > 1 ? "s" : ""}</Badge>
                       )}
+                      {certificadoAlerta(e) && (
+                        <Badge tone="red">
+                          <ShieldCheck size={11} /> Certificado {certificadoAlerta(e).nivel === "vencido" ? "vencido" : `vence em ${certificadoAlerta(e).dias}d`}
+                        </Badge>
+                      )}
                     </p>
                     {e.cnpj && <p className="text-xs" style={{ color: COLORS.inkSoft }}>{e.cnpj}</p>}
                   </div>
@@ -2007,13 +2024,18 @@ function EmpresasView({ empresas, role, documentUploads = [], onSave, onOpenAcco
                   )}
                 </div>
               )}
-              {isGestor && (e.contratoValorMensal || e.contabilidadeNome) && (
+              {isGestor && (e.contratoValorMensal || e.contabilidadeNome || e.certificadoDigitalTipo) && (
                 <div className="pb-3 space-y-1">
                   {e.contratoValorMensal != null && (
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>Contrato: {fmtBRL(e.contratoValorMensal)}/mês{e.contratoRenovacao ? ` · renovação ${e.contratoRenovacao}` : ""}</p>
                   )}
                   {e.contabilidadeNome && (
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>Contabilidade: {e.contabilidadeNome}{e.contabilidadeContato ? ` (${e.contabilidadeContato})` : ""}</p>
+                  )}
+                  {e.certificadoDigitalTipo && (
+                    <p className="text-xs" style={{ color: certificadoAlerta(e) ? COLORS.red : COLORS.inkSoft }}>
+                      Certificado: {e.certificadoDigitalTipo}{e.certificadoDigitalValidade ? ` · validade ${fmtDate(e.certificadoDigitalValidade)}` : ""}
+                    </p>
                   )}
                 </div>
               )}
@@ -2726,6 +2748,18 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
                 <TextInput value={form.contabilidadeContato || ""} onChange={(e) => setForm({ ...form, contabilidadeContato: e.target.value })} placeholder="Telefone ou e-mail" />
               </Field>
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Certificado digital">
+                <Select value={form.certificadoDigitalTipo || ""} onChange={(e) => setForm({ ...form, certificadoDigitalTipo: e.target.value })}>
+                  <option value="">Não informado</option>
+                  <option value="A1">A1</option>
+                  <option value="A3">A3</option>
+                </Select>
+              </Field>
+              <Field label="Validade do certificado">
+                <TextInput type="date" value={form.certificadoDigitalValidade || ""} onChange={(e) => setForm({ ...form, certificadoDigitalValidade: e.target.value })} />
+              </Field>
+            </div>
             <Field label="Observações / POP (procedimento operacional padrão)">
               <textarea
                 value={form.observacoesOperacionais || ""}
@@ -3210,6 +3244,8 @@ function PayablesView({
         descricao: p.descricao || "",
         numeroDocumento: ex.numero_documento || "",
         documento: ex.documento_contraparte || "",
+        tipoDocumento: ex.tipo_nota_fiscal || "",
+        chaveAcesso: ex.chave_acesso || "",
         ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
       });
     }
@@ -3690,6 +3726,23 @@ function PayableModal({ initial, categories, contacts = [], accounts = [], aiNot
           <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} className="md:col-span-2" /></Field>
           <Field label="Nº do documento">
             <TextInput value={form.numeroDocumento || ""} onChange={(e) => setForm({ ...form, numeroDocumento: e.target.value })} placeholder="Nº da NF, boleto..." />
+          </Field>
+          <Field label="Tipo de documento">
+            <Select value={form.tipoDocumento || ""} onChange={(e) => setForm({ ...form, tipoDocumento: e.target.value })}>
+              <option value="">Não informado</option>
+              <option value="NF-e">NF-e (produto)</option>
+              <option value="NFS-e">NFS-e (serviço)</option>
+              <option value="CT-e">CT-e (frete)</option>
+              <option value="Outro">Outro</option>
+            </Select>
+          </Field>
+          <Field label={form.tipoDocumento === "NFS-e" ? "Código de verificação" : "Chave de acesso"}>
+            <TextInput
+              value={form.chaveAcesso || ""}
+              onChange={(e) => setForm({ ...form, chaveAcesso: e.target.value })}
+              placeholder={form.tipoDocumento === "NFS-e" ? "Ex.: 7K9X-4T2P" : "44 dígitos"}
+              className="md:col-span-2"
+            />
           </Field>
           <Field label="Data de lançamento"><TextInput type="date" value={form.dataLanc} max={todayISO()} onChange={(e) => setForm({ ...form, dataLanc: e.target.value })} /></Field>
           <Field label="Vencimento"><TextInput type="date" value={form.vencimento} onChange={(e) => setForm({ ...form, vencimento: e.target.value })} /></Field>
@@ -4196,6 +4249,8 @@ function ReceivablesView({
         descricao: p.descricao || "",
         numeroDocumento: ex.numero_documento || "",
         documento: ex.documento_contraparte || "",
+        tipoDocumento: ex.tipo_nota_fiscal || "",
+        chaveAcesso: ex.chave_acesso || "",
         ...(categoriaMatch ? { categoria: categoriaMatch } : {}),
       });
     }
@@ -4552,6 +4607,23 @@ function ReceivableModal({ initial, categories, contacts = [], accounts = [], ai
           <Field label="Descrição"><TextInput value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} className="md:col-span-2" /></Field>
           <Field label="Nº do documento">
             <TextInput value={form.numeroDocumento || ""} onChange={(e) => setForm({ ...form, numeroDocumento: e.target.value })} placeholder="Nº da NF, boleto..." />
+          </Field>
+          <Field label="Tipo de documento">
+            <Select value={form.tipoDocumento || ""} onChange={(e) => setForm({ ...form, tipoDocumento: e.target.value })}>
+              <option value="">Não informado</option>
+              <option value="NF-e">NF-e (produto)</option>
+              <option value="NFS-e">NFS-e (serviço)</option>
+              <option value="CT-e">CT-e (frete)</option>
+              <option value="Outro">Outro</option>
+            </Select>
+          </Field>
+          <Field label={form.tipoDocumento === "NFS-e" ? "Código de verificação" : "Chave de acesso"}>
+            <TextInput
+              value={form.chaveAcesso || ""}
+              onChange={(e) => setForm({ ...form, chaveAcesso: e.target.value })}
+              placeholder={form.tipoDocumento === "NFS-e" ? "Ex.: 7K9X-4T2P" : "44 dígitos"}
+              className="md:col-span-2"
+            />
           </Field>
           <Field label="Data de lançamento"><TextInput type="date" value={form.dataLanc} max={todayISO()} onChange={(e) => setForm({ ...form, dataLanc: e.target.value })} /></Field>
           <Field label="Vencimento"><TextInput type="date" value={form.vencimento} onChange={(e) => setForm({ ...form, vencimento: e.target.value })} /></Field>
@@ -7809,9 +7881,10 @@ function fmtDuracao(segundos) {
 /*  Inconsistência/Pendências — auditoria do operador antes do fechamento */
 /* ---------------------------------------------------------------------- */
 function PendenciasView({
-  payables, receivables, bankEntries, transfers, empresaId, empresaNome,
+  payables, receivables, bankEntries, transfers, empresaId, empresaNome, empresa,
   competenciaFechamento, onFecharMes, onCancelarFechamento,
 }) {
+  const certAlerta = certificadoAlerta(empresa);
   const scope = (arr) => arr.filter((x) => !x.deletedAt && x.empresaId === empresaId);
   let payablesF = scope(payables);
   let receivablesF = scope(receivables);
@@ -7859,7 +7932,7 @@ function PendenciasView({
     ? receivablesF.filter((r) => r.status !== "Recebido")
     : receivablesF.filter((r) => r.status !== "Recebido" && (r.vencimento || "") < todayISO());
 
-  const total = semCategoria.length + naoConciliados.length + payablesVencidos.length + receivablesVencidos.length;
+  const total = semCategoria.length + naoConciliados.length + payablesVencidos.length + receivablesVencidos.length + (certAlerta ? 1 : 0);
   const rotuloPagar = competenciaFechamento ? "A pagar ainda não pagas" : "A pagar vencidas";
   const rotuloReceber = competenciaFechamento ? "A receber ainda não recebidas" : "A receber vencidas";
 
@@ -7890,6 +7963,12 @@ function PendenciasView({
         )
       ) : (
         <>
+          {certAlerta && (
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+              <ShieldCheck size={15} />
+              Certificado digital {certAlerta.nivel === "vencido" ? `vencido há ${Math.abs(certAlerta.dias)} dia(s)` : `vence em ${certAlerta.dias} dia(s)`} — renove em Cadastros → Editar empresa antes que a emissão de nota pare.
+            </div>
+          )}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Card className="p-3 text-center">
               <p className="text-xs" style={{ color: COLORS.inkSoft }}>Sem categoria</p>

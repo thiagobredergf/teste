@@ -64,6 +64,8 @@ const RESPONSE_SHAPE = `{
   "documento_contraparte": string ou null,
   "categoria_sugerida": string ou null,
   "tipo_documento": string,
+  "tipo_nota_fiscal": "NF-e" ou "NFS-e" ou "CT-e" ou null,
+  "chave_acesso": string ou null,
   "tipo_lancamento": "Entrada" ou "Saida" ou null,
   "numero_documento": string ou null,
   "parcelas": [
@@ -84,6 +86,8 @@ Regras:
 - "tipo_lancamento": sempre null (não se aplica a conta a pagar).
 - "tipo_documento": "boleto", "nota_fiscal", "carne_parcelado" ou "outro".
 - "numero_documento": o número que identifica o documento em si — nº da nota fiscal/NF-e/cupom fiscal, nosso número ou linha digitável do boleto, nº do carnê. NUNCA um CPF/CNPJ (isso vai em "documento_contraparte") — se o único identificador visível for uma Inscrição Estadual (IE), use ela só como último recurso; senão null.
+- "tipo_nota_fiscal": só quando "tipo_documento" for "nota_fiscal" — identifique se é "NF-e" (nota de produto/mercadoria, tem campo NCM/CFOP/ICMS e título "DANFE"), "NFS-e" (nota de serviço municipal, tem ISS e campos Prestador/Tomador) ou "CT-e" (conhecimento de transporte, emitido por transportadora). Boleto e carnê: sempre null.
+- "chave_acesso": a chave de acesso de 44 dígitos (NF-e/CT-e) ou o código de verificação alfanumérico curto (NFS-e, ex: "7K9X-4T2P"), exatamente como impresso no documento; senão null.
 - "parcelas": UMA ENTRADA PRA CADA PARCELA IMPRESSA NO DOCUMENTO, com o valor e vencimento EXATOS de cada uma, lidos diretamente do documento.
   - Documentos de pagamento único (boleto normal, NF): "parcelas" tem só 1 item.
   - Documentos parcelados (ex: carnê de IPTU com várias cotas): liste TODAS as parcelas visíveis, cada uma com seu próprio valor e vencimento — os valores costumam ser DIFERENTES entre parcelas (ex: 1ª parcela com desconto, demais com juros), e os vencimentos são datas específicas, não um intervalo fixo de dias.
@@ -104,6 +108,8 @@ Regras:
 - "tipo_lancamento": sempre null (não se aplica a conta a receber).
 - "tipo_documento": "boleto", "nota_fiscal", "carne_parcelado" ou "outro".
 - "numero_documento": o número que identifica o documento em si — nº da nota fiscal/NF-e/cupom fiscal, nosso número ou linha digitável do boleto, nº do carnê. NUNCA um CPF/CNPJ (isso vai em "documento_contraparte") — se o único identificador visível for uma Inscrição Estadual (IE), use ela só como último recurso; senão null.
+- "tipo_nota_fiscal": só quando "tipo_documento" for "nota_fiscal" — identifique se é "NF-e" (nota de produto/mercadoria, tem campo NCM/CFOP/ICMS e título "DANFE"), "NFS-e" (nota de serviço municipal, tem ISS e campos Prestador/Tomador) ou "CT-e" (conhecimento de transporte, emitido por transportadora). Boleto e carnê: sempre null.
+- "chave_acesso": a chave de acesso de 44 dígitos (NF-e/CT-e) ou o código de verificação alfanumérico curto (NFS-e, ex: "7K9X-4T2P"), exatamente como impresso no documento; senão null.
 - "parcelas": UMA ENTRADA PRA CADA PARCELA IMPRESSA NO DOCUMENTO, com o valor e vencimento EXATOS de cada uma, lidos diretamente do documento.
   - Documentos de pagamento único (boleto normal, NF): "parcelas" tem só 1 item.
   - Documentos parcelados: liste TODAS as parcelas visíveis, cada uma com seu próprio valor e vencimento reais — nunca calculados por divisão ou soma de meses.
