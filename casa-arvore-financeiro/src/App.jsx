@@ -1469,7 +1469,12 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 tasks={bpoTasks}
                 fiscalObligations={fiscalObligations}
                 timeSessions={timeSessions}
+                payables={payables}
+                receivables={receivables}
+                bankEntries={bankEntries}
+                transfers={transfers}
                 empresaId={selectedEmpresa}
+                empresaNome={currentEmpresa?.nome}
                 userEmail={userEmail}
                 onSavePeriodLocks={(v) => persist("periodLocks", v, setPeriodLocks)}
                 onSaveTasks={(v) => persist("bpoTasks", v, setBpoTasks)}
@@ -7723,7 +7728,9 @@ function PendenciasView({ payables, receivables, bankEntries, transfers, empresa
 }
 
 function RotinaView({
-  periodLocks, tasks, fiscalObligations, timeSessions, empresaId, userEmail,
+  periodLocks, tasks, fiscalObligations, timeSessions,
+  payables, receivables, bankEntries, transfers,
+  empresaId, empresaNome, userEmail,
   onSavePeriodLocks, onSaveTasks, onSaveTimeSessions,
 }) {
   const locksF = periodLocks.filter((l) => l.empresaId === empresaId);
@@ -7756,7 +7763,40 @@ function RotinaView({
     } else {
       onSavePeriodLocks([...periodLocks, { id: uid(), empresaId, competencia, fechadoEm: new Date().toISOString(), fechadoPor: userEmail }]);
     }
+    setCheckComp(null);
   };
+
+  // Solicitar o fechamento não fecha de cara — primeiro mostra, aqui mesmo
+  // no submenu, as inconsistências/pendências daquele mês específico (a
+  // mesma auditoria de Análise → Pendências, só que recortada pela
+  // competência sendo fechada), pro operador resolver antes ou pro gestor
+  // decidir se fecha mesmo assim.
+  const [checkComp, setCheckComp] = useState(null);
+  const pendenciasDoMes = useMemo(() => {
+    if (!checkComp) return null;
+    const doMes = (arr, dateFn) => arr.filter((x) => !x.deletedAt && x.empresaId === empresaId && competenciaOf(dateFn(x)) === checkComp);
+    const payablesM = doMes(payables, PERIOD_DATE_FIELD.payables);
+    const receivablesM = doMes(receivables, PERIOD_DATE_FIELD.receivables);
+    const bankM = doMes(bankEntries, PERIOD_DATE_FIELD.bankEntries);
+    const transfersM = doMes(transfers, PERIOD_DATE_FIELD.transfers);
+
+    const semCategoria = [
+      ...bankM.filter((b) => !b.categoria || b.categoria === "A classificar").map((b) => ({ id: b.id, origem: "Lançamento Bancário", descricao: b.descricao, valor: b.valor })),
+      ...payablesM.filter((p) => !p.categoria).map((p) => ({ id: p.id, origem: "Conta a Pagar", descricao: p.fornecedor, valor: p.valor })),
+      ...receivablesM.filter((r) => !r.categoria).map((r) => ({ id: r.id, origem: "Conta a Receber", descricao: r.cliente, valor: r.valor })),
+    ];
+    const naoConciliados = [
+      ...bankM.filter((b) => !b.conciliado).map((b) => ({ id: b.id, origem: "Lançamento Bancário", descricao: b.descricao, valor: b.valor })),
+      ...transfersM.filter((t) => !t.conciliado).map((t) => ({ id: t.id, origem: "Transferência", descricao: t.descricao, valor: t.valor })),
+      ...payablesM.filter((p) => p.status === "Pago" && !p.conciliado).map((p) => ({ id: p.id, origem: "Conta a Pagar (paga)", descricao: p.fornecedor, valor: p.valorPago ?? p.valor })),
+      ...receivablesM.filter((r) => r.status === "Recebido" && !r.conciliado).map((r) => ({ id: r.id, origem: "Conta a Receber (recebida)", descricao: r.cliente, valor: r.valorRecebido ?? r.valor })),
+    ];
+    const naoResolvidos = [
+      ...payablesM.filter((p) => p.status !== "Pago").map((p) => ({ id: p.id, origem: "Conta a Pagar", descricao: p.fornecedor, valor: p.valor, status: p.status })),
+      ...receivablesM.filter((r) => r.status !== "Recebido").map((r) => ({ id: r.id, origem: "Conta a Receber", descricao: r.cliente, valor: r.valor, status: r.status })),
+    ];
+    return { semCategoria, naoConciliados, naoResolvidos, total: semCategoria.length + naoConciliados.length + naoResolvidos.length };
+  }, [checkComp, payables, receivables, bankEntries, transfers, empresaId]);
 
   const reabrirMes = (competencia) => {
     if (!confirmDelete(`Reabrir ${fmtCompetencia(competencia)}? Os lançamentos desse mês voltam a poder ser editados normalmente.`)) return;
@@ -7881,7 +7921,7 @@ function RotinaView({
                     {locked ? (
                       <Button variant="ghost" onClick={() => reabrirMes(m)}><Unlock size={13} /> Reabrir</Button>
                     ) : (
-                      <Button variant="subtle" onClick={() => fecharMes(m)}><Lock size={13} /> Fechar mês</Button>
+                      <Button variant="subtle" onClick={() => setCheckComp(m)}><Lock size={13} /> Fechar mês</Button>
                     )}
                   </td>
                 </tr>
@@ -7889,6 +7929,54 @@ function RotinaView({
             })}
           </tbody>
         </table>
+
+        {checkComp && pendenciasDoMes && (
+          <div className="mt-3 pt-3 space-y-3" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+            {pendenciasDoMes.total === 0 ? (
+              <div className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg" style={{ background: COLORS.greenSoft }}>
+                <p className="text-sm flex items-center gap-1.5" style={{ color: COLORS.green }}>
+                  <CheckCircle2 size={15} /> Não há inconsistência ou pendência para {empresaNome || "esta empresa"} em {fmtCompetencia(checkComp)}.
+                </p>
+                <div className="flex gap-2 shrink-0">
+                  <Button variant="ghost" onClick={() => setCheckComp(null)}>Cancelar</Button>
+                  <Button onClick={() => fecharMes(checkComp)}><Lock size={13} /> Fechar mês</Button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg" style={{ background: COLORS.amberSoft }}>
+                  <p className="text-sm flex items-center gap-1.5" style={{ color: COLORS.amber }}>
+                    <AlertTriangle size={15} /> {pendenciasDoMes.total} pendência(s) em {empresaNome || "esta empresa"} — {fmtCompetencia(checkComp)}. Revise antes de fechar, ou feche mesmo assim.
+                  </p>
+                  <div className="flex gap-2 shrink-0">
+                    <Button variant="ghost" onClick={() => setCheckComp(null)}>Cancelar</Button>
+                    <Button variant="subtle" onClick={() => fecharMes(checkComp)}><Lock size={13} /> Fechar mesmo assim</Button>
+                  </div>
+                </div>
+                {[
+                  { titulo: "Sem categoria", itens: pendenciasDoMes.semCategoria },
+                  { titulo: "Não conciliados", itens: pendenciasDoMes.naoConciliados },
+                  { titulo: "Ainda não pagos/recebidos", itens: pendenciasDoMes.naoResolvidos },
+                ].filter((g) => g.itens.length > 0).map((g) => (
+                  <div key={g.titulo} className="rounded-lg border" style={{ borderColor: COLORS.border }}>
+                    <p className="text-xs font-semibold px-3 py-1.5" style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>{g.titulo} ({g.itens.length})</p>
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {g.itens.map((it) => (
+                          <tr key={`${it.origem}-${it.id}`} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                            <td className="px-3 py-1.5"><Badge tone="neutral">{it.origem}</Badge></td>
+                            <td className="px-3 py-1.5" style={{ color: COLORS.inkSoft }}>{it.descricao}</td>
+                            <td className="px-3 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(it.valor)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </ReportCard>
 
       <ReportCard
