@@ -986,7 +986,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     { id: "fiscal", label: "Calendário Fiscal", icon: Calendar },
     { id: "categories", label: "Plano de Contas", icon: ListTree },
     { id: "reconciliation", label: "Conciliação Bancária", icon: CheckCircle2 },
-    ...(role === "gestor" ? [{ id: "settlementPartners", label: "Repasses de Terceiros", icon: Percent }] : []),
+    ...(role !== "owner" ? [{ id: "settlementPartners", label: "Repasses de Terceiros", icon: Percent }] : []),
     ...(role === "gestor" ? [{ id: "rotina", label: "Rotina", icon: ListChecks }] : []),
     ...(role === "gestor" ? [{ id: "hubSkills", label: "Hub de Skills", icon: Zap }] : []),
     { id: "reports", label: "Relatórios", icon: FileText },
@@ -1286,7 +1286,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 pendingImport={pendingImport?.context === "payable" ? pendingImport : null}
                 onImportProcessed={handleImportProcessed}
                 userEmail={userEmail}
-                canEdit={role === "gestor"}
+                canEdit={role !== "owner"}
               />
             )}
 
@@ -1303,7 +1303,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 pendingImport={pendingImport?.context === "receivable" ? pendingImport : null}
                 onImportProcessed={handleImportProcessed}
                 userEmail={userEmail}
-                canEdit={role === "gestor"}
+                canEdit={role !== "owner"}
               />
             )}
 
@@ -1317,7 +1317,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 onSave={(v) => persist("bankEntries", v, setBankEntries)}
                 pendingImport={pendingImport?.context === "bankEntry" ? pendingImport : null}
                 onImportProcessed={handleImportProcessed}
-                canEdit={role === "gestor"}
+                canEdit={role !== "owner"}
               />
             )}
 
@@ -1328,7 +1328,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
                 onSave={(v) => persist("transfers", v, setTransfers)}
-                canEdit={role === "gestor"}
+                canEdit={role !== "owner"}
               />
             )}
 
@@ -1340,6 +1340,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 selectedEmpresa={selectedEmpresa}
                 onSave={(v) => persist("fiscalObligations", v, setFiscalObligations)}
                 userEmail={userEmail}
+                readOnly={role !== "gestor"}
               />
             )}
 
@@ -4976,7 +4977,7 @@ function buildFiscalSuggestions(empresa, existing, year) {
   return out;
 }
 
-function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave, userEmail }) {
+function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave, userEmail, readOnly = false }) {
   const [modal, setModal] = useState(null);
   const [payModal, setPayModal] = useState(null);
   const [search, setSearch] = useState("");
@@ -5046,12 +5047,16 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave, 
   return (
     <div className="space-y-4">
       <Header title="Calendário Fiscal" subtitle={`${filtered.length} obrigação(ões) · ${fmtBRL(total)}`}>
-        <Button variant="ghost" onClick={generateSuggestions} title="Sugere as obrigações do ano a partir do regime tributário da empresa">
-          <Sparkles size={15} /> Gerar obrigações do ano
-        </Button>
-        <Button onClick={() => setModal({ empresaId: selectedEmpresa })}>
-          <Plus size={15} /> Nova obrigação
-        </Button>
+        {!readOnly && (
+          <>
+            <Button variant="ghost" onClick={generateSuggestions} title="Sugere as obrigações do ano a partir do regime tributário da empresa">
+              <Sparkles size={15} /> Gerar obrigações do ano
+            </Button>
+            <Button onClick={() => setModal({ empresaId: selectedEmpresa })}>
+              <Plus size={15} /> Nova obrigação
+            </Button>
+          </>
+        )}
       </Header>
 
       {!empresa?.regimeTributario && (
@@ -5080,13 +5085,15 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave, 
                     {o.vencimento ? `Vence em ${fmtDate(o.vencimento)}` : "Defina a data de vencimento"} — {o.descricao}
                   </p>
                 </div>
-                <div className="flex gap-1 shrink-0">
-                  <button onClick={() => setModal(o)} title="Editar antes de validar" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                  <Button variant="subtle" onClick={() => validateSuggestion(o.id)} disabled={!o.vencimento} title={o.vencimento ? "Confirmar esta obrigação" : "Defina a data de vencimento antes de validar"}>
-                    <Check size={13} /> Validar
-                  </Button>
-                  <button onClick={() => discardSuggestion(o.id)} title="Não se aplica a esta empresa" className="p-1.5 rounded-md hover:bg-black/5"><X size={14} color={COLORS.red} /></button>
-                </div>
+                {!readOnly && (
+                  <div className="flex gap-1 shrink-0">
+                    <button onClick={() => setModal(o)} title="Editar antes de validar" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                    <Button variant="subtle" onClick={() => validateSuggestion(o.id)} disabled={!o.vencimento} title={o.vencimento ? "Confirmar esta obrigação" : "Defina a data de vencimento antes de validar"}>
+                      <Check size={13} /> Validar
+                    </Button>
+                    <button onClick={() => discardSuggestion(o.id)} title="Não se aplica a esta empresa" className="p-1.5 rounded-md hover:bg-black/5"><X size={14} color={COLORS.red} /></button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -5131,15 +5138,17 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave, 
                   <td className="px-4 py-2.5"><StatusBadge status={o.statusDisplay} /></td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{accounts.find((a) => a.id === o.contaId)?.nome || "—"}</td>
                   <td className="px-4 py-2.5">
-                    <div className="flex justify-end gap-1">
-                      {o.status !== "Pago" ? (
-                        <Button variant="subtle" onClick={() => setPayModal(o)}><Check size={13} /> Dar baixa</Button>
-                      ) : (
-                        <button onClick={() => cancelPayment(o)} title="Cancelar baixa (volta pra Pendente)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
-                      )}
-                      <button onClick={() => setModal(o)} title="Editar obrigação" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                      <button onClick={() => remove(o.id)} title="Excluir obrigação" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
-                    </div>
+                    {!readOnly && (
+                      <div className="flex justify-end gap-1">
+                        {o.status !== "Pago" ? (
+                          <Button variant="subtle" onClick={() => setPayModal(o)}><Check size={13} /> Dar baixa</Button>
+                        ) : (
+                          <button onClick={() => cancelPayment(o)} title="Cancelar baixa (volta pra Pendente)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
+                        )}
+                        <button onClick={() => setModal(o)} title="Editar obrigação" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                        <button onClick={() => remove(o.id)} title="Excluir obrigação" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
