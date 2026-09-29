@@ -2135,7 +2135,7 @@ function EmpresasView({ empresas, role, documentUploads = [], onSave, onOpenAcco
               {isGestor && (e.contratoValorMensal || e.contabilidadeNome || e.certificadoDigitalTipo) && (
                 <div className="pb-3 space-y-1">
                   {e.contratoValorMensal != null && (
-                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>Contrato: {fmtBRL(e.contratoValorMensal)}/mês{e.contratoRenovacao ? ` · renovação ${e.contratoRenovacao}` : ""}</p>
+                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>Contrato: {fmtBRL(e.contratoValorMensal)}/mês{e.contratoVencimento ? ` · fim em ${fmtDate(e.contratoVencimento)}` : ""}</p>
                   )}
                   {e.contabilidadeNome && (
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>Contabilidade: {e.contabilidadeNome}{e.contabilidadeContato ? ` (${e.contabilidadeContato})` : ""}</p>
@@ -2473,7 +2473,7 @@ function AdmView({ role, empresas = [], userEmail }) {
         <Card className="p-4">
           <p className="text-sm font-medium mb-1" style={{ color: COLORS.ink }}>Contratos de prestação de serviço vencendo</p>
           <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>
-            Aviso com 60 dias de antecedência (campo "Vencimento do contrato", em Cadastros → Editar empresa). "Exportar documentos" gera um .zip com tudo que já foi trocado com o cliente e manda o link por WhatsApp pro dono — a exclusão dos originais é uma ação separada, só depois que ele confirmar o recebimento.
+            Aviso com 60 dias de antecedência (campo "Fim do contrato", em Cadastros → Editar empresa). "Exportar documentos" gera um .zip com tudo que já foi trocado com o cliente e manda o link por WhatsApp pro dono — a exclusão dos originais é uma ação separada, só depois que ele confirmar o recebimento.
           </p>
           <div className="grid gap-2">
             {contratosAlerta.map(({ empresa, alerta }) => {
@@ -2486,7 +2486,7 @@ function AdmView({ role, empresas = [], userEmail }) {
                       <p className="text-sm font-medium" style={{ color: alerta.nivel === "vencido" ? COLORS.red : COLORS.amber }}>
                         {empresa.nome} — {alerta.nivel === "vencido" ? `contrato vencido há ${-alerta.dias}d` : `vence em ${alerta.dias}d`}
                       </p>
-                      <p className="text-xs" style={{ color: COLORS.inkSoft }}>Vencimento: {fmtDate(empresa.contratoVencimento)}{empresa.contratoRenovacao ? ` · renovação ${empresa.contratoRenovacao}` : ""}</p>
+                      <p className="text-xs" style={{ color: COLORS.inkSoft }}>Fim do contrato: {fmtDate(empresa.contratoVencimento)}</p>
                     </div>
                     <div className="flex gap-2">
                       <Button variant="ghost" disabled={ocupado} onClick={() => handleExportar(empresa)}>
@@ -2922,22 +2922,19 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
         <div className="pt-2 mt-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
           <p className="text-sm font-medium mb-3" style={{ color: COLORS.ink }}>Dados operacionais do BPO (uso interno)</p>
           <div className="grid gap-3">
-            <div className="grid grid-cols-4 gap-3">
-              <Field label="Valor mensal do contrato (R$)">
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="Valor mensal (R$)">
                 <TextInput type="number" step="0.01" value={form.contratoValorMensal ?? ""} onChange={(e) => setForm({ ...form, contratoValorMensal: e.target.value })} />
               </Field>
               <Field label="Início do contrato">
                 <TextInput type="date" value={form.contratoInicio || ""} onChange={(e) => setForm({ ...form, contratoInicio: e.target.value })} />
               </Field>
-              <Field label="Renovação">
-                <TextInput value={form.contratoRenovacao || ""} onChange={(e) => setForm({ ...form, contratoRenovacao: e.target.value })} placeholder="Ex.: anual, indeterminado" />
-              </Field>
-              <Field label="Vencimento do contrato">
+              <Field label="Fim do contrato">
                 <TextInput type="date" value={form.contratoVencimento || ""} onChange={(e) => setForm({ ...form, contratoVencimento: e.target.value })} />
               </Field>
             </div>
             <p className="text-xs -mt-1" style={{ color: COLORS.inkSoft }}>
-              O "Vencimento" alimenta o alerta de contrato vencendo no ADM — "Renovação" é só anotação livre (ex.: "anual"), não gera aviso sozinha.
+              "Fim do contrato" alimenta o alerta de contrato vencendo, no menu ADM (aviso com 60 dias de antecedência).
             </p>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Contabilidade responsável">
