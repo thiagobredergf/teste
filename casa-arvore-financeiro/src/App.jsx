@@ -2180,6 +2180,17 @@ function EmpresaOwnersPanel({ empresa }) {
 
   useEffect(() => { load(); }, [load]);
 
+  // Só pré-preenche na primeira vez (ainda sem nenhum dono cadastrado) e só
+  // se o campo continuar vazio — nunca sobrescreve o que o gestor já
+  // digitou. É conveniência, não automação: continua exigindo o clique em
+  // "Dar acesso" pra de fato criar o login, porque e-mail de contato e
+  // login são coisas diferentes (ver texto abaixo do campo).
+  useEffect(() => {
+    if (owners && owners.length === 0 && empresa.contatoEmail && !email) {
+      setEmail(empresa.contatoEmail);
+    }
+  }, [owners]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const addOwner = async () => {
     if (!email.trim()) return;
     setBusy(true);
@@ -2236,7 +2247,8 @@ function EmpresaOwnersPanel({ empresa }) {
 
   return (
     <div className="pt-3" style={{ borderTop: `1px solid ${COLORS.border}` }}>
-      <p className="text-xs font-medium mb-2" style={{ color: COLORS.inkSoft }}>Donos com acesso a esta empresa</p>
+      <p className="text-xs font-medium" style={{ color: COLORS.inkSoft }}>Donos com acesso a esta empresa</p>
+      <p className="text-xs mb-2" style={{ color: COLORS.inkSoft }}>Cria um login pra essa pessoa entrar no sistema — diferente do e-mail de contato ali em cima, que é só referência.</p>
       {owners === null ? (
         <p className="text-xs" style={{ color: COLORS.inkSoft }}>Carregando…</p>
       ) : owners.length === 0 ? (
@@ -2309,12 +2321,12 @@ function NovoUsuarioModal({ onClose, onSubmit, busy }) {
         </Field>
         <Field label="Papel">
           <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-            <option value="operador">Operador (rotina do dia a dia do BPO)</option>
-            <option value="gestor">Gestor (supervisão + ADM)</option>
+            <option value="operador">Operador — rotina do BPO</option>
+            <option value="gestor">Gestor — supervisão e ADM</option>
           </Select>
         </Field>
         <p className="text-xs" style={{ color: COLORS.inkSoft }}>
-          Pra dar acesso a um Dono/Sócio, use o ícone de link na tela Empresas — lá o acesso já nasce vinculado à empresa certa.
+          Pra dar acesso a um Dono/Sócio, use "Donos com acesso" no card da empresa, em Cadastros → Empresas — lá o acesso já nasce vinculado à empresa certa.
         </p>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>Cancelar</Button>
@@ -2539,7 +2551,7 @@ function AdmView({ role, empresas = [], userEmail }) {
                     {u.role === "owner" ? (
                       <Badge tone="blue">Dono</Badge>
                     ) : (
-                      <Select value={u.role} onChange={(e) => mudarPapel(u, e.target.value)} style={{ height: 32 }}>
+                      <Select value={u.role} onChange={(e) => mudarPapel(u, e.target.value)} style={{ height: 32, padding: "0 10px" }}>
                         <option value="gestor">Gestor</option>
                         <option value="operador">Operador</option>
                       </Select>
@@ -2907,10 +2919,10 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
             {REGIMES_TRIBUTARIOS.map((r) => <option key={r} value={r}>{r}</option>)}
           </Select>
         </Field>
-        <Field label="Proprietário">
-          <TextInput value={form.proprietario || ""} onChange={(e) => setForm({ ...form, proprietario: e.target.value })} placeholder="Nome do(a) proprietário(a)" />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Proprietário">
+            <TextInput value={form.proprietario || ""} onChange={(e) => setForm({ ...form, proprietario: e.target.value })} placeholder="Nome do(a) proprietário(a)" />
+          </Field>
           <Field label="E-mail de contato">
             <TextInput type="email" value={form.contatoEmail || ""} onChange={(e) => setForm({ ...form, contatoEmail: e.target.value })} />
           </Field>
@@ -2918,6 +2930,9 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
             <TextInput value={form.contatoCelular || ""} onChange={(e) => setForm({ ...form, contatoCelular: e.target.value })} placeholder="(00) 00000-0000" />
           </Field>
         </div>
+        <p className="text-xs -mt-1" style={{ color: COLORS.inkSoft }}>
+          Isso é só referência (WhatsApp/e-mail de contato) — não dá login. Pra esse proprietário acessar o sistema, use "Donos com acesso" no card da empresa, em Cadastros → Empresas.
+        </p>
 
         <div className="pt-2 mt-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
           <p className="text-sm font-medium mb-3" style={{ color: COLORS.ink }}>Dados operacionais do BPO (uso interno)</p>
