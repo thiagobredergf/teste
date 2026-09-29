@@ -1707,6 +1707,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 empresaBreakdown={empresaBreakdown}
                 accountBalance={accountBalance}
                 totals={totals}
+                monthlyFlow={monthlyFlow}
               />
             )}
 
@@ -6670,6 +6671,8 @@ const daysBetween = (isoFrom, isoTo) => {
 
 const REPORT_TABS = [
   { id: "dre", label: "DRE", Comp: DREReport },
+  { id: "dfc", label: "DFC (Realizado)", Comp: DFCReport },
+  { id: "kpis", label: "Indicadores", Comp: KPIReport },
   { id: "fluxo", label: "Fluxo Projetado", Comp: FluxoProjetadoReport },
   { id: "ordem", label: "Ordem de Pagamento", Comp: PaymentOrderReport },
   { id: "cobranca", label: "Relação de Cobrança", Comp: CollectionsReport },
@@ -6772,28 +6775,78 @@ function ReportCard({ title, subtitle, children }) {
 }
 
 /* --- DRE (Demonstrativo de Resultado) --- */
-function DREReport({ year, categoryBreakdown, receivableBreakdown, financialAdjustments, totals }) {
-  const receitas = Object.entries(receivableBreakdown)
-    .map(([nome, v]) => ({ nome, valor: v.recebido }))
-    .filter((r) => r.valor > 0)
-    .sort((a, b) => b.valor - a.valor);
-  const despesas = Object.entries(categoryBreakdown)
-    .map(([nome, v]) => ({ nome, valor: v.pago }))
-    .filter((d) => d.valor > 0)
-    .sort((a, b) => b.valor - a.valor);
+// DRE em dois regimes — caixa (o que já foi de fato pago/recebido) e
+// competência (a que período o lançamento pertence, pelo vencimento, tenha
+// sido liquidado ou não). O sistema não coleta uma "data de competência"
+// separada da data de vencimento — pra manter simples pro operador não
+// contador, competência aqui é aproximada pelo mês de vencimento do
+// lançamento, prática comum nesse porte de negócio. As duas visões são
+// year-scoped de propósito (o "· {year}" do título só virava verdade
+// aqui — categoryBreakdown/receivableBreakdown, usados no regime de caixa
+// antigo, eram na verdade desde sempre, não só o ano selecionado).
+function DREReport({ year, payables, receivables, financialAdjustments }) {
+  const [regime, setRegime] = useState("caixa"); // "caixa" | "competencia"
+
+  const receitas = useMemo(() => {
+    const map = {};
+    receivables.forEach((r) => {
+      if (regime === "caixa") {
+        if (r.status !== "Recebido" || yearOf(r.dataReceb) !== year) return;
+        map[r.categoria] = (map[r.categoria] || 0) + Number(r.valorRecebido ?? r.valor ?? 0) - Number(r.juros || 0) - Number(r.multa || 0) + Number(r.desconto || 0);
+      } else {
+        if (yearOf(r.vencimento) !== year) return;
+        map[r.categoria] = (map[r.categoria] || 0) + Number(r.valor || 0);
+      }
+    });
+    return Object.entries(map).map(([nome, valor]) => ({ nome, valor })).filter((r) => r.valor > 0).sort((a, b) => b.valor - a.valor);
+  }, [receivables, regime, year]);
+
+  const despesas = useMemo(() => {
+    const map = {};
+    payables.forEach((p) => {
+      if (regime === "caixa") {
+        if (p.status !== "Pago" || yearOf(p.dataPgto) !== year) return;
+        map[p.categoria] = (map[p.categoria] || 0) + Number(p.valorPago ?? p.valor ?? 0) - Number(p.juros || 0) - Number(p.multa || 0) + Number(p.desconto || 0);
+      } else {
+        if (yearOf(p.vencimento) !== year) return;
+        map[p.categoria] = (map[p.categoria] || 0) + Number(p.valor || 0);
+      }
+    });
+    return Object.entries(map).map(([nome, valor]) => ({ nome, valor })).filter((d) => d.valor > 0).sort((a, b) => b.valor - a.valor);
+  }, [payables, regime, year]);
+
   const totalReceitas = receitas.reduce((s, r) => s + r.valor, 0);
   const totalDespesas = despesas.reduce((s, d) => s + d.valor, 0);
   const resultadoOperacional = totalReceitas - totalDespesas;
-  const resultado = resultadoOperacional + (financialAdjustments?.resultado || 0);
+  const mostraFinanceiro = regime === "caixa" && financialAdjustments && (financialAdjustments.receitas > 0 || financialAdjustments.despesas > 0);
+  const resultado = resultadoOperacional + (mostraFinanceiro ? financialAdjustments.resultado : 0);
+  const margem = totalReceitas > 0 ? resultadoOperacional / totalReceitas : 0;
 
   return (
     <div className="space-y-4">
-      <ReportCard title={`DRE (regime de caixa) · ${year}`} subtitle="Receitas e despesas efetivamente realizadas (recebidas/pagas), por categoria.">
+      <div className="flex items-center gap-1.5 print:hidden">
+        {[{ id: "caixa", label: "Regime de caixa" }, { id: "competencia", label: "Regime de competência" }].map((opt) => (
+          <button
+            key={opt.id}
+            onClick={() => setRegime(opt.id)}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+            style={{ background: regime === opt.id ? COLORS.ink : "#EFEEE8", color: regime === opt.id ? "#fff" : COLORS.ink }}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+      <ReportCard
+        title={`DRE (regime de ${regime === "caixa" ? "caixa" : "competência"}) · ${year}`}
+        subtitle={regime === "caixa"
+          ? "Receitas e despesas efetivamente realizadas (recebidas/pagas) no ano, por categoria."
+          : "Receitas e despesas pelo mês de vencimento (competência aproximada), tenham sido liquidadas ou não — mostra o resultado do período independente de quando o dinheiro entrou/saiu de fato."}
+      >
         <div className="grid md:grid-cols-2 gap-4">
           <div>
             <p className="text-xs font-semibold mb-2" style={{ color: COLORS.green }}>Receitas</p>
             {receitas.length === 0 ? (
-              <p className="text-sm" style={{ color: COLORS.inkSoft }}>Sem receitas recebidas no período.</p>
+              <p className="text-sm" style={{ color: COLORS.inkSoft }}>Sem receitas no período.</p>
             ) : (
               <div className="space-y-1">
                 {receitas.map((r) => (
@@ -6812,7 +6865,7 @@ function DREReport({ year, categoryBreakdown, receivableBreakdown, financialAdju
           <div>
             <p className="text-xs font-semibold mb-2" style={{ color: COLORS.red }}>Despesas</p>
             {despesas.length === 0 ? (
-              <p className="text-sm" style={{ color: COLORS.inkSoft }}>Sem despesas pagas no período.</p>
+              <p className="text-sm" style={{ color: COLORS.inkSoft }}>Sem despesas no período.</p>
             ) : (
               <div className="space-y-1">
                 {despesas.map((d) => (
@@ -6831,8 +6884,8 @@ function DREReport({ year, categoryBreakdown, receivableBreakdown, financialAdju
         </div>
       </ReportCard>
 
-      {financialAdjustments && (financialAdjustments.receitas > 0 || financialAdjustments.despesas > 0) && (
-        <ReportCard title="Resultado financeiro" subtitle="Juros e multas pagos/recebidos, e descontos concedidos/obtidos em baixas — separado do operacional de propósito.">
+      {mostraFinanceiro && (
+        <ReportCard title="Resultado financeiro" subtitle="Juros e multas pagos/recebidos, e descontos concedidos/obtidos em baixas — sempre por regime de caixa (só existe no momento da baixa), separado do operacional de propósito.">
           <div className="grid grid-cols-2 gap-4">
             <div className="flex justify-between text-sm">
               <span style={{ color: COLORS.ink }}>Receitas financeiras</span>
@@ -6857,8 +6910,144 @@ function DREReport({ year, categoryBreakdown, receivableBreakdown, financialAdju
         </span>
       </Card>
       <p className="text-xs px-1" style={{ color: COLORS.inkSoft }}>
-        Margem: {totals.totalEntradas > 0 ? `${(totals.margem * 100).toFixed(1)}%` : "—"}
+        Margem operacional: {totalReceitas > 0 ? `${(margem * 100).toFixed(1)}%` : "—"}
       </p>
+    </div>
+  );
+}
+
+/* --- DFC (Demonstrativo de Fluxo de Caixa) realizado --- */
+// Diferente do Fluxo Projetado (que olha só pro que ainda está em aberto,
+// contas a pagar/receber não liquidadas), este mostra o que JÁ aconteceu
+// de fato — mesmos dados que alimentam o card "Saldo em contas" do
+// Painel, só que mês a mês em vez de só o total do ano.
+function DFCReport({ year, monthlyFlow }) {
+  const linhas = MESES_PT.map((nome, i) => ({
+    mes: nome,
+    entradas: monthlyFlow.entradas[i],
+    saidas: monthlyFlow.saidas[i],
+    saldoMes: monthlyFlow.entradas[i] - monthlyFlow.saidas[i],
+    acumulado: monthlyFlow.acumulado[i],
+  }));
+  const totalEntradas = monthlyFlow.entradas.reduce((a, b) => a + b, 0);
+  const totalSaidas = monthlyFlow.saidas.reduce((a, b) => a + b, 0);
+  const saldoAno = totalEntradas - totalSaidas;
+
+  return (
+    <div className="space-y-4">
+      <ReportCard
+        title={`DFC (fluxo de caixa realizado) · ${year}`}
+        subtitle="Entradas e saídas que já aconteceram de fato (contas pagas/recebidas, lançamentos bancários e obrigações fiscais quitadas), mês a mês — mostra a liquidez real, diferente do Fluxo Projetado (que olha só pro que ainda está em aberto)."
+      >
+        <ResponsiveContainer width="100%" height={260}>
+          <ComposedChart data={linhas}>
+            <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
+            <XAxis dataKey="mes" tickFormatter={(m) => m.slice(0, 3)} tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => fmtBRL(v)} width={70} />
+            <Tooltip formatter={(v) => fmtBRL(v)} labelFormatter={(m) => m} />
+            <Legend />
+            <Bar dataKey="entradas" name="Entradas" fill={COLORS.green} />
+            <Bar dataKey="saidas" name="Saídas" fill={COLORS.red} />
+            <Line dataKey="acumulado" name="Saldo acumulado" stroke={COLORS.primary} strokeWidth={2} dot={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+        <div className="overflow-x-auto mt-3">
+          <table className="w-full text-sm min-w-[640px]">
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-2 py-1.5">Mês</th>
+                <th className="text-right font-medium px-2 py-1.5">Entradas</th>
+                <th className="text-right font-medium px-2 py-1.5">Saídas</th>
+                <th className="text-right font-medium px-2 py-1.5">Saldo do mês</th>
+                <th className="text-right font-medium px-2 py-1.5">Acumulado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {linhas.map((l) => (
+                <tr key={l.mes} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                  <td className="px-2 py-1.5 capitalize" style={{ color: COLORS.ink }}>{l.mes}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.green }}>{fmtBRL(l.entradas)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.red }}>{fmtBRL(l.saidas)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: l.saldoMes >= 0 ? COLORS.green : COLORS.red }}>{fmtBRL(l.saldoMes)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(l.acumulado)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop: `2px solid ${COLORS.border}` }} className="font-semibold">
+                <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>Total do ano</td>
+                <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.green }}>{fmtBRL(totalEntradas)}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.red }}>{fmtBRL(totalSaidas)}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: saldoAno >= 0 ? COLORS.green : COLORS.red }}>{fmtBRL(saldoAno)}</td>
+                <td className="px-2 py-1.5"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </ReportCard>
+    </div>
+  );
+}
+
+/* --- Indicadores (KPIs) --- */
+// Métricas que nenhum outro relatório dá isolado: margem já existe no DRE,
+// mas inadimplência e prazo médio (de receber/pagar) exigem cruzar
+// vencimento com a data em que a baixa de fato aconteceu — só faz sentido
+// num relatório próprio.
+function KPIReport({ year, payables, receivables, totals }) {
+  const today = todayISO();
+
+  const receivablesAno = receivables.filter((r) => yearOf(r.vencimento) === year);
+  const recebidosAno = receivablesAno.filter((r) => r.status === "Recebido");
+  const totalFaturado = receivablesAno.reduce((s, r) => s + Number(r.valor || 0), 0);
+  const vencidoNaoRecebido = receivablesAno
+    .filter((r) => r.status !== "Recebido" && r.vencimento && r.vencimento < today)
+    .reduce((s, r) => s + Number(r.valor || 0), 0);
+  const inadimplencia = totalFaturado > 0 ? (vencidoNaoRecebido / totalFaturado) * 100 : 0;
+
+  const prazosRecebimento = recebidosAno.filter((r) => r.vencimento && r.dataReceb).map((r) => daysBetween(r.vencimento, r.dataReceb));
+  const dso = prazosRecebimento.length > 0 ? prazosRecebimento.reduce((a, b) => a + b, 0) / prazosRecebimento.length : null;
+
+  const ticketMedio = recebidosAno.length > 0
+    ? recebidosAno.reduce((s, r) => s + Number(r.valorRecebido ?? r.valor ?? 0), 0) / recebidosAno.length
+    : 0;
+
+  const payablesAno = payables.filter((p) => yearOf(p.vencimento) === year);
+  const pagosAno = payablesAno.filter((p) => p.status === "Pago");
+  const prazosPagamento = pagosAno.filter((p) => p.vencimento && p.dataPgto).map((p) => daysBetween(p.vencimento, p.dataPgto));
+  const dpo = prazosPagamento.length > 0 ? prazosPagamento.reduce((a, b) => a + b, 0) / prazosPagamento.length : null;
+
+  const fmtDias = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(0)} dia(s)`);
+
+  const cards = [
+    { label: "Margem operacional (caixa)", value: totals.totalEntradas > 0 ? `${(totals.margem * 100).toFixed(1)}%` : "—", icon: TrendingUp, tone: totals.margem >= 0 ? "green" : "red", nota: "Saldo do ano ÷ entradas do ano, regime de caixa." },
+    { label: "Taxa de inadimplência", value: `${inadimplencia.toFixed(1)}%`, icon: AlertTriangle, tone: inadimplencia > 10 ? "red" : inadimplencia > 0 ? "gold" : "green", nota: "Valor vencido e ainda não recebido ÷ total faturado no ano." },
+    { label: "Prazo médio de recebimento", value: fmtDias(dso), icon: CalendarClock, tone: dso == null ? "gold" : dso > 0 ? "red" : "green", nota: "Média de dias entre o vencimento e o recebimento — positivo é atraso." },
+    { label: "Prazo médio de pagamento", value: fmtDias(dpo), icon: CalendarClock, tone: "gold", nota: "Média de dias entre o vencimento e a baixa de contas a pagar." },
+    { label: "Ticket médio recebido", value: fmtBRL(ticketMedio), icon: CircleDollarSign, tone: "gold", nota: "Valor médio por conta a receber já recebida no ano." },
+    { label: "Faturado no ano (a receber)", value: fmtBRL(totalFaturado), icon: ArrowDownCircle, tone: "green", nota: "Soma de tudo com vencimento neste ano, recebido ou não." },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <ReportCard title={`Indicadores de desempenho · ${year}`} subtitle="Métricas de saúde financeira — passe o olho pra ver o que está fora do esperado antes de entrar nos relatórios detalhados.">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          {cards.map((k) => {
+            const Icon = k.icon;
+            const toneColor = k.tone === "green" ? COLORS.green : k.tone === "red" ? COLORS.red : COLORS.gold;
+            return (
+              <Card key={k.label} className="p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-medium" style={{ color: COLORS.inkSoft }}>{k.label}</span>
+                  <Icon size={16} color={toneColor} />
+                </div>
+                <p className="text-lg font-semibold tabular-nums" style={{ color: toneColor }}>{k.value}</p>
+                <p className="text-[11px] mt-1" style={{ color: COLORS.inkSoft }}>{k.nota}</p>
+              </Card>
+            );
+          })}
+        </div>
+      </ReportCard>
     </div>
   );
 }
