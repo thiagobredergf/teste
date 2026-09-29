@@ -3174,6 +3174,7 @@ function AccountModal({ initial, onClose, onSubmit }) {
 /* ---------------------------------------------------------------------- */
 function ContactsView({ contacts, selectedEmpresa, onSave }) {
   const [modal, setModal] = useState(null);
+  const [importModal, setImportModal] = useState(false);
   const visible = contacts
     .filter((c) => !c.deletedAt && c.empresaId === selectedEmpresa)
     .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
@@ -3191,6 +3192,9 @@ function ContactsView({ contacts, selectedEmpresa, onSave }) {
   return (
     <div className="space-y-4">
       <Header title="Contatos" subtitle="Fornecedores e clientes cadastrados — usados em Contas a Pagar/Receber e reaproveitados pra cobrança.">
+        <Button variant="ghost" onClick={() => setImportModal(true)}>
+          <Upload size={15} /> Importar contatos
+        </Button>
         <Button onClick={() => setModal({ empresaId: selectedEmpresa })}>
           <Plus size={15} /> Novo contato
         </Button>
@@ -3230,7 +3234,165 @@ function ContactsView({ contacts, selectedEmpresa, onSave }) {
         )}
       </Card>
       {modal && <ContactModal initial={modal} contacts={contacts} onClose={() => setModal(null)} onSubmit={submit} />}
+      {importModal && (
+        <ImportContactsModal
+          empresaId={selectedEmpresa}
+          contacts={contacts}
+          onClose={() => setImportModal(false)}
+          onImport={(novos) => { onSave([...contacts, ...novos]); setImportModal(false); }}
+        />
+      )}
     </div>
+  );
+}
+
+// Importação em lote de contatos a partir de .csv — pensado pro caso de
+// já existir um cadastro de clientes/fornecedores em outro sistema (ex.:
+// sistema de clínica) na hora de começar um contrato novo, sem digitar
+// um por um. Mapeamento de coluna é manual (não por IA): aqui o que
+// importa é exatidão do dado cadastral, não velocidade — errar CPF de
+// um cliente pro outro é pior que gastar 30 segundos conferindo o
+// mapeamento antes de confirmar.
+function ImportContactsModal({ empresaId, contacts, onClose, onImport }) {
+  const [rows, setRows] = useState(null);
+  const [headers, setHeaders] = useState([]);
+  const [mapping, setMapping] = useState({});
+  const [fileError, setFileError] = useState("");
+  const [fileName, setFileName] = useState("");
+
+  const CAMPOS = [
+    { key: "nome", label: "Nome", required: true, guess: /nome|raz[aã]o.?social|cliente|fornecedor|paciente/i },
+    { key: "documento", label: "CPF/CNPJ", guess: /cpf|cnpj|documento/i },
+    { key: "contato", label: "Telefone", guess: /telefone|celular|fone|whats|contato/i },
+    { key: "email", label: "E-mail", guess: /e-?mail/i },
+  ];
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setFileError("");
+    try {
+      const raw = await file.text();
+      const text = raw.replace(/^﻿/, "");
+      const linhas = text.split(/\r?\n/).filter((l) => l.trim());
+      if (linhas.length < 2) throw new Error("Arquivo vazio ou sem linhas de dados.");
+      const sep = (linhas[0].match(/;/g) || []).length > (linhas[0].match(/,/g) || []).length ? ";" : ",";
+      const parseLine = (l) => l.split(sep).map((c) => c.trim().replace(/^"|"$/g, ""));
+      const hdrs = parseLine(linhas[0]);
+      const data = linhas.slice(1).map((l) => {
+        const cols = parseLine(l);
+        const obj = {};
+        hdrs.forEach((h, i) => { obj[h] = cols[i] ?? ""; });
+        return obj;
+      });
+      const autoMap = {};
+      CAMPOS.forEach(({ key, guess }) => {
+        const found = hdrs.find((h) => guess.test(h));
+        if (found) autoMap[key] = found;
+      });
+      setHeaders(hdrs);
+      setRows(data);
+      setMapping(autoMap);
+      setFileName(file.name);
+    } catch (err) {
+      setFileError(err.message || "Não consegui ler esse arquivo — confira se é um .csv válido.");
+    }
+  };
+
+  const nomeCol = mapping.nome;
+  const prontos = rows && nomeCol ? rows.filter((r) => (r[nomeCol] || "").trim()) : [];
+  const existentesLower = new Set(
+    contacts.filter((c) => !c.deletedAt && c.empresaId === empresaId).map((c) => (c.nome || "").trim().toLowerCase())
+  );
+  const novos = prontos.filter((r) => !existentesLower.has((r[nomeCol] || "").trim().toLowerCase()));
+  const duplicados = prontos.length - novos.length;
+
+  const confirmar = () => {
+    const criados = novos.map((r) => ({
+      id: uid(),
+      empresaId,
+      nome: (r[mapping.nome] || "").trim(),
+      documento: mapping.documento ? (r[mapping.documento] || "").trim() : "",
+      contato: mapping.contato ? (r[mapping.contato] || "").trim() : "",
+      email: mapping.email ? (r[mapping.email] || "").trim() : "",
+    }));
+    onImport(criados);
+  };
+
+  return (
+    <Modal title="Importar contatos" onClose={onClose} wide>
+      <div className="grid gap-3">
+        <p className="text-xs -mt-1 px-3 py-2 rounded-lg" style={{ background: COLORS.goldSoft, color: COLORS.gold }}>
+          Aceita arquivo .csv — se o cadastro do outro sistema só exportar em Excel, abra e salve como CSV antes de subir aqui.
+        </p>
+        {!rows ? (
+          <label className="flex flex-col items-center justify-center gap-2 py-10 rounded-lg border-2 border-dashed cursor-pointer" style={{ borderColor: COLORS.border }}>
+            <Upload size={22} color={COLORS.inkSoft} />
+            <span className="text-sm" style={{ color: COLORS.inkSoft }}>Clique pra escolher o arquivo .csv</span>
+            <input type="file" accept=".csv,text/csv" className="hidden" onChange={handleFile} />
+          </label>
+        ) : (
+          <>
+            <p className="text-sm" style={{ color: COLORS.ink }}>{fileName} · {rows.length} linha(s) encontrada(s)</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {CAMPOS.map(({ key, label, required }) => (
+                <Field key={key} label={`${label}${required ? " *" : ""}`}>
+                  <Select value={mapping[key] || ""} onChange={(e) => setMapping((m) => ({ ...m, [key]: e.target.value || undefined }))}>
+                    <option value="">Não importar</option>
+                    {headers.map((h) => <option key={h} value={h}>{h}</option>)}
+                  </Select>
+                </Field>
+              ))}
+            </div>
+            {!nomeCol && <p className="text-xs" style={{ color: COLORS.red }}>Escolha qual coluna é o "Nome" pra continuar.</p>}
+            {nomeCol && (
+              <>
+                <div className="rounded-lg border max-h-56 overflow-y-auto" style={{ borderColor: COLORS.border }}>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}`, background: "#FAFAF7" }}>
+                        <th className="text-left font-medium px-3 py-2">Nome</th>
+                        <th className="text-left font-medium px-3 py-2">CPF/CNPJ</th>
+                        <th className="text-left font-medium px-3 py-2">Contato</th>
+                        <th className="text-left font-medium px-3 py-2">E-mail</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {prontos.slice(0, 8).map((r, i) => (
+                        <tr key={i} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                          <td className="px-3 py-2" style={{ color: COLORS.ink }}>{r[mapping.nome]}</td>
+                          <td className="px-3 py-2" style={{ color: COLORS.inkSoft }}>{mapping.documento ? r[mapping.documento] : "—"}</td>
+                          <td className="px-3 py-2" style={{ color: COLORS.inkSoft }}>{mapping.contato ? r[mapping.contato] : "—"}</td>
+                          <td className="px-3 py-2" style={{ color: COLORS.inkSoft }}>{mapping.email ? r[mapping.email] : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {prontos.length > 8 && <p className="text-xs px-3 py-1.5" style={{ color: COLORS.inkSoft }}>+ {prontos.length - 8} linha(s)…</p>}
+                </div>
+                <p className="text-sm" style={{ color: COLORS.inkSoft }}>
+                  {novos.length} novo(s) contato(s) a criar{duplicados > 0 ? ` · ${duplicados} já cadastrado(s) (mesmo nome), serão ignorados` : ""}
+                </p>
+              </>
+            )}
+          </>
+        )}
+        {fileError && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+            <AlertTriangle size={15} /> {fileError}
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          {rows && (
+            <Button onClick={confirmar} disabled={!nomeCol || novos.length === 0}>
+              <Upload size={15} /> Importar {novos.length > 0 ? `(${novos.length})` : ""}
+            </Button>
+          )}
+        </div>
+      </div>
+    </Modal>
   );
 }
 
