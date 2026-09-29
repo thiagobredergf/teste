@@ -3608,6 +3608,42 @@ function StatusSummary({ items, statuses }) {
   );
 }
 
+// Recibo avulso pra imprimir/exportar como PDF (comprovante de um
+// pagamento ou recebimento já baixado) — reusa o mesmo truque de
+// impressão do Relatórios (print:hidden no conteúdo normal da tela,
+// bloco próprio só visível em @media print), evitando que o resto da
+// tabela/filtros entre na impressão junto.
+function ReciboImpressao({ item, empresa, tipo }) {
+  const isPagamento = tipo === "pagamento";
+  const contraparte = isPagamento ? item.fornecedor : item.cliente;
+  const valor = (isPagamento ? item.valorPago : item.valorRecebido) ?? item.valor;
+  const data = isPagamento ? item.dataPgto : item.dataReceb;
+  return (
+    <div className="p-10 max-w-xl mx-auto">
+      <div className="flex items-center gap-3 mb-8 pb-4" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+        {empresa?.logoUrl && <img src={empresa.logoUrl} alt="" className="w-12 h-12 rounded object-contain" />}
+        <div>
+          <p className="text-lg font-semibold" style={{ color: COLORS.ink }}>{empresa?.nome}</p>
+          {empresa?.cnpj && <p className="text-xs" style={{ color: COLORS.inkSoft }}>CNPJ {empresa.cnpj}</p>}
+        </div>
+      </div>
+      <h3 className="text-base font-semibold mb-5" style={{ color: COLORS.ink }}>
+        Recibo de {isPagamento ? "Pagamento" : "Recebimento"}
+      </h3>
+      <div className="grid gap-2.5 text-sm" style={{ color: COLORS.ink }}>
+        <p><span style={{ color: COLORS.inkSoft }}>{isPagamento ? "Pago a" : "Recebido de"}:</span> {contraparte}</p>
+        {item.documento && <p><span style={{ color: COLORS.inkSoft }}>CPF/CNPJ:</span> {item.documento}</p>}
+        <p><span style={{ color: COLORS.inkSoft }}>Valor:</span> {fmtBRL(valor)}</p>
+        <p><span style={{ color: COLORS.inkSoft }}>Data:</span> {fmtDate(data)}</p>
+        {item.categoria && <p><span style={{ color: COLORS.inkSoft }}>Categoria:</span> {item.categoria}</p>}
+        {item.descricao && <p><span style={{ color: COLORS.inkSoft }}>Descrição:</span> {item.descricao}</p>}
+        {item.numeroDocumento && <p><span style={{ color: COLORS.inkSoft }}>Nº documento:</span> {item.numeroDocumento}</p>}
+      </div>
+      <p className="text-xs mt-10" style={{ color: COLORS.inkSoft }}>Emitido em {fmtDate(todayISO())} pelo ESEK.</p>
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------------------- */
 /*  Contas a Pagar                                                         */
 /* ---------------------------------------------------------------------- */
@@ -3622,6 +3658,7 @@ function PayablesView({
   const [batchSettleModal, setBatchSettleModal] = useState(false);
   const [cnabModal, setCnabModal] = useState(false);
   const [remessasModal, setRemessasModal] = useState(false);
+  const [reciboAlvo, setReciboAlvo] = useState(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -3880,7 +3917,8 @@ function PayablesView({
   };
 
   return (
-    <div className="space-y-4">
+    <>
+    <div className={`space-y-4 ${reciboAlvo ? "print:hidden" : ""}`}>
       <Header title="Contas a Pagar" subtitle={`${filtered.length} lançamento(s) · ${fmtBRL(total)}`}>
         {canEdit && (
           <>
@@ -3979,6 +4017,9 @@ function PayablesView({
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
+                      {p.status === "Pago" && (
+                        <button onClick={() => { setReciboAlvo(p); setTimeout(() => window.print(), 50); }} title="Imprimir recibo" className="p-1.5 rounded-md hover:bg-black/5"><Printer size={14} color={COLORS.inkSoft} /></button>
+                      )}
                       {canEdit && p.status === "Pago" && (
                         <button onClick={() => cancelPayment(p)} title="Cancelar baixa" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                       )}
@@ -4112,6 +4153,12 @@ function PayablesView({
         />
       )}
     </div>
+    {reciboAlvo && (
+      <div className="hidden print:block">
+        <ReciboImpressao item={reciboAlvo} empresa={empresa} tipo="pagamento" />
+      </div>
+    )}
+    </>
   );
 }
 
@@ -4859,12 +4906,13 @@ function BatchSettleModal({ title, items, nameField, valueLabel, dateLabel, acco
 /*  Contas a Receber                                                       */
 /* ---------------------------------------------------------------------- */
 function ReceivablesView({
-  receivables, accounts, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
+  receivables, accounts, empresas = [], selectedEmpresa, categories, contacts, onSaveContacts, onSave,
   pendingImport, onImportProcessed, userEmail, canEdit = true,
 }) {
   const [modal, setModal] = useState(null);
   const [recModal, setRecModal] = useState(null);
   const [batchSettleModal, setBatchSettleModal] = useState(false);
+  const [reciboAlvo, setReciboAlvo] = useState(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -5071,9 +5119,11 @@ function ReceivablesView({
   };
 
   const total = filtered.reduce((s, r) => s + Number(r.valor || 0), 0);
+  const empresa = empresas.find((e) => e.id === selectedEmpresa);
 
   return (
-    <div className="space-y-4">
+    <>
+    <div className={`space-y-4 ${reciboAlvo ? "print:hidden" : ""}`}>
       <Header title="Contas a Receber" subtitle={`${filtered.length} lançamento(s) · ${fmtBRL(total)}`}>
         {canEdit && (
           <>
@@ -5156,6 +5206,9 @@ function ReceivablesView({
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
+                      {r.status === "Recebido" && (
+                        <button onClick={() => { setReciboAlvo(r); setTimeout(() => window.print(), 50); }} title="Imprimir recibo" className="p-1.5 rounded-md hover:bg-black/5"><Printer size={14} color={COLORS.inkSoft} /></button>
+                      )}
                       {canEdit && (r.status === "Recebido" ? (
                         <button onClick={() => cancelReceipt(r)} title="Cancelar recebimento" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                       ) : r.status === "Antecipado" ? (
@@ -5262,6 +5315,12 @@ function ReceivablesView({
         />
       )}
     </div>
+    {reciboAlvo && (
+      <div className="hidden print:block">
+        <ReciboImpressao item={reciboAlvo} empresa={empresa} tipo="recebimento" />
+      </div>
+    )}
+    </>
   );
 }
 
