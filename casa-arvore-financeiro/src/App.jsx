@@ -1438,6 +1438,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 onImportProcessed={handleImportProcessed}
                 userEmail={userEmail}
                 canEdit={role !== "owner"}
+                role={role}
                 remessasCnab={remessasCnab}
                 onSaveAccounts={(v) => persist("accounts", v, setAccounts)}
                 onSaveRemessasCnab={(v) => persist("remessasCnab", v, setRemessasCnab)}
@@ -3247,7 +3248,7 @@ function StatusSummary({ items, statuses }) {
 /* ---------------------------------------------------------------------- */
 function PayablesView({
   payables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
-  pendingImport, onImportProcessed, userEmail, canEdit = true,
+  pendingImport, onImportProcessed, userEmail, canEdit = true, role,
   remessasCnab = [], onSaveAccounts, onSaveRemessasCnab,
 }) {
   const [modal, setModal] = useState(null);
@@ -3612,7 +3613,11 @@ function PayablesView({
                       )}
                       {p.status === "Agendado" && (
                         <>
-                          <Button variant="subtle" onClick={() => authorizePayment(p)} title={`Proposto pra ${fmtDate(p.agendadoPara)}`}><ShieldCheck size={13} /> Autorizar</Button>
+                          {role === "owner" ? (
+                            <Button variant="subtle" onClick={() => authorizePayment(p)} title={`Proposto pra ${fmtDate(p.agendadoPara)}`}><ShieldCheck size={13} /> Autorizar</Button>
+                          ) : (
+                            <span className="text-xs px-2 py-1 rounded-md" style={{ background: COLORS.goldSoft, color: COLORS.gold }}>Aguardando autorização do dono</span>
+                          )}
                           {canEdit && (
                             <button onClick={() => cancelSchedule(p)} title="Cancelar agendamento (volta pra A Pagar)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                           )}
