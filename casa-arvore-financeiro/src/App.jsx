@@ -354,7 +354,7 @@ async function uploadDocumentoLancamento(empresaId, tipo, entidadeId, previewDoc
   }
 }
 
-const TIPOS_DOCUMENTO_LANCAMENTO = ["payables", "receivables", "bankEntries", "transfers"];
+const TIPOS_DOCUMENTO_LANCAMENTO = ["payables", "receivables", "bankEntries", "transfers", "settlementPartners"];
 
 // Lista, num único array, todo arquivo já guardado de uma empresa nos
 // dois buckets (Documentos Recebidos + anexos de lançamento importados
@@ -8146,10 +8146,15 @@ function guessDeducaoCategoria(tipoDeducao, despesaCategorias) {
 /* ---------------------------------------------------------------------- */
 /*  Repasses de Terceiros — adquirente de cartão / plataforma de delivery */
 /* ---------------------------------------------------------------------- */
-function SettlementPartnerModal({ initial, onClose, onSubmit }) {
+function SettlementPartnerModal({ initial, empresaId, onClose, onSubmit }) {
+  const [partnerId] = useState(() => initial?.id || uid());
   const [nome, setNome] = useState(initial?.nome || "");
   const [tipo, setTipo] = useState(initial?.tipo || "adquirente");
   const [regras, setRegras] = useState(initial?.regras?.length ? initial.regras : [{ tipo: "", percentual: "" }]);
+  const [contratoArquivoPath, setContratoArquivoPath] = useState(initial?.contratoArquivoPath || null);
+  const [extracting, setExtracting] = useState(false);
+  const [extractError, setExtractError] = useState("");
+  const [extractNote, setExtractNote] = useState("");
 
   const setRegra = (i, field, value) => setRegras((prev) => prev.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
   const addRegra = () => setRegras((prev) => [...prev, { tipo: "", percentual: "" }]);
@@ -8157,11 +8162,46 @@ function SettlementPartnerModal({ initial, onClose, onSubmit }) {
 
   const valid = nome.trim().length > 0;
 
+  // Lê o contrato com IA (taxas percentuais) só pra PRÉ-preencher — o
+  // operador sempre confere/ajusta as linhas antes de salvar, igual ao
+  // resto do sistema. O arquivo em si também fica guardado (mesmo bucket
+  // dos outros "Importar documento"), pra auditoria futura.
+  const handleContrato = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setExtractError("");
+    setExtractNote("");
+    setExtracting(true);
+    try {
+      const fileBase64 = await fileToBase64(file);
+      const mediaType = file.type || "application/pdf";
+      const ex = await callExtractDocument(fileBase64, mediaType, "settlementContract");
+      const lidas = (Array.isArray(ex.regras) ? ex.regras : [])
+        .filter((r) => r?.tipo && r?.percentual != null)
+        .map((r) => ({ tipo: String(r.tipo), percentual: String(r.percentual) }));
+      const path = await uploadDocumentoLancamento(empresaId, "settlementPartners", partnerId, { url: `data:${mediaType};base64,${fileBase64}` });
+      if (path) setContratoArquivoPath(path);
+      if (lidas.length === 0) {
+        setExtractError("Não encontrei nenhuma taxa percentual reconhecível nesse contrato — confira/preencha manualmente abaixo.");
+      } else {
+        setRegras((prev) => [...prev.filter((r) => r.tipo.trim() || r.percentual !== ""), ...lidas]);
+        setExtractNote(`${lidas.length} taxa(s) lida(s) do contrato — confira os valores antes de salvar.`);
+      }
+    } catch (err) {
+      setExtractError(err?.message || "Erro ao ler o contrato com IA.");
+    } finally {
+      setExtracting(false);
+    }
+  };
+
   const submit = () => {
     onSubmit({
+      id: partnerId,
       nome: nome.trim(),
       tipo,
       regras: regras.filter((r) => r.tipo.trim() && r.percentual !== "").map((r) => ({ tipo: r.tipo.trim(), percentual: Number(r.percentual) || 0 })),
+      contratoArquivoPath,
     });
   };
 
@@ -8184,6 +8224,22 @@ function SettlementPartnerModal({ initial, onClose, onSubmit }) {
           <p className="text-xs mb-2" style={{ color: COLORS.inkSoft }}>
             Cadastre cada taxa que o contrato prevê (comissão, antecipação, taxa de pagamento online, publicidade...) — é contra isso que o relatório de repasse importado será auditado.
           </p>
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <label
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer disabled:opacity-40"
+              style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
+            >
+              <Upload size={13} /> {extracting ? "Lendo contrato…" : "Ler taxas do contrato (IA)"}
+              <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleContrato} disabled={extracting} />
+            </label>
+            {contratoArquivoPath && (
+              <button type="button" onClick={() => abrirDocumentoLancamento(contratoArquivoPath)} className="text-xs underline" style={{ color: COLORS.inkSoft }}>
+                Ver contrato anexado
+              </button>
+            )}
+          </div>
+          {extractNote && <p className="text-xs mb-2" style={{ color: COLORS.green }}>{extractNote}</p>}
+          {extractError && <p className="text-xs mb-2" style={{ color: COLORS.red }}>{extractError}</p>}
           <div className="grid gap-2">
             {regras.map((r, i) => (
               <div key={i} className="flex gap-2 items-center">
@@ -8224,7 +8280,7 @@ function SettlementPartnersView({
 
   const savePartner = (form) => {
     if (modal?.id) onSavePartners(partners.map((p) => (p.id === modal.id ? { ...p, ...form } : p)));
-    else onSavePartners([...partners, { id: uid(), empresaId, ...form }]);
+    else onSavePartners([...partners, { empresaId, ...form }]);
     setModal(null);
   };
   const deletePartner = (p) => {
@@ -8415,6 +8471,11 @@ function SettlementPartnersView({
                   </span>
                 ))}
               </div>
+              {p.contratoArquivoPath && (
+                <button type="button" onClick={() => abrirDocumentoLancamento(p.contratoArquivoPath)} className="text-xs underline mt-1.5" style={{ color: COLORS.inkSoft }}>
+                  Ver contrato anexado
+                </button>
+              )}
             </Card>
           ))}
         </div>
@@ -8550,6 +8611,7 @@ function SettlementPartnersView({
       {modal && (
         <SettlementPartnerModal
           initial={modal.id ? modal : null}
+          empresaId={empresaId}
           onClose={() => setModal(null)}
           onSubmit={savePartner}
         />

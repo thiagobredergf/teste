@@ -25,6 +25,11 @@
 //     líquido, pra depois auditar contra a taxa contratada com o parceiro.
 //     Aceita CSV/planilha como texto (não precisa ser imagem) porque é o
 //     formato mais comum de export desses relatórios.
+//   - "settlementContract" (Repasses de Terceiros): o CONTRATO em si (PDF
+//     ou foto) firmado com o adquirente/plataforma — lê as cláusulas de
+//     taxa percentual e devolve uma lista pra pré-preencher "Taxas
+//     contratadas" no cadastro do parceiro, sempre pra revisão manual
+//     antes de salvar (nunca substitui direto).
 //
 // Exige login no ESEK (verify_jwt padrão do Supabase) — não tem segredo
 // próprio como a crm-integration, porque quem chama é sempre um usuário
@@ -198,6 +203,25 @@ Regras:
 - NUNCA inclua linha de resumo/total do relatório como se fosse uma venda.
 - Se não tiver certeza de um valor específico, PULE essa linha em vez de estimar.`;
 
+const SETTLEMENT_CONTRACT_RESPONSE_SHAPE = `{
+  "regras": [
+    { "tipo": string, "percentual": number }
+  ]
+}`;
+
+const SETTLEMENT_CONTRACT_SYSTEM_PROMPT = `Você lê um contrato de prestação de serviço entre uma empresa e um adquirente de cartão (Cielo, Rede, Stone, GetNet, PagSeguro...) ou plataforma de delivery/convênio (iFood, Rappi, Uber Eats, plano de saúde...) e extrai as taxas PERCENTUAIS que o contrato prevê cobrar sobre as vendas/transações.
+
+Responda APENAS com um objeto JSON, sem markdown, sem explicação, no formato exato:
+${SETTLEMENT_CONTRACT_RESPONSE_SHAPE}
+
+Regras:
+- Uma entrada por taxa distinta prevista no contrato (ex.: comissão no débito, comissão no crédito à vista, comissão no crédito parcelado, taxa de antecipação, taxa de pagamento online, publicidade/marketing).
+- "tipo": um nome curto e claro pra taxa (ex.: "Comissão Débito", "Comissão Crédito à Vista", "Antecipação").
+- "percentual": o valor percentual exato previsto no contrato pra essa taxa (ex.: 2.5 pra "2,5%").
+- Se uma taxa vier como valor fixo em R$ (não percentual), IGNORE essa linha — este cadastro só guarda taxas percentuais.
+- Se o contrato tiver faixas diferentes por bandeira de cartão ou por número de parcelas, escolha a taxa mais representativa de cada categoria (ex.: crédito à vista, crédito parcelado, débito) em vez de listar cada combinação — o objetivo é dar um ponto de partida pro operador conferir e ajustar, não reproduzir a tabela inteira.
+- Se não conseguir identificar nenhuma taxa percentual com confiança, retorne "regras": [] — nunca invente um percentual.`;
+
 // Resposta grande demais corta o JSON no meio (max_tokens estourado) antes
 // de fechar o array "linhas" — em vez de jogar tudo fora, varre o texto a
 // partir do "[" contando chaves e recorta só os objetos que fecharam por
@@ -286,7 +310,9 @@ Deno.serve(async (req) => {
     ? STATEMENT_SYSTEM_PROMPT
     : context === "settlementReport"
       ? SETTLEMENT_SYSTEM_PROMPT
-      : (CONTEXT_PROMPTS[context || "payable"] || CONTEXT_PROMPTS.payable);
+      : context === "settlementContract"
+        ? SETTLEMENT_CONTRACT_SYSTEM_PROMPT
+        : (CONTEXT_PROMPTS[context || "payable"] || CONTEXT_PROMPTS.payable);
 
   const isTextMedia = mediaType === "text/csv" || mediaType === "text/plain";
   const documentBlock = isTextMedia
