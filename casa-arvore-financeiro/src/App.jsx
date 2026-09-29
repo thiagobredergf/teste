@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { storageGet, storageSet } from "./lib/storage";
 import { supabase } from "./lib/supabaseClient";
+import { buildCnab240Remessa, validarItensCnab } from "./lib/cnab240";
 
 /* ---------------------------------------------------------------------- */
 /*  Design tokens                                                         */
@@ -403,6 +404,7 @@ const STORE_KEYS = {
   timeSessions: "timeSessions",
   bpoSkills: "bpoSkills",
   skillRuns: "skillRuns",
+  remessasCnab: "remessasCnab",
   selectedEmpresa: "selectedEmpresa",
 };
 
@@ -635,6 +637,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [timeSessions, setTimeSessions] = useState([]);
   const [bpoSkills, setBpoSkills] = useState([]);
   const [skillRuns, setSkillRuns] = useState([]);
+  const [remessasCnab, setRemessasCnab] = useState([]);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
   const [navQuery, setNavQuery] = useState("");
@@ -670,6 +673,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setTimeSessions(data.timeSessions || []);
       setBpoSkills(data.bpoSkills || []);
       setSkillRuns(data.skillRuns || []);
+      setRemessasCnab(data.remessasCnab || []);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
       // cards de todas), pra escolher com qual vai trabalhar.
@@ -1434,6 +1438,9 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 onImportProcessed={handleImportProcessed}
                 userEmail={userEmail}
                 canEdit={role !== "owner"}
+                remessasCnab={remessasCnab}
+                onSaveAccounts={(v) => persist("accounts", v, setAccounts)}
+                onSaveRemessasCnab={(v) => persist("remessasCnab", v, setRemessasCnab)}
               />
             )}
 
@@ -2945,6 +2952,9 @@ function AccountModal({ initial, onClose, onSubmit }) {
             <TextInput type="date" value={form.dataInicial} max={todayISO()} onChange={(e) => setForm({ ...form, dataInicial: e.target.value })} />
           </Field>
         </div>
+        <Field label="Convênio CNAB (opcional — só necessário pra exportar remessa de pagamentos)">
+          <TextInput value={form.convenioCnab || ""} onChange={(e) => setForm({ ...form, convenioCnab: e.target.value })} placeholder="Código de convênio que o banco atribuiu pra essa conta" />
+        </Field>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>Cancelar</Button>
           <Button onClick={() => valid && onSubmit(form)} disabled={!valid}>Salvar</Button>
@@ -3022,8 +3032,11 @@ function ContactsView({ contacts, selectedEmpresa, onSave }) {
 
 function ContactModal({ initial, contacts = [], onClose, onSubmit }) {
   const [form, setForm] = useState({
-    nome: "", documento: "", contato: "", email: "", ...initial,
+    nome: "", documento: "", contato: "", email: "",
+    bancoCnab: "", agenciaCnab: "", contaCnab: "", contaCnabDigito: "", tipoContaCnab: "CC",
+    ...initial,
   });
+  const [bancoCnabOutro, setBancoCnabOutro] = useState(() => !!form.bancoCnab && !BANCOS_BRASIL.some((b) => b.codigo === form.bancoCnab));
   const [autoFillNote, setAutoFillNote] = useState("");
   const valid = form.nome.trim() && form.empresaId;
 
@@ -3058,6 +3071,47 @@ function ContactModal({ initial, contacts = [], onClose, onSubmit }) {
         <Field label="CPF/CNPJ"><TextInput value={form.documento} onChange={(e) => setForm({ ...form, documento: e.target.value })} placeholder="000.000.000-00 ou 00.000.000/0000-00" /></Field>
         <Field label="Contato (telefone/WhatsApp)"><TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} /></Field>
         <Field label="E-mail"><TextInput type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
+
+        <div className="pt-2 mt-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+          <p className="text-sm font-medium mb-3" style={{ color: COLORS.ink }}>Dados bancários (opcional — só necessário pra pagar via CNAB240)</p>
+          <div className="grid gap-3">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Banco">
+                <Select
+                  value={bancoCnabOutro ? "outro" : form.bancoCnab}
+                  onChange={(e) => {
+                    if (e.target.value === "outro") { setBancoCnabOutro(true); setForm({ ...form, bancoCnab: "" }); }
+                    else { setBancoCnabOutro(false); setForm({ ...form, bancoCnab: e.target.value }); }
+                  }}
+                >
+                  <option value="">Selecione…</option>
+                  {BANCOS_BRASIL.map((b) => <option key={b.codigo} value={b.codigo}>{b.codigo} — {b.nome}</option>)}
+                  <option value="outro">Outro banco (informar código)</option>
+                </Select>
+                {bancoCnabOutro && (
+                  <TextInput
+                    className="mt-1.5"
+                    value={form.bancoCnab}
+                    onChange={(e) => setForm({ ...form, bancoCnab: e.target.value.replace(/\D/g, "").slice(0, 3) })}
+                    placeholder="Código do banco (3 dígitos)"
+                  />
+                )}
+              </Field>
+              <Field label="Tipo de conta">
+                <Select value={form.tipoContaCnab} onChange={(e) => setForm({ ...form, tipoContaCnab: e.target.value })}>
+                  <option value="CC">Conta Corrente</option>
+                  <option value="CP">Conta Poupança</option>
+                </Select>
+              </Field>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="Agência"><TextInput value={form.agenciaCnab} onChange={(e) => setForm({ ...form, agenciaCnab: e.target.value })} /></Field>
+              <Field label="Conta nº"><TextInput value={form.contaCnab} onChange={(e) => setForm({ ...form, contaCnab: e.target.value })} /></Field>
+              <Field label="Dígito"><TextInput value={form.contaCnabDigito} onChange={(e) => setForm({ ...form, contaCnabDigito: e.target.value })} /></Field>
+            </div>
+          </div>
+        </div>
+
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>Cancelar</Button>
           <Button onClick={() => valid && onSubmit(form)} disabled={!valid}>Salvar</Button>
@@ -3194,11 +3248,14 @@ function StatusSummary({ items, statuses }) {
 function PayablesView({
   payables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
   pendingImport, onImportProcessed, userEmail, canEdit = true,
+  remessasCnab = [], onSaveAccounts, onSaveRemessasCnab,
 }) {
   const [modal, setModal] = useState(null);
   const [payModal, setPayModal] = useState(null);
   const [scheduleModal, setScheduleModal] = useState(false);
   const [batchSettleModal, setBatchSettleModal] = useState(false);
+  const [cnabModal, setCnabModal] = useState(false);
+  const [remessasModal, setRemessasModal] = useState(false);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -3394,6 +3451,45 @@ function PayablesView({
   const total = filtered.reduce((s, p) => s + Number(p.valor || 0), 0);
   const empresa = empresas.find((e) => e.id === selectedEmpresa);
   const agendados = withDerived.filter((p) => p.status === "Agendado");
+  const autorizados = withDerived.filter((p) => p.status === "Autorizado");
+  const remessasEmpresa = remessasCnab.filter((r) => r.empresaId === selectedEmpresa);
+
+  // Gera a remessa CNAB240 e marca os itens incluídos como "enviados ao
+  // banco" — a baixa em si continua manual, no fluxo de sempre; isso só dá
+  // visibilidade de que aquele grupo já saiu num arquivo, pra não perder o
+  // rastro enquanto o retorno automático não existe (ver Fase 20).
+  const gerarRemessaCnab = ({ contaId, itens }) => {
+    const conta = accounts.find((a) => a.id === contaId);
+    const bancoInfo = BANCOS_BRASIL.find((b) => b.nome === conta.banco);
+    if (!bancoInfo) {
+      alert(`Não reconheço o código Febraban do banco "${conta.banco}" — edite a conta e selecione um banco da lista.`);
+      return;
+    }
+    const { conteudo, numeroArquivo, quantidadeItens, valorTotal } = buildCnab240Remessa({
+      empresa, conta, codigoBanco: bancoInfo.codigo, itens,
+    });
+    const remessaId = uid();
+    onSaveRemessasCnab([...remessasCnab, {
+      id: remessaId, empresaId: selectedEmpresa, contaId, numeroArquivo,
+      geradoEm: new Date().toISOString(), geradoPor: userEmail, quantidadeItens, valorTotal,
+    }]);
+    onSaveAccounts(accounts.map((a) => (a.id === contaId ? { ...a, proximoNumeroRemessaCnab: numeroArquivo + 1 } : a)));
+    const agora = new Date().toISOString();
+    const idsIncluidos = new Set(itens.map(({ payable }) => payable.id));
+    onSave(payables.map((p) => (idsIncluidos.has(p.id) ? { ...p, remessaCnabId: remessaId, remessaCnabEm: agora } : p)));
+    itens.forEach(({ payable }) => logAudit(selectedEmpresa, "payable", payable.id, "remessa_cnab", `Incluído na remessa CNAB240 nº ${numeroArquivo} — ${fmtBRL(payable.valor)}`, userEmail));
+
+    const blob = new Blob([conteudo], { type: "text/plain;charset=ascii" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `CNAB240_${String(numeroArquivo).padStart(6, "0")}_${todayISO().replace(/-/g, "")}.rem`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setCnabModal(false);
+  };
 
   const notifyOwner = () => {
     const linhas = agendados.map((p) => `• ${p.fornecedor} — ${fmtBRL(p.valor)} — proposto pra ${fmtDate(p.agendadoPara)}`);
@@ -3429,6 +3525,16 @@ function PayablesView({
             <Button variant="ghost" onClick={() => setBatchSettleModal(true)}>
               <CheckCheck size={15} /> Dar baixa em lote
             </Button>
+            {autorizados.length > 0 && (
+              <Button variant="ghost" onClick={() => setCnabModal(true)} title="Gera o arquivo CNAB240 pra subir no internet banking, em vez de digitar cada pagamento autorizado manualmente">
+                <FileUp size={15} /> Exportar CNAB240 ({autorizados.length})
+              </Button>
+            )}
+            {remessasEmpresa.length > 0 && (
+              <Button variant="ghost" onClick={() => setRemessasModal(true)}>
+                <ClipboardList size={15} /> Remessas CNAB ({remessasEmpresa.length})
+              </Button>
+            )}
             {agendados.length > 0 && (
               <Button variant="ghost" onClick={notifyOwner} title="Abre o WhatsApp com uma mensagem pronta, listando os pagamentos agendados que aguardam autorização">
                 <MessageCircle size={15} /> Notificar dono ({agendados.length})
@@ -3608,7 +3714,215 @@ function PayablesView({
           onConfirm={confirmBatchPayment}
         />
       )}
+      {cnabModal && (
+        <CnabExportModal
+          empresa={empresa}
+          autorizados={autorizados}
+          accounts={accounts.filter((a) => a.empresaId === selectedEmpresa)}
+          contacts={contacts}
+          onClose={() => setCnabModal(false)}
+          onConfirm={gerarRemessaCnab}
+        />
+      )}
+      {remessasModal && (
+        <RemessasCnabModal
+          remessas={remessasEmpresa}
+          payables={payables}
+          accounts={accounts}
+          onClose={() => setRemessasModal(false)}
+        />
+      )}
     </div>
+  );
+}
+
+// Escolhe a conta pagadora (define o convênio/agência do Header do
+// arquivo) e, a partir dela, os autorizados que já foram agendados pra
+// sair daquela conta. Cada item passa por validarItensCnab antes de virar
+// candidato selecionável — quem não tem dados bancários completos no
+// cadastro de Contatos fica listado como pendência (com o motivo exato),
+// em vez de travar quem já está pronto pra ir no arquivo.
+function CnabExportModal({ empresa, autorizados, accounts, contacts, onClose, onConfirm }) {
+  const [contaId, setContaId] = useState(accounts[0]?.id || "");
+  const [checked, setChecked] = useState({});
+
+  const conta = accounts.find((a) => a.id === contaId);
+  const candidatos = conta ? autorizados.filter((p) => p.contaAgendadaId === contaId) : [];
+  const resolvidos = candidatos.map((payable) => ({
+    payable,
+    favorecido: contacts.find((c) => c.id === payable.contactId),
+  }));
+
+  // validarItensCnab acumula primeiro os erros de empresa/conta, só depois
+  // os de cada item — chamando sem itens dá só a parte geral; chamando com
+  // 1 item e cortando esse mesmo prefixo isola o que é específico dele.
+  const errosGerais = conta ? validarItensCnab({ empresa, conta, itens: [] }) : [];
+  const comErro = resolvidos.map((r) => ({
+    ...r,
+    motivos: validarItensCnab({ empresa, conta, itens: [r] }).slice(errosGerais.length),
+  }));
+  const prontos = comErro.filter((r) => r.motivos.length === 0);
+  const pendentes = comErro.filter((r) => r.motivos.length > 0);
+
+  const selecionados = prontos.filter((r) => checked[r.payable.id]);
+  const totalSelecionado = selecionados.reduce((s, r) => s + Number(r.payable.valor || 0), 0);
+
+  const toggle = (id) => setChecked((c) => ({ ...c, [id]: !c[id] }));
+  const toggleAll = () => {
+    const allOn = prontos.length > 0 && prontos.every((r) => checked[r.payable.id]);
+    const next = {};
+    prontos.forEach((r) => { next[r.payable.id] = !allOn; });
+    setChecked(next);
+  };
+
+  return (
+    <Modal title="Exportar remessa CNAB240" onClose={onClose} wide>
+      <div className="grid gap-3">
+        <p className="text-xs -mt-1 px-3 py-2 rounded-lg" style={{ background: COLORS.goldSoft, color: COLORS.gold }}>
+          Gera o arquivo-texto (.rem) pra subir no internet banking. Isso não dá baixa — a confirmação de pagamento continua manual, depois de checar no banco.
+        </p>
+        <Field label="Conta pagadora">
+          <Select value={contaId} onChange={(e) => { setContaId(e.target.value); setChecked({}); }}>
+            <option value="">Selecione uma conta</option>
+            {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+          </Select>
+        </Field>
+
+        {conta && errosGerais.length > 0 && (
+          <div className="text-xs px-3 py-2 rounded-lg space-y-1" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+            {errosGerais.map((e, i) => <p key={i}>• {e}</p>)}
+          </div>
+        )}
+
+        {!conta ? (
+          <p className="text-sm py-6 text-center" style={{ color: COLORS.inkSoft }}>Escolha a conta pra ver os pagamentos autorizados dela.</p>
+        ) : candidatos.length === 0 ? (
+          <p className="text-sm py-6 text-center" style={{ color: COLORS.inkSoft }}>Nenhum pagamento autorizado agendado pra essa conta.</p>
+        ) : (
+          <>
+            <div className="rounded-lg border max-h-72 overflow-y-auto" style={{ borderColor: COLORS.border }}>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}`, background: "#FAFAF7" }}>
+                    <th className="text-left font-medium px-3 py-2">
+                      <input type="checkbox" checked={prontos.length > 0 && prontos.every((r) => checked[r.payable.id])} onChange={toggleAll} disabled={prontos.length === 0} />
+                    </th>
+                    <th className="text-left font-medium px-3 py-2">Fornecedor</th>
+                    <th className="text-left font-medium px-3 py-2">Vencimento</th>
+                    <th className="text-right font-medium px-3 py-2">Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {prontos.map((r) => (
+                    <tr key={r.payable.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                      <td className="px-3 py-2"><input type="checkbox" checked={!!checked[r.payable.id]} onChange={() => toggle(r.payable.id)} /></td>
+                      <td className="px-3 py-2" style={{ color: COLORS.ink }}>{r.payable.fornecedor}</td>
+                      <td className="px-3 py-2" style={{ color: COLORS.ink }}>{fmtDate(r.payable.vencimento)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(r.payable.valor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {pendentes.length > 0 && (
+              <div className="text-xs px-3 py-2 rounded-lg space-y-1" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
+                <p className="font-medium">{pendentes.length} fora da remessa por falta de dados:</p>
+                {pendentes.map((r) => (
+                  <p key={r.payable.id}>• {r.payable.fornecedor}: {r.motivos[0]}</p>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-1">
+              <p className="text-sm" style={{ color: COLORS.inkSoft }}>
+                {selecionados.length} selecionado(s) · <span className="font-semibold" style={{ color: COLORS.ink }}>{fmtBRL(totalSelecionado)}</span>
+              </p>
+              <div className="flex gap-2">
+                <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+                <Button
+                  onClick={() => onConfirm({ contaId, itens: selecionados.map(({ payable, favorecido }) => ({ payable, favorecido })) })}
+                  disabled={selecionados.length === 0}
+                >
+                  <FileUp size={15} /> Gerar arquivo {selecionados.length > 0 ? `(${selecionados.length})` : ""}
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// Não existe retorno automático (fase 20 deixou isso pro backlog) — a
+// única forma de saber "o que já foi pago de fato" é cruzar cada item da
+// remessa com o status atual do lançamento: ainda "Autorizado" quer dizer
+// que saiu no arquivo mas ninguém confirmou a baixa no banco; "Pago" quer
+// dizer que o operador já checou e deu baixa pelo fluxo de sempre.
+function RemessasCnabModal({ remessas, payables, accounts, onClose }) {
+  const [aberta, setAberta] = useState(remessas[0]?.id || null);
+  const ordenadas = [...remessas].sort((a, b) => (b.geradoEm || "").localeCompare(a.geradoEm || ""));
+
+  return (
+    <Modal title="Remessas CNAB240" onClose={onClose} wide>
+      <div className="grid gap-3">
+        {ordenadas.length === 0 ? (
+          <EmptyState icon={ClipboardList} title="Nenhuma remessa gerada ainda" subtitle="Exporte um arquivo CNAB240 em Contas a Pagar pra ela aparecer aqui." />
+        ) : (
+          ordenadas.map((r) => {
+            const conta = accounts.find((a) => a.id === r.contaId);
+            const itens = payables.filter((p) => p.remessaCnabId === r.id);
+            const pagos = itens.filter((p) => p.status === "Pago").length;
+            const isOpen = aberta === r.id;
+            return (
+              <div key={r.id} className="rounded-lg border" style={{ borderColor: COLORS.border }}>
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between px-3 py-2.5 text-left"
+                  onClick={() => setAberta(isOpen ? null : r.id)}
+                >
+                  <div>
+                    <p className="text-sm font-medium" style={{ color: COLORS.ink }}>
+                      Remessa nº {String(r.numeroArquivo).padStart(6, "0")} · {conta?.nome || "conta removida"}
+                    </p>
+                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>
+                      {fmtDate((r.geradoEm || "").slice(0, 10))} · {r.quantidadeItens} item(ns) · {fmtBRL(r.valorTotal)} · {pagos}/{itens.length} confirmado(s) pago
+                    </p>
+                  </div>
+                  <ChevronDown size={16} color={COLORS.inkSoft} style={{ transform: isOpen ? "rotate(180deg)" : "none" }} />
+                </button>
+                {isOpen && (
+                  <div className="border-t" style={{ borderColor: COLORS.border }}>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}`, background: "#FAFAF7" }}>
+                          <th className="text-left font-medium px-3 py-2">Fornecedor</th>
+                          <th className="text-right font-medium px-3 py-2">Valor</th>
+                          <th className="text-left font-medium px-3 py-2">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {itens.map((p) => (
+                          <tr key={p.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                            <td className="px-3 py-2" style={{ color: COLORS.ink }}>{p.fornecedor}</td>
+                            <td className="px-3 py-2 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(p.valor)}</td>
+                            <td className="px-3 py-2"><StatusBadge status={p.status} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+        <div className="flex justify-end pt-1">
+          <Button variant="ghost" onClick={onClose}>Fechar</Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

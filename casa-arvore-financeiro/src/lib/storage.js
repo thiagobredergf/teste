@@ -28,6 +28,7 @@ const TABLE_NAMES = {
   timeSessions: "time_sessions",
   bpoSkills: "bpo_skills",
   skillRuns: "skill_runs",
+  remessasCnab: "remessas_cnab",
 };
 
 // selectedEmpresa é só preferência de navegação de quem está olhando a
