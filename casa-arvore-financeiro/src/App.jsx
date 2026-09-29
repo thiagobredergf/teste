@@ -4,12 +4,13 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square, Download
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
 } from "recharts";
+import JSZip from "jszip";
 import { storageGet, storageSet } from "./lib/storage";
 import { supabase } from "./lib/supabaseClient";
 import { buildCnab240Remessa, validarItensCnab } from "./lib/cnab240";
@@ -323,6 +324,93 @@ async function logAudit(empresaId, entity, entityId, action, detail, userEmail) 
   if (error) console.error("logAudit falhou:", error);
 }
 
+// Sobe pro Storage o arquivo que gerou a extração por IA num "Importar
+// documento" — sem isso, o arquivo só existia como base64 na memória do
+// navegador durante a importação e desaparecia depois (nem sobrevivia a
+// trocar de computador antes de lançar). Não bloqueia o salvamento do
+// lançamento se o upload falhar (rede instável, por ex.): o dado
+// financeiro em si já está certo, só o anexo que fica faltando — por
+// isso devolve null em vez de lançar, deixando quem chamou decidir.
+async function abrirDocumentoLancamento(path) {
+  const { data, error } = await supabase.storage.from("documentos-lancamentos").createSignedUrl(path, 300);
+  if (error) { alert("Não consegui abrir o arquivo: " + error.message); return; }
+  window.open(data.signedUrl, "_blank");
+}
+
+async function uploadDocumentoLancamento(empresaId, tipo, entidadeId, previewDoc) {
+  const match = /^data:([^;]+);base64,(.*)$/s.exec(previewDoc?.url || "");
+  if (!match) return null;
+  const [, mediaType, base64] = match;
+  const ext = mediaType.split("/")[1]?.split("+")[0] || "bin";
+  const path = `${empresaId}/${tipo}/${entidadeId}.${ext}`;
+  try {
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const { error } = await supabase.storage.from("documentos-lancamentos").upload(path, bytes, { contentType: mediaType, upsert: true });
+    if (error) { console.error("upload de documento do lançamento falhou:", error); return null; }
+    return path;
+  } catch (e) {
+    console.error("upload de documento do lançamento falhou:", e);
+    return null;
+  }
+}
+
+const TIPOS_DOCUMENTO_LANCAMENTO = ["payables", "receivables", "bankEntries", "transfers"];
+
+// Lista, num único array, todo arquivo já guardado de uma empresa nos
+// dois buckets (Documentos Recebidos + anexos de lançamento importados
+// direto) — usado tanto pra exportar (zip) quanto pra apagar de vez, no
+// fluxo de fim de contrato / LGPD.
+async function listarDocumentosDaEmpresa(empresaId) {
+  const arquivos = [];
+  const { data: recebidos } = await supabase.storage.from("documentos-recebidos").list(empresaId, { limit: 1000 });
+  (recebidos || []).filter((f) => f.id).forEach((f) => arquivos.push({ bucket: "documentos-recebidos", path: `${empresaId}/${f.name}`, nome: f.name }));
+  for (const tipo of TIPOS_DOCUMENTO_LANCAMENTO) {
+    const { data: lista } = await supabase.storage.from("documentos-lancamentos").list(`${empresaId}/${tipo}`, { limit: 1000 });
+    (lista || []).filter((f) => f.id).forEach((f) => arquivos.push({ bucket: "documentos-lancamentos", path: `${empresaId}/${tipo}/${f.name}`, nome: `${tipo}-${f.name}` }));
+  }
+  return arquivos;
+}
+
+// Junta tudo num .zip e sobe pro Storage com link assinado (7 dias) — é
+// esse link que vai pro dono, por WhatsApp; signed URL do Supabase
+// funciona pra qualquer um que tiver o link, sem precisar de login, até
+// expirar, então não trava o dono pedindo senha pra baixar os próprios
+// documentos.
+async function gerarExportacaoDocumentos(empresa) {
+  const arquivos = await listarDocumentosDaEmpresa(empresa.id);
+  if (arquivos.length === 0) return { total: 0, url: null };
+  const zip = new JSZip();
+  for (const arq of arquivos) {
+    const { data: signed } = await supabase.storage.from(arq.bucket).createSignedUrl(arq.path, 60);
+    if (!signed) continue;
+    const res = await fetch(signed.signedUrl);
+    if (!res.ok) continue;
+    zip.file(arq.nome, await res.blob());
+  }
+  const zipBlob = await zip.generateAsync({ type: "blob" });
+  const zipPath = `${empresa.id}/export_${Date.now()}.zip`;
+  const { error: upErr } = await supabase.storage.from("documentos-export").upload(zipPath, zipBlob, { contentType: "application/zip" });
+  if (upErr) throw new Error(upErr.message);
+  const { data: signedZip, error: signErr } = await supabase.storage.from("documentos-export").createSignedUrl(zipPath, 60 * 60 * 24 * 7);
+  if (signErr) throw new Error(signErr.message);
+  return { total: arquivos.length, url: signedZip.signedUrl };
+}
+
+// Apaga de vez os originais dos dois buckets — separado e manual de
+// propósito: excluir documento de cliente é destrutivo, não deve rodar
+// sozinho/automático, só depois que alguém confirmou que o dono já
+// baixou o zip exportado.
+async function apagarDocumentosDaEmpresa(empresaId) {
+  const { data: recebidos } = await supabase.storage.from("documentos-recebidos").list(empresaId, { limit: 1000 });
+  const pathsRecebidos = (recebidos || []).filter((f) => f.id).map((f) => `${empresaId}/${f.name}`);
+  if (pathsRecebidos.length) await supabase.storage.from("documentos-recebidos").remove(pathsRecebidos);
+  for (const tipo of TIPOS_DOCUMENTO_LANCAMENTO) {
+    const { data: lista } = await supabase.storage.from("documentos-lancamentos").list(`${empresaId}/${tipo}`, { limit: 1000 });
+    const paths = (lista || []).filter((f) => f.id).map((f) => `${empresaId}/${tipo}/${f.name}`);
+    if (paths.length) await supabase.storage.from("documentos-lancamentos").remove(paths);
+  }
+}
+
 const fmtBRL = (n) =>
   (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -364,6 +452,18 @@ const certificadoAlerta = (empresa) => {
   const dias = daysUntil(empresa.certificadoDigitalValidade);
   if (dias < 0) return { nivel: "vencido", dias };
   if (dias <= 30) return { nivel: "vencendo", dias };
+  return null;
+};
+
+// Mesma lógica do certificado, mas pro contrato de prestação de serviço
+// do BPO com o cliente — 60 dias de antecedência (janela maior porque
+// negociar renovação, ou preparar a saída/exportação de documentos por
+// LGPD, leva mais tempo que renovar um certificado digital).
+const contratoAlerta = (empresa) => {
+  if (!empresa?.contratoVencimento) return null;
+  const dias = daysUntil(empresa.contratoVencimento);
+  if (dias < 0) return { nivel: "vencido", dias };
+  if (dias <= 60) return { nivel: "vencendo", dias };
   return null;
 };
 
@@ -1585,7 +1685,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
               />
             )}
 
-            {view === "adm" && <AdmView role={role} empresas={empresasAtivas} />}
+            {view === "adm" && <AdmView role={role} empresas={empresasAtivas} userEmail={userEmail} />}
 
             {view === "produtividade" && <ProdutividadeView role={role} empresas={empresasAtivas} timeSessions={timeSessions} />}
 
@@ -2225,7 +2325,7 @@ function NovoUsuarioModal({ onClose, onSubmit, busy }) {
   );
 }
 
-function AdmView({ role, empresas = [] }) {
+function AdmView({ role, empresas = [], userEmail }) {
   const [users, setUsers] = useState(null);
   const [empresasByOwner, setEmpresasByOwner] = useState({});
   const [staffAccess, setStaffAccess] = useState({}); // { userId: Set(empresaId) }
@@ -2234,6 +2334,49 @@ function AdmView({ role, empresas = [] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [tempCred, setTempCred] = useState(null);
+  const [exportBusy, setExportBusy] = useState(null); // empresaId em exportação/exclusão
+  const [exportResults, setExportResults] = useState({}); // { empresaId: { url, total } }
+
+  const contratosAlerta = useMemo(
+    () => empresas
+      .map((e) => ({ empresa: e, alerta: contratoAlerta(e) }))
+      .filter((x) => x.alerta)
+      .sort((a, b) => a.alerta.dias - b.alerta.dias),
+    [empresas]
+  );
+
+  const handleExportar = async (empresa) => {
+    setExportBusy(empresa.id);
+    try {
+      const { total, url } = await gerarExportacaoDocumentos(empresa);
+      if (total === 0) { alert(`Nenhum documento guardado pra "${empresa.nome}" ainda.`); return; }
+      setExportResults((r) => ({ ...r, [empresa.id]: { url, total } }));
+      logAudit(empresa.id, "empresa", empresa.id, "exportar_documentos", `Gerou exportação com ${total} arquivo(s) pra fim de contrato`, userEmail);
+      const mensagem = `Olá! Segue, num único arquivo, todos os documentos trocados durante nosso contrato de prestação de serviço (${total} arquivo(s)). O link fica disponível por 7 dias:\n\n${url}`;
+      if (!openWhatsApp(empresa.contatoCelular, mensagem)) {
+        window.prompt("Cadastre o celular do dono pra mandar automático por WhatsApp — por enquanto, copie e envie manualmente:", url);
+      }
+    } catch (e) {
+      alert("Não consegui gerar a exportação: " + e.message);
+    } finally {
+      setExportBusy(null);
+    }
+  };
+
+  const handleApagar = async (empresa) => {
+    if (!confirmDelete(`Apagar TODOS os documentos guardados de "${empresa.nome}" (Documentos Recebidos + anexos de lançamentos)? Isso não pode ser desfeito — só confirme depois que o dono já baixou o link exportado.`)) return;
+    setExportBusy(empresa.id);
+    try {
+      await apagarDocumentosDaEmpresa(empresa.id);
+      logAudit(empresa.id, "empresa", empresa.id, "apagar_documentos", "Removeu os documentos guardados após exportação de fim de contrato", userEmail);
+      setExportResults((r) => { const next = { ...r }; delete next[empresa.id]; return next; });
+      alert(`Documentos de "${empresa.nome}" removidos.`);
+    } catch (e) {
+      alert("Não consegui apagar: " + e.message);
+    } finally {
+      setExportBusy(null);
+    }
+  };
 
   const load = useCallback(async () => {
     const { data, error: err } = await supabase.from("profiles").select("id, email, role, nome, cpf").order("email");
@@ -2324,6 +2467,48 @@ function AdmView({ role, empresas = [] }) {
           <p style={{ color: COLORS.ink }}>Login: <span className="font-mono">{tempCred.email}</span> · Senha: <span className="font-mono font-semibold">{tempCred.password}</span></p>
           <Button variant="ghost" className="mt-1.5" onClick={() => setTempCred(null)}>Ok, guardei</Button>
         </div>
+      )}
+
+      {contratosAlerta.length > 0 && (
+        <Card className="p-4">
+          <p className="text-sm font-medium mb-1" style={{ color: COLORS.ink }}>Contratos de prestação de serviço vencendo</p>
+          <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+            Aviso com 60 dias de antecedência (campo "Vencimento do contrato", em Cadastros → Editar empresa). "Exportar documentos" gera um .zip com tudo que já foi trocado com o cliente e manda o link por WhatsApp pro dono — a exclusão dos originais é uma ação separada, só depois que ele confirmar o recebimento.
+          </p>
+          <div className="grid gap-2">
+            {contratosAlerta.map(({ empresa, alerta }) => {
+              const resultado = exportResults[empresa.id];
+              const ocupado = exportBusy === empresa.id;
+              return (
+                <div key={empresa.id} className="rounded-lg px-3 py-2.5" style={{ background: alerta.nivel === "vencido" ? COLORS.redSoft : COLORS.amberSoft }}>
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <p className="text-sm font-medium" style={{ color: alerta.nivel === "vencido" ? COLORS.red : COLORS.amber }}>
+                        {empresa.nome} — {alerta.nivel === "vencido" ? `contrato vencido há ${-alerta.dias}d` : `vence em ${alerta.dias}d`}
+                      </p>
+                      <p className="text-xs" style={{ color: COLORS.inkSoft }}>Vencimento: {fmtDate(empresa.contratoVencimento)}{empresa.contratoRenovacao ? ` · renovação ${empresa.contratoRenovacao}` : ""}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="ghost" disabled={ocupado} onClick={() => handleExportar(empresa)}>
+                        <Download size={14} /> {ocupado ? "Gerando…" : "Exportar documentos"}
+                      </Button>
+                      {resultado && (
+                        <Button variant="danger" disabled={ocupado} onClick={() => handleApagar(empresa)}>
+                          <Trash2 size={14} /> Confirmar exclusão
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  {resultado && (
+                    <p className="text-xs mt-2" style={{ color: COLORS.inkSoft }}>
+                      Exportado: {resultado.total} arquivo(s) · link válido por 7 dias{resultado.url ? <> — <a href={resultado.url} target="_blank" rel="noreferrer" className="underline">abrir</a></> : ""}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
       )}
 
       <Card className="overflow-x-auto">
@@ -2737,7 +2922,7 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
         <div className="pt-2 mt-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
           <p className="text-sm font-medium mb-3" style={{ color: COLORS.ink }}>Dados operacionais do BPO (uso interno)</p>
           <div className="grid gap-3">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-4 gap-3">
               <Field label="Valor mensal do contrato (R$)">
                 <TextInput type="number" step="0.01" value={form.contratoValorMensal ?? ""} onChange={(e) => setForm({ ...form, contratoValorMensal: e.target.value })} />
               </Field>
@@ -2747,7 +2932,13 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
               <Field label="Renovação">
                 <TextInput value={form.contratoRenovacao || ""} onChange={(e) => setForm({ ...form, contratoRenovacao: e.target.value })} placeholder="Ex.: anual, indeterminado" />
               </Field>
+              <Field label="Vencimento do contrato">
+                <TextInput type="date" value={form.contratoVencimento || ""} onChange={(e) => setForm({ ...form, contratoVencimento: e.target.value })} />
+              </Field>
             </div>
+            <p className="text-xs -mt-1" style={{ color: COLORS.inkSoft }}>
+              O "Vencimento" alimenta o alerta de contrato vencendo no ADM — "Renovação" é só anotação livre (ex.: "anual"), não gera aviso sozinha.
+            </p>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Contabilidade responsável">
                 <TextInput value={form.contabilidadeNome || ""} onChange={(e) => setForm({ ...form, contabilidadeNome: e.target.value })} placeholder="Nome do escritório/contador" />
@@ -3371,7 +3562,7 @@ function PayablesView({
     return true;
   }).sort((a, b) => (b.dataLanc || "").localeCompare(a.dataLanc || ""));
 
-  const submit = (formOrList, contactInfo) => {
+  const submit = async (formOrList, contactInfo) => {
     const list = Array.isArray(formOrList) ? formOrList : [formOrList];
     let withContact = list;
     if (contactInfo && list[0]?.fornecedor && list[0]?.empresaId) {
@@ -3383,10 +3574,16 @@ function PayablesView({
         withContact = list.map((f) => ({ ...f, contactId: contact.id }));
       }
     }
-    if (withContact.length === 1 && withContact[0].id) {
-      onSave(payables.map((p) => (p.id === withContact[0].id ? withContact[0] : p)));
+    const isEdit = withContact.length === 1 && withContact[0].id;
+    let finalList = isEdit ? withContact : withContact.map((f) => ({ ...f, id: uid() }));
+    if (previewDoc) {
+      const path = await uploadDocumentoLancamento(selectedEmpresa, "payables", finalList[0].id, previewDoc);
+      if (path) finalList = finalList.map((f) => ({ ...f, documentoArquivoPath: path }));
+    }
+    if (isEdit) {
+      onSave(payables.map((p) => (p.id === finalList[0].id ? finalList[0] : p)));
     } else {
-      onSave([...payables, ...withContact.map((f) => ({ ...f, id: uid() }))]);
+      onSave([...payables, ...finalList]);
     }
     setModal(null);
     setPreviewDoc(null);
@@ -3628,6 +3825,9 @@ function PayablesView({
                       )}
                       {canEdit && p.status !== "Pago" && (
                         <Button variant="subtle" onClick={() => setPayModal(p)}><Check size={13} /> Dar baixa</Button>
+                      )}
+                      {p.documentoArquivoPath && (
+                        <button onClick={() => abrirDocumentoLancamento(p.documentoArquivoPath)} title="Ver documento anexado" className="p-1.5 rounded-md hover:bg-black/5"><FileText size={14} color={COLORS.inkSoft} /></button>
                       )}
                       {canEdit && (
                         <>
@@ -4629,7 +4829,7 @@ function ReceivablesView({
     return true;
   }).sort((a, b) => (b.dataLanc || "").localeCompare(a.dataLanc || ""));
 
-  const submit = (formOrList, contactInfo) => {
+  const submit = async (formOrList, contactInfo) => {
     const list = Array.isArray(formOrList) ? formOrList : [formOrList];
     let withContact = list;
     if (contactInfo && list[0]?.cliente && list[0]?.empresaId) {
@@ -4641,10 +4841,16 @@ function ReceivablesView({
         withContact = list.map((f) => ({ ...f, contactId: contact.id }));
       }
     }
-    if (withContact.length === 1 && withContact[0].id) {
-      onSave(receivables.map((r) => (r.id === withContact[0].id ? withContact[0] : r)));
+    const isEdit = withContact.length === 1 && withContact[0].id;
+    let finalList = isEdit ? withContact : withContact.map((f) => ({ ...f, id: uid() }));
+    if (previewDoc) {
+      const path = await uploadDocumentoLancamento(selectedEmpresa, "receivables", finalList[0].id, previewDoc);
+      if (path) finalList = finalList.map((f) => ({ ...f, documentoArquivoPath: path }));
+    }
+    if (isEdit) {
+      onSave(receivables.map((r) => (r.id === finalList[0].id ? finalList[0] : r)));
     } else {
-      onSave([...receivables, ...withContact.map((f) => ({ ...f, id: uid() }))]);
+      onSave([...receivables, ...finalList]);
     }
     setModal(null);
     setPreviewDoc(null);
@@ -4790,6 +4996,9 @@ function ReceivablesView({
                           <button onClick={() => setAnticipateModal(r)} title="Marcar como em processo de antecipação" className="p-1.5 rounded-md hover:bg-black/5"><Zap size={14} color={COLORS.gold} /></button>
                         </>
                       ))}
+                      {r.documentoArquivoPath && (
+                        <button onClick={() => abrirDocumentoLancamento(r.documentoArquivoPath)} title="Ver documento anexado" className="p-1.5 rounded-md hover:bg-black/5"><FileText size={14} color={COLORS.inkSoft} /></button>
+                      )}
                       {canEdit && (
                         <>
                           <button onClick={() => setModal(r)} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
@@ -5183,12 +5392,18 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
   const [statementError, setStatementError] = useState("");
   const [importReview, setImportReview] = useState(null);
   const scopedAccounts = accounts.filter((a) => a.empresaId === selectedEmpresa);
-  const submit = (formOrList) => {
+  const submit = async (formOrList) => {
     const list = Array.isArray(formOrList) ? formOrList : [formOrList];
-    if (list.length === 1 && list[0].id) {
-      onSave(entries.map((e) => (e.id === list[0].id ? list[0] : e)));
+    const isEdit = list.length === 1 && list[0].id;
+    let finalList = isEdit ? list : list.map((f) => ({ ...f, id: uid() }));
+    if (previewDoc) {
+      const path = await uploadDocumentoLancamento(selectedEmpresa, "bankEntries", finalList[0].id, previewDoc);
+      if (path) finalList = finalList.map((f) => ({ ...f, documentoArquivoPath: path }));
+    }
+    if (isEdit) {
+      onSave(entries.map((e) => (e.id === finalList[0].id ? finalList[0] : e)));
     } else {
-      onSave([...entries, ...list.map((f) => ({ ...f, id: uid() }))]);
+      onSave([...entries, ...finalList]);
     }
     setModal(null);
     setPreviewDoc(null);
@@ -5355,13 +5570,18 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
                       {e.tipo === "Entrada" ? "+" : "−"}{fmtBRL(e.valor)}
                     </td>
                     <td className="px-4 py-2.5">
-                      {canEdit && (
-                        <div className="flex justify-end gap-1">
-                          <button onClick={() => duplicateEntry(e)} title="Duplicar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Copy size={14} color={COLORS.inkSoft} /></button>
-                          <button onClick={() => setModal(e)} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                          <button onClick={() => remove(e.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
-                        </div>
-                      )}
+                      <div className="flex justify-end gap-1">
+                        {e.documentoArquivoPath && (
+                          <button onClick={() => abrirDocumentoLancamento(e.documentoArquivoPath)} title="Ver documento anexado" className="p-1.5 rounded-md hover:bg-black/5"><FileText size={14} color={COLORS.inkSoft} /></button>
+                        )}
+                        {canEdit && (
+                          <>
+                            <button onClick={() => duplicateEntry(e)} title="Duplicar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Copy size={14} color={COLORS.inkSoft} /></button>
+                            <button onClick={() => setModal(e)} title="Editar lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                            <button onClick={() => remove(e.id)} title="Excluir lançamento" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -5583,9 +5803,15 @@ function TransfersView({ transfers, accounts, selectedEmpresa, onSave, canEdit =
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState("");
   const scopedAccounts = accounts.filter((a) => a.empresaId === selectedEmpresa);
-  const submit = (form) => {
-    if (form.id) onSave(transfers.map((t) => (t.id === form.id ? form : t)));
-    else onSave([...transfers, { ...form, id: uid() }]);
+  const submit = async (form) => {
+    const isEdit = !!form.id;
+    let final = isEdit ? form : { ...form, id: uid() };
+    if (previewDoc) {
+      const path = await uploadDocumentoLancamento(selectedEmpresa, "transfers", final.id, previewDoc);
+      if (path) final = { ...final, documentoArquivoPath: path };
+    }
+    if (isEdit) onSave(transfers.map((t) => (t.id === final.id ? final : t)));
+    else onSave([...transfers, final]);
     setModal(null);
     setPreviewDoc(null);
   };
@@ -5678,13 +5904,18 @@ function TransfersView({ transfers, accounts, selectedEmpresa, onSave, canEdit =
                     <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(t.valor)}</td>
                     <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{t.descricao}</td>
                     <td className="px-4 py-2.5">
-                      {canEdit && (
-                        <div className="flex justify-end gap-1">
-                          <button onClick={() => duplicateTransfer(t)} title="Duplicar transferência" className="p-1.5 rounded-md hover:bg-black/5"><Copy size={14} color={COLORS.inkSoft} /></button>
-                          <button onClick={() => setModal(t)} title="Editar transferência" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                          <button onClick={() => remove(t.id)} title="Excluir transferência" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
-                        </div>
-                      )}
+                      <div className="flex justify-end gap-1">
+                        {t.documentoArquivoPath && (
+                          <button onClick={() => abrirDocumentoLancamento(t.documentoArquivoPath)} title="Ver documento anexado" className="p-1.5 rounded-md hover:bg-black/5"><FileText size={14} color={COLORS.inkSoft} /></button>
+                        )}
+                        {canEdit && (
+                          <>
+                            <button onClick={() => duplicateTransfer(t)} title="Duplicar transferência" className="p-1.5 rounded-md hover:bg-black/5"><Copy size={14} color={COLORS.inkSoft} /></button>
+                            <button onClick={() => setModal(t)} title="Editar transferência" className="p-1.5 rounded-md hover:bg-black/5"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                            <button onClick={() => remove(t.id)} title="Excluir transferência" className="p-1.5 rounded-md hover:bg-black/5"><Trash2 size={14} color={COLORS.red} /></button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
