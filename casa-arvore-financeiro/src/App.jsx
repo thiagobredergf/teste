@@ -6677,6 +6677,9 @@ const REPORT_TABS = [
   { id: "ordem", label: "Ordem de Pagamento", Comp: PaymentOrderReport },
   { id: "cobranca", label: "Relação de Cobrança", Comp: CollectionsReport },
   { id: "aging", label: "Aging", Comp: AgingReport },
+  { id: "rentabilidade", label: "Rentabilidade por Projeto", Comp: RentabilidadeProjetoReport },
+  { id: "cronograma", label: "Cronograma de Desembolso", Comp: CronogramaDesembolsoReport },
+  { id: "diaSemana", label: "Faturamento por Dia da Semana", Comp: FaturamentoDiaSemanaReport },
   { id: "comparativo", label: "Comparativo entre Empresas", Comp: ComparativoReport },
   { id: "extrato", label: "Extrato de Conta", Comp: ExtratoContaReport },
   { id: "auditoria", label: "Auditoria", Comp: AuditLogReport },
@@ -7344,6 +7347,209 @@ function AgingReport({ payables, receivables }) {
     <div className="grid lg:grid-cols-2 gap-4">
       <AgingTable title="Aging · Contas a Pagar" tone="red" items={openPayables} dateField="vencimento" nameField={{ label: "Fornecedor", field: "fornecedor" }} />
       <AgingTable title="Aging · Contas a Receber" tone="amber" items={openReceivables} dateField="vencimento" nameField={{ label: "Cliente", field: "cliente" }} />
+    </div>
+  );
+}
+
+/* --- Rentabilidade por Projeto/Contrato --- */
+// Usa o campo "Projeto" que já existe em Contas a Pagar/Receber (texto
+// livre) — receita menos custo direto lançado com o mesmo nome de
+// projeto. Não normaliza maiúsculas/acentos de propósito: é mais simples
+// avisar que "Cliente X" e "cliente x" contam separado do que arriscar
+// juntar dois projetos que só por coincidência têm nomes parecidos.
+function RentabilidadeProjetoReport({ year, payables, receivables }) {
+  const receitaPorProjeto = {};
+  receivables.forEach((r) => {
+    const proj = (r.projeto || "").trim();
+    if (!proj || yearOf(r.vencimento) !== year) return;
+    receitaPorProjeto[proj] = (receitaPorProjeto[proj] || 0) + Number(r.valor || 0);
+  });
+  const custoPorProjeto = {};
+  payables.forEach((p) => {
+    const proj = (p.projeto || "").trim();
+    if (!proj || yearOf(p.vencimento) !== year) return;
+    custoPorProjeto[proj] = (custoPorProjeto[proj] || 0) + Number(p.valor || 0);
+  });
+  const projetos = [...new Set([...Object.keys(receitaPorProjeto), ...Object.keys(custoPorProjeto)])];
+  const linhas = projetos
+    .map((proj) => {
+      const receita = receitaPorProjeto[proj] || 0;
+      const custo = custoPorProjeto[proj] || 0;
+      const margem = receita - custo;
+      return { proj, receita, custo, margem, margemPct: receita > 0 ? (margem / receita) * 100 : null };
+    })
+    .sort((a, b) => b.margem - a.margem);
+  const semProjeto = receivables.some((r) => yearOf(r.vencimento) === year && !(r.projeto || "").trim())
+    || payables.some((p) => yearOf(p.vencimento) === year && !(p.projeto || "").trim());
+
+  return (
+    <div className="space-y-4">
+      <ReportCard
+        title={`Rentabilidade por Projeto/Contrato · ${year}`}
+        subtitle='Receita menos custos diretos, agrupados pelo campo "Projeto" (Contas a Pagar/Receber) — mostra quais contratos dão lucro e quais dão prejuízo.'
+      >
+        {linhas.length === 0 ? (
+          <EmptyState icon={ListTree} title='Nenhum lançamento com "Projeto" preenchido neste ano' subtitle='Preencha o campo "Projeto" ao lançar contas a pagar/receber pra esse relatório funcionar.' />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[560px]">
+              <thead>
+                <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                  <th className="text-left font-medium px-2 py-1.5">Projeto</th>
+                  <th className="text-right font-medium px-2 py-1.5">Receita</th>
+                  <th className="text-right font-medium px-2 py-1.5">Custo direto</th>
+                  <th className="text-right font-medium px-2 py-1.5">Margem</th>
+                  <th className="text-right font-medium px-2 py-1.5">Margem %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {linhas.map((l) => (
+                  <tr key={l.proj} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <td className="px-2 py-1.5 font-medium" style={{ color: COLORS.ink }}>{l.proj}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.green }}>{fmtBRL(l.receita)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.red }}>{fmtBRL(l.custo)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums font-medium" style={{ color: l.margem >= 0 ? COLORS.green : COLORS.red }}>{fmtBRL(l.margem)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.inkSoft }}>{l.margemPct == null ? "—" : `${l.margemPct.toFixed(1)}%`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {semProjeto && (
+          <p className="text-xs mt-3" style={{ color: COLORS.inkSoft }}>
+            Há lançamentos deste ano sem "Projeto" preenchido — eles não entram nesse relatório.
+          </p>
+        )}
+      </ReportCard>
+    </div>
+  );
+}
+
+/* --- Cronograma Financeiro de Desembolso --- */
+// Contas a pagar com "Projeto" preenchido, sem filtro de ano (evento pode
+// atravessar virada de ano) — agrupadas por projeto e ordenadas por
+// vencimento, pra visualizar de uma vez quando cada fornecedor precisa
+// ser pago e planejar o caixa com antecedência.
+function CronogramaDesembolsoReport({ payables }) {
+  const comProjeto = payables.filter((p) => (p.projeto || "").trim());
+  const porProjeto = {};
+  comProjeto.forEach((p) => {
+    const proj = p.projeto.trim();
+    (porProjeto[proj] = porProjeto[proj] || []).push(p);
+  });
+  const projetos = Object.keys(porProjeto).sort();
+
+  return (
+    <div className="space-y-4">
+      <ReportCard
+        title="Cronograma Financeiro de Desembolso"
+        subtitle='Contas a pagar com "Projeto" preenchido, agrupadas e ordenadas por vencimento — quando cada fornecedor do evento/projeto precisa ser pago.'
+      >
+        {projetos.length === 0 ? (
+          <EmptyState icon={ListTree} title='Nenhuma conta a pagar com "Projeto" preenchido' subtitle='Preencha o campo "Projeto" ao lançar contas a pagar pra esse cronograma aparecer.' />
+        ) : (
+          <div className="space-y-5">
+            {projetos.map((proj) => {
+              const itens = [...porProjeto[proj]].sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""));
+              const total = itens.reduce((s, p) => s + Number(p.valor || 0), 0);
+              const pendente = itens.filter((p) => p.status !== "Pago").reduce((s, p) => s + Number(p.valor || 0), 0);
+              return (
+                <div key={proj}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-sm font-semibold" style={{ color: COLORS.ink }}>{proj}</p>
+                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>{fmtBRL(total)} total · {fmtBRL(pendente)} pendente</p>
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                        <th className="text-left font-medium px-2 py-1.5">Vencimento</th>
+                        <th className="text-left font-medium px-2 py-1.5">Fornecedor</th>
+                        <th className="text-left font-medium px-2 py-1.5">Categoria</th>
+                        <th className="text-right font-medium px-2 py-1.5">Valor</th>
+                        <th className="text-left font-medium px-2 py-1.5">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {itens.map((p) => (
+                        <tr key={p.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                          <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{fmtDate(p.vencimento)}</td>
+                          <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{p.fornecedor}</td>
+                          <td className="px-2 py-1.5" style={{ color: COLORS.inkSoft }}>{p.categoria}</td>
+                          <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(p.valor)}</td>
+                          <td className="px-2 py-1.5"><StatusBadge status={p.status} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </ReportCard>
+    </div>
+  );
+}
+
+const DIAS_SEMANA = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
+
+/* --- Faturamento por Dia da Semana --- */
+function FaturamentoDiaSemanaReport({ year, receivables }) {
+  const porDia = Array(7).fill(0).map(() => ({ total: 0, qtd: 0 }));
+  receivables.forEach((r) => {
+    if (!r.vencimento || yearOf(r.vencimento) !== year) return;
+    const dia = new Date(r.vencimento + "T00:00:00").getDay();
+    porDia[dia].total += Number(r.valor || 0);
+    porDia[dia].qtd += 1;
+  });
+  const linhas = DIAS_SEMANA.map((nome, i) => ({ nome, total: porDia[i].total, qtd: porDia[i].qtd, media: porDia[i].qtd > 0 ? porDia[i].total / porDia[i].qtd : 0 }));
+  const totalGeral = linhas.reduce((s, l) => s + l.total, 0);
+  const maiorDia = linhas.reduce((max, l) => (l.total > max.total ? l : max), linhas[0]);
+
+  return (
+    <div className="space-y-4">
+      <ReportCard
+        title={`Faturamento por Dia da Semana · ${year}`}
+        subtitle="Contas a receber agrupadas pelo dia da semana do vencimento — identifica dias de pico e dias fracos, pra ajudar no planejamento de pessoal e compras."
+      >
+        <ResponsiveContainer width="100%" height={240}>
+          <ComposedChart data={linhas}>
+            <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
+            <XAxis dataKey="nome" tickFormatter={(d) => d.slice(0, 3)} tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => fmtBRL(v)} width={70} />
+            <Tooltip formatter={(v) => fmtBRL(v)} labelFormatter={(d) => d} />
+            <Bar dataKey="total" name="Faturamento" fill={COLORS.primary} />
+          </ComposedChart>
+        </ResponsiveContainer>
+        <div className="overflow-x-auto mt-3">
+          <table className="w-full text-sm min-w-[480px]">
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-2 py-1.5">Dia</th>
+                <th className="text-right font-medium px-2 py-1.5">Faturamento</th>
+                <th className="text-right font-medium px-2 py-1.5">Lançamentos</th>
+                <th className="text-right font-medium px-2 py-1.5">Ticket médio</th>
+              </tr>
+            </thead>
+            <tbody>
+              {linhas.map((l) => (
+                <tr key={l.nome} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{l.nome}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(l.total)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.inkSoft }}>{l.qtd}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.inkSoft }}>{fmtBRL(l.media)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {totalGeral > 0 && (
+          <p className="text-xs mt-2 px-1" style={{ color: COLORS.inkSoft }}>
+            Dia de maior faturamento: <strong>{maiorDia.nome}</strong> ({fmtBRL(maiorDia.total)}).
+          </p>
+        )}
+      </ReportCard>
     </div>
   );
 }
@@ -8690,7 +8896,7 @@ function SettlementPartnersView({
 
   return (
     <div className="space-y-4">
-      <Header title="Repasses de Terceiros" subtitle="Cadastre adquirentes de cartão e plataformas de delivery com a taxa contratada, e audite o repasse real deles.">
+      <Header title="Repasses de Terceiros" subtitle="Conciliação de cartão e delivery: cadastre adquirentes (maquininha) e plataformas com a taxa contratada, e audite o repasse real deles — cruza o que foi vendido com o que a adquirente de fato pagou, descontando as taxas.">
         <Button onClick={() => setModal({})}><Plus size={15} /> Novo parceiro</Button>
       </Header>
 
