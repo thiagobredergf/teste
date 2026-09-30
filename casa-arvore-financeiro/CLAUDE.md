@@ -81,6 +81,8 @@ RLS no Postgres, não só no front:
 - `is_gestor(uid)`, `is_staff(uid)` (gestor OU operador), `has_empresa_access(uid, empresaId)`.
 - `staff_empresa_access`: allowlist **opt-in a partir de zero linhas = acesso total** (zero linhas pra um staff = vê tudo; qualquer linha = só o que estiver lá). Configurado em ADM → "Gerenciar acesso".
 - `empresa_owners`: opt-in **a partir de zero acesso** (zero linhas = dono não vê nada; precisa de linha explícita por empresa). Criado via `manage-owner-login` (Edge Function), nunca pelo modal genérico de "Novo usuário" do ADM — dono nasce sempre vinculado a uma empresa específica, na tela Cadastros → Empresas ("Donos com acesso a esta empresa").
+- `empresas.ativa = false` (inativação, inclusive por quebra de contrato antes do prazo) corta o acesso do Dono na hora — `has_empresa_access` exige `empresas.ativa = true` no braço do dono. Gestor/Operador não são afetados (continuam vendo a empresa inativa pra auditoria/histórico).
+- `trg_enforce_payable_autorizacao` (trigger em `payables`, fase 23): só quem tem linha em `empresa_owners` pra aquela empresa pode fazer a transição de status pra `'Autorizado'` — nem Gestor nem Operador conseguem, mesmo chamando a API direto (a UI já escondia o botão, isso fecha o mesmo caminho no banco). Cancelar uma autorização (voltar o status) não é restrito.
 
 No frontend, `role` e `selectedEmpresa` (preferência de navegação, só
 local no browser) decidem o que cada view mostra; quase toda tela filtra
@@ -111,3 +113,12 @@ cima do primeiro segmento do path, que é sempre o `empresaId`):
 
 Produção em Vercel, deploy automático a cada push na branch `master`
 (ver `README.md`). Não há ambiente de staging separado documentado.
+
+## Backlog conhecido (adiado deliberadamente)
+
+- **CNAB240 retorno de cobrança** (Contas a Receber): só a remessa (envio)
+  foi implementada; o arquivo de retorno do banco (baixa automática de
+  boletos pagos) ainda é conferido manualmente. Adiado por
+  custo/complexidade — o layout do retorno varia por banco, ao contrário
+  da remessa que é mais padronizada. Retomar quando o volume de boletos
+  justificar automatizar.
