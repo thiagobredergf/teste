@@ -1199,6 +1199,28 @@ function FinanceiroApp({ userEmail, onLogout }) {
     () => contacts.filter((c) => !c.deletedAt && c.empresaId === selectedEmpresa && !c.documento && !c.contato),
     [contacts, selectedEmpresa]
   );
+  // Mesmos quatro critérios da auditoria completa (Análise →
+  // Inconsistência/Pendências) — antes este painel só cobria os dois de
+  // cima, então ficava "em branco" mesmo com pendência real (vencido,
+  // não conciliado) esperando na empresa.
+  const pendingSemCategoria = useMemo(
+    () => bankEntriesF.filter((b) => !b.categoria || b.categoria === "A classificar").length
+      + payablesF.filter((p) => !p.categoria).length
+      + receivablesF.filter((r) => !r.categoria).length,
+    [bankEntriesF, payablesF, receivablesF]
+  );
+  const pendingNaoConciliados = useMemo(
+    () => bankEntriesF.filter((b) => !b.conciliado).length
+      + transfersF.filter((t) => !t.conciliado).length
+      + payablesF.filter((p) => p.status === "Pago" && !p.conciliado).length
+      + receivablesF.filter((r) => r.status === "Recebido" && !r.conciliado).length,
+    [bankEntriesF, transfersF, payablesF, receivablesF]
+  );
+  const pendingVencidos = useMemo(
+    () => payablesF.filter((p) => p.status !== "Pago" && (p.vencimento || "") < todayISO()).length
+      + receivablesF.filter((r) => r.status !== "Recebido" && (r.vencimento || "") < todayISO()).length,
+    [payablesF, receivablesF]
+  );
 
   if (!ready) {
     return (
@@ -1784,10 +1806,58 @@ function FinanceiroApp({ userEmail, onLogout }) {
               <div className="pt-4 mt-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
                 <p className="font-semibold text-sm" style={{ color: COLORS.ink }}>Pendências</p>
                 <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>O que precisa de atenção nesta empresa</p>
-                {pendingDocs.length === 0 && pendingContacts.length === 0 ? (
+                {pendingDocs.length === 0 && pendingContacts.length === 0 && pendingSemCategoria === 0 && pendingNaoConciliados === 0 && pendingVencidos === 0 ? (
                   <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nada pendente por aqui.</p>
                 ) : (
                   <div className="space-y-1.5">
+                    {pendingVencidos > 0 && (
+                      <button
+                        onClick={() => goToView("pendencias")}
+                        className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
+                      >
+                        <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+                          <AlertTriangle size={14} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <p className="text-sm font-medium" style={{ color: COLORS.ink }}>
+                            {pendingVencidos} vencido{pendingVencidos > 1 ? "s" : ""}
+                          </p>
+                          <p className="text-xs" style={{ color: COLORS.inkSoft }}>A pagar/receber em aberto, já vencidas</p>
+                        </span>
+                      </button>
+                    )}
+                    {pendingNaoConciliados > 0 && (
+                      <button
+                        onClick={() => goToView("pendencias")}
+                        className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
+                      >
+                        <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
+                          <Landmark size={14} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <p className="text-sm font-medium" style={{ color: COLORS.ink }}>
+                            {pendingNaoConciliados} não conciliado{pendingNaoConciliados > 1 ? "s" : ""}
+                          </p>
+                          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Já andou na conta, ainda não bateu com o extrato</p>
+                        </span>
+                      </button>
+                    )}
+                    {pendingSemCategoria > 0 && (
+                      <button
+                        onClick={() => goToView("pendencias")}
+                        className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
+                      >
+                        <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
+                          <ListTree size={14} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <p className="text-sm font-medium" style={{ color: COLORS.ink }}>
+                            {pendingSemCategoria} sem categoria
+                          </p>
+                          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Preenchimento incompleto</p>
+                        </span>
+                      </button>
+                    )}
                     {pendingDocs.length > 0 && (
                       <button
                         onClick={() => goToView("documentUploads")}
