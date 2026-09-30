@@ -819,14 +819,14 @@ function FinanceiroApp({ userEmail, onLogout }) {
       persist("payables", payables.map((p) => (dueIds.has(p.id)
         ? { ...p, status: "Pago", dataPgto: p.vencimento, valorPago: p.valor, contaPgtoId: p.contaPadraoId }
         : p)), setPayables);
-      payDue.forEach((p) => logAudit(p.empresaId, "payable", p.id, "baixa_automatica", `Confirmação automática no vencimento — ${fmtBRL(p.valor)} em ${fmtDate(p.vencimento)}`, "sistema"));
+      payDue.forEach((p) => logAudit(p.empresaId, "payable", p.id, "baixa_automatica", `Confirmação automática no vencimento — ${p.fornecedor}${p.numeroDocumento ? ` · doc. ${p.numeroDocumento}` : ""} — ${fmtBRL(p.valor)} em ${fmtDate(p.vencimento)}`, "sistema"));
     }
     if (recDue.length) {
       const dueIds = new Set(recDue.map((r) => r.id));
       persist("receivables", receivables.map((r) => (dueIds.has(r.id)
         ? { ...r, status: "Recebido", dataReceb: r.vencimento, valorRecebido: r.valor, contaRecebId: r.contaPadraoId }
         : r)), setReceivables);
-      recDue.forEach((r) => logAudit(r.empresaId, "receivable", r.id, "baixa_automatica", `Confirmação automática no vencimento — ${fmtBRL(r.valor)} em ${fmtDate(r.vencimento)}`, "sistema"));
+      recDue.forEach((r) => logAudit(r.empresaId, "receivable", r.id, "baixa_automatica", `Confirmação automática no vencimento — ${r.cliente}${r.numeroDocumento ? ` · doc. ${r.numeroDocumento}` : ""} — ${fmtBRL(r.valor)} em ${fmtDate(r.vencimento)}`, "sistema"));
     }
   }, [ready, payables, receivables, persist]);
 
@@ -3810,13 +3810,24 @@ function PayablesView({
     onSave(payables.map((p) => (p.id === id ? { ...p, deletedAt: new Date().toISOString() } : p)));
   };
 
+  // Referência legível de qual conta é essa no log de auditoria — sem
+  // isso, duas baixas de mesmo valor (ex.: duas parcelas de R$79,84 em
+  // meses diferentes) ficam indistinguíveis só pelo "Detalhe" da
+  // Auditoria, que só mostrava valor+data.
+  const refPayable = (id) => {
+    const p = payables.find((x) => x.id === id);
+    if (!p) return "";
+    return `${p.fornecedor}${p.numeroDocumento ? ` · doc. ${p.numeroDocumento}` : ""} — `;
+  };
+
   const confirmPayment = (id, dataPgto, valorPago, contaPgtoId, adj) => {
     const { juros = 0, multa = 0, desconto = 0 } = adj || {};
+    const ref = refPayable(id);
     onSave(payables.map((p) => (p.id === id ? { ...p, status: "Pago", dataPgto, valorPago, contaPgtoId, juros, multa, desconto } : p)));
     const detalheAdj = (juros || multa || desconto)
       ? ` (juros ${fmtBRL(juros)}, multa ${fmtBRL(multa)}, desconto ${fmtBRL(desconto)})`
       : "";
-    logAudit(selectedEmpresa, "payable", id, "baixa", `Dar baixa — ${fmtBRL(valorPago)} em ${fmtDate(dataPgto)}${detalheAdj}`, userEmail);
+    logAudit(selectedEmpresa, "payable", id, "baixa", `Dar baixa — ${ref}${fmtBRL(valorPago)} em ${fmtDate(dataPgto)}${detalheAdj}`, userEmail);
     setPayModal(null);
   };
 
@@ -3834,8 +3845,9 @@ function PayablesView({
 
   const confirmBatchPayment = (items, dataPgto, contaPgtoId) => {
     const valores = new Map(items.map((i) => [i.id, i.valor]));
+    const refs = new Map(items.map((i) => [i.id, refPayable(i.id)]));
     onSave(payables.map((p) => (valores.has(p.id) ? { ...p, status: "Pago", dataPgto, valorPago: valores.get(p.id), contaPgtoId } : p)));
-    items.forEach((i) => logAudit(selectedEmpresa, "payable", i.id, "baixa", `Dar baixa em lote — ${fmtBRL(i.valor)} em ${fmtDate(dataPgto)}`, userEmail));
+    items.forEach((i) => logAudit(selectedEmpresa, "payable", i.id, "baixa", `Dar baixa em lote — ${refs.get(i.id)}${fmtBRL(i.valor)} em ${fmtDate(dataPgto)}`, userEmail));
     setBatchSettleModal(false);
   };
 
@@ -3855,7 +3867,7 @@ function PayablesView({
     if (!confirmDelete(`Cancelar a baixa de "${p.fornecedor}"? Ela volta pra "${p.autorizadoPor ? "Autorizado" : p.agendadoPara ? "Agendado" : "A Pagar"}".`)) return;
     const revertStatus = p.autorizadoPor ? "Autorizado" : p.agendadoPara ? "Agendado" : "A Pagar";
     onSave(payables.map((x) => (x.id === p.id ? { ...x, status: revertStatus, dataPgto: null, valorPago: null, contaPgtoId: null } : x)));
-    logAudit(selectedEmpresa, "payable", p.id, "cancelar_baixa", `Cancelou baixa de ${fmtBRL(p.valorPago || p.valor)}`, userEmail);
+    logAudit(selectedEmpresa, "payable", p.id, "cancelar_baixa", `Cancelou baixa de ${p.fornecedor}${p.numeroDocumento ? ` · doc. ${p.numeroDocumento}` : ""} — ${fmtBRL(p.valorPago || p.valor)}`, userEmail);
   };
 
   const total = filtered.reduce((s, p) => s + Number(p.valor || 0), 0);
@@ -5086,26 +5098,38 @@ function ReceivablesView({
     if (!confirmDelete("Mover esta conta a receber pra lixeira? Você pode restaurar depois, em Lixeira.")) return;
     onSave(receivables.map((r) => (r.id === id ? { ...r, deletedAt: new Date().toISOString() } : r)));
   };
+  // Referência legível de qual conta é essa no log de auditoria — sem
+  // isso, duas baixas de mesmo valor (ex.: duas mensalidades de cliente
+  // diferente) ficam indistinguíveis só pelo "Detalhe" da Auditoria, que
+  // só mostrava valor+data.
+  const refReceivable = (id) => {
+    const r = receivables.find((x) => x.id === id);
+    if (!r) return "";
+    return `${r.cliente}${r.numeroDocumento ? ` · doc. ${r.numeroDocumento}` : ""} — `;
+  };
+
   const confirmReceipt = (id, dataReceb, valorRecebido, contaRecebId, adj) => {
     const { juros = 0, multa = 0, desconto = 0 } = adj || {};
+    const ref = refReceivable(id);
     onSave(receivables.map((r) => (r.id === id ? { ...r, status: "Recebido", dataReceb, valorRecebido, contaRecebId, juros, multa, desconto } : r)));
     const detalheAdj = (juros || multa || desconto)
       ? ` (juros ${fmtBRL(juros)}, multa ${fmtBRL(multa)}, desconto ${fmtBRL(desconto)})`
       : "";
-    logAudit(selectedEmpresa, "receivable", id, "baixa", `Dar baixa — ${fmtBRL(valorRecebido)} em ${fmtDate(dataReceb)}${detalheAdj}`, userEmail);
+    logAudit(selectedEmpresa, "receivable", id, "baixa", `Dar baixa — ${ref}${fmtBRL(valorRecebido)} em ${fmtDate(dataReceb)}${detalheAdj}`, userEmail);
     setRecModal(null);
   };
   const confirmBatchReceipt = (items, dataReceb, contaRecebId) => {
     const valores = new Map(items.map((i) => [i.id, i.valor]));
+    const refs = new Map(items.map((i) => [i.id, refReceivable(i.id)]));
     onSave(receivables.map((r) => (valores.has(r.id) ? { ...r, status: "Recebido", dataReceb, valorRecebido: valores.get(r.id), contaRecebId } : r)));
-    items.forEach((i) => logAudit(selectedEmpresa, "receivable", i.id, "baixa", `Dar baixa em lote — ${fmtBRL(i.valor)} em ${fmtDate(dataReceb)}`, userEmail));
+    items.forEach((i) => logAudit(selectedEmpresa, "receivable", i.id, "baixa", `Dar baixa em lote — ${refs.get(i.id)}${fmtBRL(i.valor)} em ${fmtDate(dataReceb)}`, userEmail));
     setBatchSettleModal(false);
   };
   const cancelReceipt = (r) => {
     const revertStatus = r.agendadoPara ? "Antecipado" : "A Receber";
     if (!confirmDelete(`Cancelar o recebimento de "${r.cliente}"? Ele volta pra "${revertStatus}".`)) return;
     onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: revertStatus, dataReceb: null, valorRecebido: null, contaRecebId: null } : x)));
-    logAudit(selectedEmpresa, "receivable", r.id, "cancelar_baixa", `Cancelou recebimento de ${fmtBRL(r.valorRecebido || r.valor)}`, userEmail);
+    logAudit(selectedEmpresa, "receivable", r.id, "cancelar_baixa", `Cancelou recebimento de ${r.cliente}${r.numeroDocumento ? ` · doc. ${r.numeroDocumento}` : ""} — ${fmtBRL(r.valorRecebido || r.valor)}`, userEmail);
   };
   const anticipateReceivable = (data, contaId) => {
     const r = anticipateModal;
@@ -6353,14 +6377,15 @@ function FiscalView({ obligations, accounts, empresas, selectedEmpresa, onSave, 
     onSave(obligations.map((o) => (o.id === id ? { ...o, deletedAt: new Date().toISOString() } : o)));
   };
   const confirmPayment = (id, dataPagamento, valor, contaId) => {
+    const o0 = obligations.find((x) => x.id === id);
     onSave(obligations.map((o) => (o.id === id ? { ...o, status: "Pago", dataPagamento, valor, contaId } : o)));
-    logAudit(selectedEmpresa, "fiscalObligation", id, "baixa", `Dar baixa — ${fmtBRL(valor)} em ${fmtDate(dataPagamento)}`, userEmail);
+    logAudit(selectedEmpresa, "fiscalObligation", id, "baixa", `Dar baixa — ${o0?.tributo || ""}${o0 ? ` · ${competenciaLabel(o0.competencia)}` : ""} — ${fmtBRL(valor)} em ${fmtDate(dataPagamento)}`, userEmail);
     setPayModal(null);
   };
   const cancelPayment = (o) => {
     if (!confirmDelete(`Cancelar a baixa de "${o.tributo}"? Ela volta pra "Pendente".`)) return;
     onSave(obligations.map((x) => (x.id === o.id ? { ...x, status: "Pendente", dataPagamento: null, contaId: null } : x)));
-    logAudit(selectedEmpresa, "fiscalObligation", o.id, "cancelar_baixa", `Cancelou baixa de ${fmtBRL(o.valor)}`, userEmail);
+    logAudit(selectedEmpresa, "fiscalObligation", o.id, "cancelar_baixa", `Cancelou baixa de ${o.tributo} · ${competenciaLabel(o.competencia)} — ${fmtBRL(o.valor)}`, userEmail);
   };
   const validateSuggestion = (id) => {
     onSave(obligations.map((o) => (o.id === id ? { ...o, status: "Pendente" } : o)));
