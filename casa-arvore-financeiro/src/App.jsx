@@ -2583,6 +2583,8 @@ function AdmView({ role, empresas = [], userEmail }) {
         )}
       </Card>
 
+      <AuditLogReport empresas={empresas} />
+
       {modal && <NovoUsuarioModal onClose={() => setModal(null)} onSubmit={criarUsuario} busy={busy} />}
       {accessModal && (
         <StaffAccessModal
@@ -6705,9 +6707,7 @@ const REPORT_TABS = [
   { id: "rentabilidade", label: "Rentabilidade por Projeto", Comp: RentabilidadeProjetoReport },
   { id: "cronograma", label: "Cronograma de Desembolso", Comp: CronogramaDesembolsoReport },
   { id: "diaSemana", label: "Faturamento por Dia da Semana", Comp: FaturamentoDiaSemanaReport },
-  { id: "comparativo", label: "Comparativo entre Empresas", Comp: ComparativoReport },
   { id: "extrato", label: "Extrato de Conta", Comp: ExtratoContaReport },
-  { id: "auditoria", label: "Auditoria", Comp: AuditLogReport },
 ];
 
 function ReportsView(props) {
@@ -7783,8 +7783,9 @@ function fmtDateTime(iso) {
 // porque, ao contrário do resto do app, essa tabela não passa pelo
 // storageGet genérico em FinanceiroApp (é grande demais pra manter tudo
 // em memória o tempo todo, e a tela normalmente só é aberta sob demanda).
-function AuditLogReport({ selectedEmpresa }) {
+function AuditLogReport({ empresas = [] }) {
   const [rows, setRows] = useState(null); // null = carregando
+  const empresaNome = (id) => empresas.find((e) => e.id === id)?.nome || "—";
 
   useEffect(() => {
     let cancelled = false;
@@ -7793,25 +7794,25 @@ function AuditLogReport({ selectedEmpresa }) {
       const { data, error } = await supabase
         .from("auditLog")
         .select("*")
-        .eq("empresaId", selectedEmpresa)
         .order("created_at", { ascending: false })
         .limit(200);
       if (!cancelled) setRows(error ? [] : data);
     })();
     return () => { cancelled = true; };
-  }, [selectedEmpresa]);
+  }, []);
 
   return (
-    <ReportCard title="Log de auditoria" subtitle="Toda baixa e cancelamento de baixa fica registrado aqui — data, hora, usuário e ação. Ninguém, nem o gestor, consegue editar ou apagar essas linhas por dentro do sistema.">
+    <ReportCard title="Log de auditoria" subtitle="Toda baixa e cancelamento de baixa, de todas as empresas, fica registrado aqui — data, hora, usuário e ação. Ninguém, nem o gestor, consegue editar ou apagar essas linhas por dentro do sistema.">
       {rows === null ? (
         <p className="text-sm py-6 text-center" style={{ color: COLORS.inkSoft }}>Carregando…</p>
       ) : rows.length === 0 ? (
-        <EmptyState icon={ShieldCheck} title="Nada registrado ainda" subtitle="Assim que alguém der ou cancelar uma baixa nessa empresa, aparece aqui." />
+        <EmptyState icon={ShieldCheck} title="Nada registrado ainda" subtitle="Assim que alguém der ou cancelar uma baixa em alguma empresa, aparece aqui." />
       ) : (
         <table className="w-full text-sm">
           <thead>
             <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
               <th className="text-left font-medium px-2 py-2">Quando</th>
+              <th className="text-left font-medium px-2 py-2">Empresa</th>
               <th className="text-left font-medium px-2 py-2">Usuário</th>
               <th className="text-left font-medium px-2 py-2">Ação</th>
               <th className="text-left font-medium px-2 py-2">Registro</th>
@@ -7822,6 +7823,7 @@ function AuditLogReport({ selectedEmpresa }) {
             {rows.map((r) => (
               <tr key={r.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
                 <td className="px-2 py-2 whitespace-nowrap" style={{ color: COLORS.inkSoft }}>{fmtDateTime(r.created_at)}</td>
+                <td className="px-2 py-2" style={{ color: COLORS.ink }}>{empresaNome(r.empresaId)}</td>
                 <td className="px-2 py-2" style={{ color: COLORS.ink }}>{r.userEmail || "—"}</td>
                 <td className="px-2 py-2">
                   <Badge tone={AUDIT_ACTION_TONE[r.action] || "neutral"}>{AUDIT_ACTION_LABEL[r.action] || r.action}</Badge>
@@ -10288,6 +10290,8 @@ function GestorDashboard({ empresas, empresaBreakdown, year, documentUploads, on
           </Card>
         ))}
       </div>
+
+      <ComparativoReport empresaBreakdown={empresaBreakdown} />
     </div>
   );
 }
