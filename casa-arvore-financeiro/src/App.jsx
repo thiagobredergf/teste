@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square, Download
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square, Download, Loader2
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -1501,6 +1501,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 onOpenAccounts={(id) => { changeEmpresa(id); setView("accounts"); }}
                 onOpenContacts={(id) => { changeEmpresa(id); setView("contacts"); }}
                 onOpenEmpresa={(id) => { changeEmpresa(id); setView("resumo"); }}
+                userEmail={userEmail}
               />
             )}
 
@@ -2008,8 +2009,9 @@ function BreakdownTable({ data, columns }) {
 /* ---------------------------------------------------------------------- */
 /*  Empresas                                                               */
 /* ---------------------------------------------------------------------- */
-function EmpresasView({ empresas, role, documentUploads = [], onSave, onOpenAccounts, onOpenContacts, onOpenEmpresa }) {
+function EmpresasView({ empresas, role, documentUploads = [], onSave, onOpenAccounts, onOpenContacts, onOpenEmpresa, userEmail }) {
   const [modal, setModal] = useState(null);
+  const [exportBusy, setExportBusy] = useState(null); // empresaId gerando exportação na hora de inativar
   const isGestor = role === "gestor";
   const activeCount = empresas.filter((e) => e.ativa !== false).length;
   const segmentoCount = new Set(empresas.filter((e) => e.ativa !== false && e.segmento).map((e) => e.segmento)).size;
@@ -2022,14 +2024,35 @@ function EmpresasView({ empresas, role, documentUploads = [], onSave, onOpenAcco
   };
   // Empresa nunca é excluída pelo app — só inativada. Mantém o histórico
   // (contas, lançamentos) intacto pra auditoria, e permite reativar se a
-  // empresa voltar a ser cliente no futuro.
-  const toggleAtiva = (e) => {
+  // empresa voltar a ser cliente no futuro. Quebra de contrato antes do
+  // prazo passa pela mesma política de fim de contrato normal: ao
+  // inativar, oferece na hora gerar e mandar por WhatsApp o link dos
+  // documentos guardados (válido por 7 dias) — sem precisar ir no ADM
+  // nem mexer na data de "Fim do contrato".
+  const toggleAtiva = async (e) => {
     const ativa = e.ativa === false; // reativando se já estava inativa
     const msg = ativa
       ? `Reativar "${e.nome}"? Ela volta a aparecer no seletor de empresas.`
       : `Inativar "${e.nome}"? Ela some do seletor do dia a dia, mas os dados continuam guardados e você pode reativar quando quiser.`;
     if (!confirmDelete(msg)) return;
     onSave(empresas.map((x) => (x.id === e.id ? { ...x, ativa } : x)));
+    if (ativa) return; // reativando não mexe em documentos
+
+    if (!window.confirm(`Gerar agora o link com os documentos guardados de "${e.nome}" e mandar por WhatsApp (válido por 7 dias) — mesma política usada em fim de contrato?`)) return;
+    setExportBusy(e.id);
+    try {
+      const { total, url } = await gerarExportacaoDocumentos(e);
+      if (total === 0) { alert(`Nenhum documento guardado pra "${e.nome}" ainda.`); return; }
+      logAudit(e.id, "empresa", e.id, "exportar_documentos", `Gerou exportação com ${total} arquivo(s) por inativação (quebra de contrato antes do prazo)`, userEmail);
+      const mensagem = `Olá! Segue, num único arquivo, todos os documentos trocados durante nosso contrato de prestação de serviço (${total} arquivo(s)). O link fica disponível por 7 dias:\n\n${url}`;
+      if (!openWhatsApp(e.contatoCelular, mensagem)) {
+        window.prompt("Cadastre o celular do dono pra mandar automático por WhatsApp — por enquanto, copie e envie manualmente:", url);
+      }
+    } catch (err) {
+      alert("Não consegui gerar a exportação: " + err.message);
+    } finally {
+      setExportBusy(null);
+    }
   };
 
   // Link de upload sem login: quem recebe (o sócio da empresa cliente) só
@@ -2110,10 +2133,11 @@ function EmpresasView({ empresas, role, documentUploads = [], onSave, onOpenAcco
                     </button>
                     <button
                       onClick={() => toggleAtiva(e)}
+                      disabled={exportBusy === e.id}
                       title={e.ativa === false ? "Reativar empresa" : "Inativar empresa"}
                       className="p-1.5 rounded-md hover:bg-black/5"
                     >
-                      {e.ativa === false ? <Check size={14} color={COLORS.green} /> : <Trash2 size={14} color={COLORS.red} />}
+                      {exportBusy === e.id ? <Loader2 size={14} className="animate-spin" color={COLORS.inkSoft} /> : e.ativa === false ? <Check size={14} color={COLORS.green} /> : <Trash2 size={14} color={COLORS.red} />}
                     </button>
                   </div>
                 )}
@@ -2350,11 +2374,15 @@ function AdmView({ role, empresas = [], userEmail }) {
   const [exportBusy, setExportBusy] = useState(null); // empresaId em exportação/exclusão
   const [exportResults, setExportResults] = useState({}); // { empresaId: { url, total } }
 
+  // Além do aviso normal de fim de contrato (alerta por data), inclui
+  // empresas já inativadas antes do prazo (quebra de contrato) mesmo sem
+  // alerta de data — senão elas nunca aparecem aqui e "Apagar documentos"
+  // fica inalcançável se o "Fim do contrato" ainda estiver longe.
   const contratosAlerta = useMemo(
     () => empresas
       .map((e) => ({ empresa: e, alerta: contratoAlerta(e) }))
-      .filter((x) => x.alerta)
-      .sort((a, b) => a.alerta.dias - b.alerta.dias),
+      .filter((x) => x.alerta || x.empresa.ativa === false)
+      .sort((a, b) => (a.alerta?.dias ?? -9999) - (b.alerta?.dias ?? -9999)),
     [empresas]
   );
 
@@ -2484,20 +2512,21 @@ function AdmView({ role, empresas = [], userEmail }) {
 
       {contratosAlerta.length > 0 && (
         <Card className="p-4">
-          <p className="text-sm font-medium mb-1" style={{ color: COLORS.ink }}>Contratos de prestação de serviço vencendo</p>
+          <p className="text-sm font-medium mb-1" style={{ color: COLORS.ink }}>Contratos de prestação de serviço vencendo ou encerrados</p>
           <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>
-            Aviso com 60 dias de antecedência (campo "Fim do contrato", em Cadastros → Editar empresa). "Exportar documentos" gera um .zip com tudo que já foi trocado com o cliente e manda o link por WhatsApp pro dono — a exclusão dos originais é uma ação separada, só depois que ele confirmar o recebimento.
+            Aviso com 60 dias de antecedência (campo "Fim do contrato", em Cadastros → Editar empresa), mais empresas já inativadas por quebra de contrato antes do prazo. "Exportar documentos" gera um .zip com tudo que já foi trocado com o cliente e manda o link por WhatsApp pro dono — a exclusão dos originais é uma ação separada, só depois que ele confirmar o recebimento.
           </p>
           <div className="grid gap-2">
             {contratosAlerta.map(({ empresa, alerta }) => {
               const resultado = exportResults[empresa.id];
               const ocupado = exportBusy === empresa.id;
+              const vencido = alerta ? alerta.nivel === "vencido" : true; // inativada sem alerta de data = trata como vencido (precisa de atenção)
               return (
-                <div key={empresa.id} className="rounded-lg px-3 py-2.5" style={{ background: alerta.nivel === "vencido" ? COLORS.redSoft : COLORS.amberSoft }}>
+                <div key={empresa.id} className="rounded-lg px-3 py-2.5" style={{ background: vencido ? COLORS.redSoft : COLORS.amberSoft }}>
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div>
-                      <p className="text-sm font-medium" style={{ color: alerta.nivel === "vencido" ? COLORS.red : COLORS.amber }}>
-                        {empresa.nome} — {alerta.nivel === "vencido" ? `contrato vencido há ${-alerta.dias}d` : `vence em ${alerta.dias}d`}
+                      <p className="text-sm font-medium" style={{ color: vencido ? COLORS.red : COLORS.amber }}>
+                        {empresa.nome} — {alerta ? (alerta.nivel === "vencido" ? `contrato vencido há ${-alerta.dias}d` : `vence em ${alerta.dias}d`) : "empresa inativada (quebra de contrato)"}
                       </p>
                       <p className="text-xs" style={{ color: COLORS.inkSoft }}>Fim do contrato: {fmtDate(empresa.contratoVencimento)}</p>
                     </div>
