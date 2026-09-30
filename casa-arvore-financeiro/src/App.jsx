@@ -10659,9 +10659,18 @@ function Login() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const { error: err } = await supabase.auth.signInWithPassword({ email, password });
+    try {
+      const { error: err } = await supabase.auth.signInWithPassword({ email, password });
+      if (err) {
+        // "Invalid login credentials" é o caso comum (senha errada) — qualquer
+        // outro texto (rede, configuração) aparece cru, pra não esconder um
+        // problema de infraestrutura atrás de uma mensagem genérica de senha.
+        setError(err.message === "Invalid login credentials" ? "E-mail ou senha inválidos." : `Não consegui entrar: ${err.message}`);
+      }
+    } catch (e2) {
+      setError(`Não consegui entrar: ${e2.message}`);
+    }
     setLoading(false);
-    if (err) setError("E-mail ou senha inválidos.");
   };
 
   return (
