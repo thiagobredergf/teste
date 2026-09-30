@@ -2612,7 +2612,7 @@ function AdmView({ role, empresas = [], userEmail }) {
         )}
       </Card>
 
-      <AuditLogReport empresas={empresas} />
+      <AuditLogReport empresas={empresas} users={users} />
 
       {modal && <NovoUsuarioModal onClose={() => setModal(null)} onSubmit={criarUsuario} busy={busy} />}
       {accessModal && (
@@ -7780,9 +7780,10 @@ function ExtratoContaReport({ accounts, payables, receivables, bankEntries, tran
   );
 }
 
-const AUDIT_ENTITY_LABEL = { payable: "Conta a pagar", receivable: "Conta a receber", fiscalObligation: "Obrigação fiscal" };
+const AUDIT_ENTITY_LABEL = { payable: "Conta a pagar", receivable: "Conta a receber", fiscalObligation: "Obrigação fiscal", empresa: "Empresa" };
 const AUDIT_ACTION_LABEL = {
   baixa: "Dar baixa",
+  baixa_automatica: "Baixa automática",
   cancelar_baixa: "Cancelar baixa",
   agendar: "Agendar pagamento",
   autorizar: "Autorizar pagamento",
@@ -7790,9 +7791,13 @@ const AUDIT_ACTION_LABEL = {
   cobranca: "Cobrança enviada",
   antecipar: "Marcar antecipação",
   cancelar_antecipacao: "Cancelar antecipação",
+  remessa_cnab: "Incluído em remessa CNAB",
+  exportar_documentos: "Exportar documentos",
+  apagar_documentos: "Apagar documentos",
 };
 const AUDIT_ACTION_TONE = {
   baixa: "green",
+  baixa_automatica: "green",
   cancelar_baixa: "amber",
   agendar: "gold",
   autorizar: "blue",
@@ -7800,6 +7805,9 @@ const AUDIT_ACTION_TONE = {
   cobranca: "neutral",
   antecipar: "gold",
   cancelar_antecipacao: "amber",
+  remessa_cnab: "blue",
+  exportar_documentos: "neutral",
+  apagar_documentos: "red",
 };
 
 function fmtDateTime(iso) {
@@ -7812,57 +7820,114 @@ function fmtDateTime(iso) {
 // porque, ao contrário do resto do app, essa tabela não passa pelo
 // storageGet genérico em FinanceiroApp (é grande demais pra manter tudo
 // em memória o tempo todo, e a tela normalmente só é aberta sob demanda).
-function AuditLogReport({ empresas = [] }) {
+// Filtros aplicados direto na query (não em memória) porque agora o log
+// cruza todas as empresas — sem isso a lista só cresce pra baixo.
+function AuditLogReport({ empresas = [], users = [] }) {
   const [rows, setRows] = useState(null); // null = carregando
+  const [buscaInput, setBuscaInput] = useState("");
+  const [busca, setBusca] = useState("");
+  const [empresaId, setEmpresaId] = useState("");
+  const [action, setAction] = useState("");
+  const [userEmail, setUserEmail] = useState("");
+  const [dataIni, setDataIni] = useState("");
+  const [dataFim, setDataFim] = useState("");
   const empresaNome = (id) => empresas.find((e) => e.id === id)?.nome || "—";
+
+  // Debounce da busca livre — evita 1 query por tecla digitada.
+  useEffect(() => {
+    const t = setTimeout(() => setBusca(buscaInput.trim()), 400);
+    return () => clearTimeout(t);
+  }, [buscaInput]);
 
   useEffect(() => {
     let cancelled = false;
     setRows(null);
     (async () => {
-      const { data, error } = await supabase
-        .from("auditLog")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(200);
+      let query = supabase.from("auditLog").select("*").order("created_at", { ascending: false }).limit(200);
+      if (empresaId) query = query.eq("empresaId", empresaId);
+      if (action) query = query.eq("action", action);
+      if (userEmail) query = query.eq("userEmail", userEmail);
+      if (dataIni) query = query.gte("created_at", `${dataIni}T00:00:00`);
+      if (dataFim) query = query.lte("created_at", `${dataFim}T23:59:59`);
+      if (busca) query = query.ilike("detail", `%${busca}%`);
+      const { data, error } = await query;
       if (!cancelled) setRows(error ? [] : data);
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [empresaId, action, userEmail, dataIni, dataFim, busca]);
+
+  const temFiltro = busca || empresaId || action || userEmail || dataIni || dataFim;
+  const limparFiltros = () => { setBuscaInput(""); setBusca(""); setEmpresaId(""); setAction(""); setUserEmail(""); setDataIni(""); setDataFim(""); };
+  const usuariosOptions = [...new Set([...users.map((u) => u.email), "sistema"])].sort();
 
   return (
     <ReportCard title="Log de auditoria" subtitle="Toda baixa e cancelamento de baixa, de todas as empresas, fica registrado aqui — data, hora, usuário e ação. Ninguém, nem o gestor, consegue editar ou apagar essas linhas por dentro do sistema.">
+      <div className="flex items-center gap-2 flex-wrap p-2 rounded-xl mb-3 print:hidden" style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}>
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" color={COLORS.inkSoft} />
+          <TextInput value={buscaInput} onChange={(e) => setBuscaInput(e.target.value)} placeholder="Buscar por documento, fornecedor/cliente, valor..." className="pl-8" style={{ height: 38 }} />
+        </div>
+        <Select value={empresaId} onChange={(e) => setEmpresaId(e.target.value)} className="w-44" style={{ height: 38 }}>
+          <option value="">Todas as empresas</option>
+          {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
+        </Select>
+        <Select value={action} onChange={(e) => setAction(e.target.value)} className="w-48" style={{ height: 38 }}>
+          <option value="">Todas as ações</option>
+          {Object.entries(AUDIT_ACTION_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </Select>
+        <Select value={userEmail} onChange={(e) => setUserEmail(e.target.value)} className="w-52" style={{ height: 38 }}>
+          <option value="">Todos os usuários</option>
+          {usuariosOptions.map((email) => <option key={email} value={email}>{email}</option>)}
+        </Select>
+        <div className="flex items-center gap-1.5 rounded-lg pl-2.5 pr-1.5 shrink-0" style={{ background: "#fff", border: `1px solid ${COLORS.border}`, height: 38 }}>
+          <Calendar size={14} color={COLORS.inkSoft} className="shrink-0" />
+          <input type="date" value={dataIni} onChange={(e) => setDataIni(e.target.value)} title="De" className="text-sm outline-none bg-transparent" style={{ color: COLORS.ink, width: 108 }} />
+          <span className="text-xs shrink-0" style={{ color: COLORS.inkSoft }}>até</span>
+          <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} title="Até" className="text-sm outline-none bg-transparent" style={{ color: COLORS.ink, width: 108 }} />
+        </div>
+        {temFiltro && (
+          <button onClick={limparFiltros} title="Limpar filtros" className="p-2 rounded-full hover:bg-black/5 shrink-0">
+            <X size={15} color={COLORS.inkSoft} />
+          </button>
+        )}
+      </div>
+
       {rows === null ? (
         <p className="text-sm py-6 text-center" style={{ color: COLORS.inkSoft }}>Carregando…</p>
       ) : rows.length === 0 ? (
-        <EmptyState icon={ShieldCheck} title="Nada registrado ainda" subtitle="Assim que alguém der ou cancelar uma baixa em alguma empresa, aparece aqui." />
+        <EmptyState icon={ShieldCheck} title="Nada encontrado" subtitle={temFiltro ? "Nenhum registro bate com esses filtros." : "Assim que alguém der ou cancelar uma baixa em alguma empresa, aparece aqui."} />
       ) : (
-        <table className="w-full text-sm">
-          <thead>
-            <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
-              <th className="text-left font-medium px-2 py-2">Quando</th>
-              <th className="text-left font-medium px-2 py-2">Empresa</th>
-              <th className="text-left font-medium px-2 py-2">Usuário</th>
-              <th className="text-left font-medium px-2 py-2">Ação</th>
-              <th className="text-left font-medium px-2 py-2">Registro</th>
-              <th className="text-left font-medium px-2 py-2">Detalhe</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                <td className="px-2 py-2 whitespace-nowrap" style={{ color: COLORS.inkSoft }}>{fmtDateTime(r.created_at)}</td>
-                <td className="px-2 py-2" style={{ color: COLORS.ink }}>{empresaNome(r.empresaId)}</td>
-                <td className="px-2 py-2" style={{ color: COLORS.ink }}>{r.userEmail || "—"}</td>
-                <td className="px-2 py-2">
-                  <Badge tone={AUDIT_ACTION_TONE[r.action] || "neutral"}>{AUDIT_ACTION_LABEL[r.action] || r.action}</Badge>
-                </td>
-                <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{AUDIT_ENTITY_LABEL[r.entity] || r.entity}</td>
-                <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{r.detail}</td>
+        <>
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-2 py-2">Quando</th>
+                <th className="text-left font-medium px-2 py-2">Empresa</th>
+                <th className="text-left font-medium px-2 py-2">Usuário</th>
+                <th className="text-left font-medium px-2 py-2">Ação</th>
+                <th className="text-left font-medium px-2 py-2">Registro</th>
+                <th className="text-left font-medium px-2 py-2">Detalhe</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                  <td className="px-2 py-2 whitespace-nowrap" style={{ color: COLORS.inkSoft }}>{fmtDateTime(r.created_at)}</td>
+                  <td className="px-2 py-2" style={{ color: COLORS.ink }}>{empresaNome(r.empresaId)}</td>
+                  <td className="px-2 py-2" style={{ color: COLORS.ink }}>{r.userEmail || "—"}</td>
+                  <td className="px-2 py-2">
+                    <Badge tone={AUDIT_ACTION_TONE[r.action] || "neutral"}>{AUDIT_ACTION_LABEL[r.action] || r.action}</Badge>
+                  </td>
+                  <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{AUDIT_ENTITY_LABEL[r.entity] || r.entity}</td>
+                  <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{r.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {rows.length === 200 && (
+            <p className="text-xs text-center pt-3" style={{ color: COLORS.inkSoft }}>Mostrando só os 200 mais recentes — refine os filtros (empresa, período, usuário) pra achar um registro mais antigo.</p>
+          )}
+        </>
       )}
     </ReportCard>
   );
