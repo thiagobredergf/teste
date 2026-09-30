@@ -1,15 +1,15 @@
 import { createClient } from "@supabase/supabase-js";
 
-// .trim() porque copiar/colar em painéis como o do Vercel às vezes traz
-// espaço ou quebra de linha junto — isso corrompe a URL silenciosamente
-// (o SDK não lança erro visível, só some sem nenhuma requisição de rede).
-const url = (import.meta.env.VITE_SUPABASE_URL || "").trim();
-const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || "").trim();
+// Fixos aqui em vez de lidos de variável de ambiente colada num painel
+// (Vercel etc.) — já causou corrupção silenciosa duas vezes (espaço
+// escondido, depois um caractere inválido no meio da chave, sem erro
+// visível, só a requisição falhando sem sair do navegador). São valores
+// públicos por natureza: a chave "anon"/"publishable" do Supabase é pra
+// ficar exposta no navegador mesmo — a segurança vem das regras de acesso
+// (RLS) no banco, não do segredo dela. Se um dia precisar apontar pra
+// outro projeto Supabase, troque os valores aqui direto (via git), não
+// numa variável de ambiente.
+const SUPABASE_URL = "https://gkrvjwhcuynxlqkawrbe.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_jfVg4YiQjkI4-6Ut_rq9ZQ_tJBiscTF";
 
-if (!url || !anonKey) {
-  throw new Error(
-    "Faltam VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY. Copie .env.example para .env.local e preencha."
-  );
-}
-
-export const supabase = createClient(url, anonKey);
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
