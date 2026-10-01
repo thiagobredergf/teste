@@ -3749,14 +3749,94 @@ function ReciboImpressao({ item, empresa, tipo }) {
 /* ---------------------------------------------------------------------- */
 /*  Contas a Pagar                                                         */
 /* ---------------------------------------------------------------------- */
+const PAYABLES_KANBAN_COLUNAS = [
+  { key: "A Pagar", tone: "neutral" },
+  { key: "Agendado", tone: "gold" },
+  { key: "Autorizado", tone: "blue" },
+  { key: "Pago", tone: "green" },
+];
+
+// Quadro Kanban da Ordem de Pagamento — mesmas 4 etapas que já existem no
+// banco (A Pagar → Agendado → Autorizado → Pago), só numa camada visual
+// nova. Arrastar e soltar nativo do navegador (sem lib extra); cada drop
+// dispara a mesma função que o botão equivalente da lista já chamava
+// (ver handleDropPayable em PayablesView) — nunca um status cru.
+function PayablesKanban({ payables, accounts, onDrop, onEdit }) {
+  const [dragId, setDragId] = useState(null);
+  const porColuna = (key) => payables.filter((p) => p.statusDisplay === key || (key === "A Pagar" && (p.statusDisplay === "Atrasado" || p.statusDisplay === "Próximo")));
+  const contaNome = (id) => accounts.find((a) => a.id === id)?.nome || "—";
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      {PAYABLES_KANBAN_COLUNAS.map((col) => {
+        const itens = porColuna(col.key);
+        const totalCol = itens.reduce((s, p) => s + Number(p.valor || 0), 0);
+        return (
+          <div
+            key={col.key}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={() => {
+              if (dragId) {
+                const p = payables.find((x) => x.id === dragId);
+                if (p) onDrop(col.key, p);
+              }
+              setDragId(null);
+            }}
+            className="rounded-xl p-2.5 min-h-[140px]"
+            style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
+          >
+            <p className="text-xs font-semibold mb-0.5 px-1 flex items-center justify-between" style={{ color: COLORS.inkSoft }}>
+              {col.key} <Badge tone={col.tone}>{itens.length}</Badge>
+            </p>
+            <p className="text-[11px] mb-2 px-1 tabular-nums" style={{ color: COLORS.inkSoft }}>{fmtBRL(totalCol)}</p>
+            <div className="space-y-2">
+              {itens.map((p) => (
+                <div
+                  key={p.id}
+                  draggable
+                  onDragStart={() => setDragId(p.id)}
+                  onClick={() => onEdit && onEdit(p)}
+                  className="rounded-lg p-2.5 cursor-grab active:cursor-grabbing"
+                  style={{ background: "#fff", border: `1px solid ${COLORS.border}`, boxShadow: "0 1px 2px rgba(31,58,52,0.06)" }}
+                >
+                  <p className="text-sm font-medium truncate" style={{ color: COLORS.ink }}>{p.fornecedor}</p>
+                  <p className="text-sm tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(p.valor)}</p>
+                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                    {col.key === "A Pagar" && (p.statusDisplay === "Atrasado" || p.statusDisplay === "Próximo") && (
+                      <Badge tone={p.statusDisplay === "Atrasado" ? "red" : "amber"}>{p.statusDisplay}</Badge>
+                    )}
+                    <span className="text-xs" style={{ color: COLORS.inkSoft }}>
+                      {col.key === "Pago" ? `Pago em ${fmtDate(p.dataPgto)}` : fmtDate(p.vencimento)}
+                    </span>
+                  </div>
+                  {(col.key === "Agendado" || col.key === "Autorizado") && (
+                    <p className="text-xs mt-0.5" style={{ color: COLORS.inkSoft }}>Conta: {contaNome(p.contaAgendadaId)}</p>
+                  )}
+                  {col.key === "Autorizado" && p.autorizadoPor && (
+                    <p className="text-xs mt-0.5 truncate" style={{ color: COLORS.inkSoft }} title={p.autorizadoPor}>Por: {p.autorizadoPor}</p>
+                  )}
+                </div>
+              ))}
+              {itens.length === 0 && (
+                <p className="text-xs text-center py-4" style={{ color: COLORS.inkSoft }}>Arraste um cartão pra aqui</p>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function PayablesView({
   payables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
   pendingImport, onImportProcessed, userEmail, canEdit = true, role,
   remessasCnab = [], onSaveAccounts, onSaveRemessasCnab,
 }) {
   const [modal, setModal] = useState(null);
+  const [modoPayables, setModoPayables] = useState("lista"); // "lista" | "quadro"
   const [payModal, setPayModal] = useState(null);
-  const [scheduleModal, setScheduleModal] = useState(false);
+  const [scheduleModal, setScheduleModal] = useState(false); // false | true (agendar em lote) | payable (arrastado no quadro)
   const [batchSettleModal, setBatchSettleModal] = useState(false);
   const [cnabModal, setCnabModal] = useState(false);
   const [remessasModal, setRemessasModal] = useState(false);
@@ -3971,6 +4051,32 @@ function PayablesView({
     logAudit(selectedEmpresa, "payable", p.id, "cancelar_baixa", `Cancelou baixa de ${p.fornecedor}${p.numeroDocumento ? ` · doc. ${p.numeroDocumento}` : ""} — ${fmtBRL(p.valorPago || p.valor)}`, userEmail);
   };
 
+  // Arrastar um cartão no quadro Kanban reaproveita as mesmas ações do
+  // botão de sempre — nenhuma transição nova, só outro jeito de disparar a
+  // que já existe pra aquele par origem/destino. "Autorizado" continua só
+  // pro dono (a trava real é no banco — fase23 — isso aqui só evita um
+  // alerta de erro genérico quando não é o dono arrastando).
+  const handleDropPayable = (targetStatus, p) => {
+    if (p.status === targetStatus) return;
+    if (targetStatus !== "Autorizado" && !canEdit) { alert("Você não tem permissão pra editar."); return; }
+    if (targetStatus === "Pago") { setPayModal(p); return; }
+    if (targetStatus === "Agendado") {
+      if (p.status === "A Pagar") setScheduleModal(p);
+      return;
+    }
+    if (targetStatus === "Autorizado") {
+      if (p.status === "Pago") { cancelPayment(p); return; }
+      if (p.status !== "Agendado") return;
+      if (role !== "owner") { alert("Só o dono da empresa pode autorizar pagamento."); return; }
+      authorizePayment(p);
+      return;
+    }
+    if (targetStatus === "A Pagar") {
+      if (p.status === "Pago") { cancelPayment(p); return; }
+      if (p.status === "Agendado" || p.status === "Autorizado") cancelSchedule(p);
+    }
+  };
+
   const total = filtered.reduce((s, p) => s + Number(p.valor || 0), 0);
   const empresa = empresas.find((e) => e.id === selectedEmpresa);
   const agendados = withDerived.filter((p) => p.status === "Agendado");
@@ -4087,6 +4193,31 @@ function PayablesView({
         statusOptions={["Atrasado", "Próximo", "Agendado", "Autorizado", "A Pagar", "Pago"]} placeholder="Buscar fornecedor, descrição..."
         dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} />
 
+      <div className="inline-flex rounded-lg overflow-hidden" style={{ border: `1px solid ${COLORS.border}` }}>
+        <button
+          onClick={() => setModoPayables("lista")}
+          className="px-3 py-1.5 text-sm"
+          style={{ background: modoPayables === "lista" ? COLORS.primary : "transparent", color: modoPayables === "lista" ? "#fff" : COLORS.inkSoft }}
+        >
+          Lista
+        </button>
+        <button
+          onClick={() => setModoPayables("quadro")}
+          className="px-3 py-1.5 text-sm"
+          style={{ background: modoPayables === "quadro" ? COLORS.primary : "transparent", color: modoPayables === "quadro" ? "#fff" : COLORS.inkSoft }}
+        >
+          Quadro
+        </button>
+      </div>
+
+      {modoPayables === "quadro" ? (
+        <PayablesKanban
+          payables={filtered}
+          accounts={accounts}
+          onDrop={handleDropPayable}
+          onEdit={canEdit ? (p) => { setAiNote(""); setModal(p); } : null}
+        />
+      ) : (
       <Card className="overflow-x-auto">
         {filtered.length === 0 ? (
           <EmptyState icon={ArrowUpCircle} title="Nenhum lançamento" subtitle="Cadastre as contas a pagar aqui." />
@@ -4172,6 +4303,7 @@ function PayablesView({
           </table>
         )}
       </Card>
+      )}
 
       {modal && (
         <PayableModal
@@ -4229,7 +4361,9 @@ function PayablesView({
         <ScheduleModal
           title="Agendar pagamentos"
           nameField="fornecedor"
-          items={payables.filter((p) => p.status === "A Pagar" && p.empresaId === selectedEmpresa)}
+          items={scheduleModal === true
+            ? payables.filter((p) => p.status === "A Pagar" && p.empresaId === selectedEmpresa)
+            : [scheduleModal]}
           accounts={accounts.filter((a) => a.empresaId === selectedEmpresa)}
           onClose={() => setScheduleModal(false)}
           onConfirm={confirmSchedule}
@@ -9277,8 +9411,15 @@ function fmtCompetencia(comp) {
 const RECORRENCIA_LABEL = { pontual: "Pontual", diaria: "Diária", semanal: "Semanal", mensal: "Mensal" };
 
 function TaskModal({ initial, onClose, onSubmit }) {
-  const [form, setForm] = useState({ titulo: "", recorrencia: "pontual", proximaData: todayISO(), ...initial });
+  const [form, setForm] = useState({ titulo: "", recorrencia: "pontual", proximaData: todayISO(), responsavelEmail: "", ...initial });
+  const [staff, setStaff] = useState([]);
   const valid = form.titulo.trim() && form.proximaData;
+
+  useEffect(() => {
+    supabase.from("profiles").select("email, role").in("role", ["gestor", "operador"]).order("email")
+      .then(({ data }) => setStaff(data || []));
+  }, []);
+
   return (
     <Modal title={initial?.id ? "Editar tarefa" : "Nova tarefa"} onClose={onClose}>
       <div className="grid gap-3">
@@ -9293,12 +9434,80 @@ function TaskModal({ initial, onClose, onSubmit }) {
         <Field label={form.recorrencia === "pontual" ? "Data" : "Próxima ocorrência"}>
           <TextInput type="date" value={form.proximaData} onChange={(e) => setForm({ ...form, proximaData: e.target.value })} />
         </Field>
+        <Field label="Responsável (opcional)">
+          <Select value={form.responsavelEmail || ""} onChange={(e) => setForm({ ...form, responsavelEmail: e.target.value || null })}>
+            <option value="">Sem responsável definido</option>
+            {staff.map((s) => <option key={s.email} value={s.email}>{s.email}</option>)}
+          </Select>
+        </Field>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>Cancelar</Button>
           <Button onClick={() => valid && onSubmit(form)} disabled={!valid}>Salvar</Button>
         </div>
       </div>
     </Modal>
+  );
+}
+
+const TASK_KANBAN_COLUNAS = [
+  { key: "pendente", label: "Pendente", tone: "neutral" },
+  { key: "em_andamento", label: "Em andamento", tone: "gold" },
+  { key: "concluida", label: "Concluída", tone: "green" },
+];
+
+// Quadro Kanban — arrastar e soltar nativo do navegador (sem lib extra).
+// Tarefa recorrente não tem "Concluída" como estado estável (ela avança a
+// própria data e volta pra "pendente" — ver concluirTask): soltar um
+// cartão recorrente na coluna Concluída dispara esse mesmo avanço, então
+// o cartão volta pra Pendente no instante seguinte. É o comportamento já
+// existente no botão "Concluir", só acessível agora pelo arrastar também.
+function TaskKanban({ tasks, onMoveStatus, onEdit, onDelete }) {
+  const [dragId, setDragId] = useState(null);
+  const porColuna = (key) => tasks.filter((t) => t.status === key);
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      {TASK_KANBAN_COLUNAS.map((col) => (
+        <div
+          key={col.key}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={() => { if (dragId) onMoveStatus(dragId, col.key); setDragId(null); }}
+          className="rounded-xl p-2.5 min-h-[140px]"
+          style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
+        >
+          <p className="text-xs font-semibold mb-2 px-1 flex items-center justify-between" style={{ color: COLORS.inkSoft }}>
+            {col.label} <Badge tone={col.tone}>{porColuna(col.key).length}</Badge>
+          </p>
+          <div className="space-y-2">
+            {porColuna(col.key).map((t) => (
+              <div
+                key={t.id}
+                draggable
+                onDragStart={() => setDragId(t.id)}
+                className="rounded-lg p-2.5 cursor-grab active:cursor-grabbing"
+                style={{ background: "#fff", border: `1px solid ${COLORS.border}`, boxShadow: "0 1px 2px rgba(31,58,52,0.06)" }}
+              >
+                <p className="text-sm font-medium" style={{ color: COLORS.ink }}>{t.titulo}</p>
+                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                  <Badge tone="neutral">{RECORRENCIA_LABEL[t.recorrencia]}</Badge>
+                  <span className="text-xs" style={{ color: COLORS.inkSoft }}>{fmtDate(t.proximaData)}</span>
+                </div>
+                {t.responsavelEmail && (
+                  <p className="text-xs mt-1 truncate" style={{ color: COLORS.inkSoft }} title={t.responsavelEmail}>{t.responsavelEmail}</p>
+                )}
+                <div className="flex justify-end gap-1.5 mt-1.5">
+                  <button onClick={() => onEdit(t)} title="Editar"><Pencil size={12} color={COLORS.inkSoft} /></button>
+                  <button onClick={() => onDelete(t)} title="Excluir"><Trash2 size={12} color={COLORS.red} /></button>
+                </div>
+              </div>
+            ))}
+            {porColuna(col.key).length === 0 && (
+              <p className="text-xs text-center py-4" style={{ color: COLORS.inkSoft }}>Arraste um cartão pra aqui</p>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -9546,7 +9755,11 @@ function RotinaView({
   }, []);
 
   const [taskModal, setTaskModal] = useState(null); // null | {} | tarefa
+  const [modoTarefas, setModoTarefas] = useState("lista"); // "lista" | "quadro"
   const tasksF = tasks.filter((t) => t.empresaId === empresaId && t.status !== "concluida");
+  // O quadro Kanban mostra também as concluídas (pra ter uma 3ª coluna de
+  // verdade) — diferente da lista acima, que some com elas de propósito.
+  const tasksKanban = tasks.filter((t) => t.empresaId === empresaId);
   // Só obrigação já validada (não "Sugerido", que ainda nem é real) entra
   // na lista unificada — mistura com as tarefas manuais só pra dar uma
   // visão única do que precisa acontecer, sem duplicar o dado: concluir a
@@ -9580,6 +9793,15 @@ function RotinaView({
     const dias = { diaria: 1, semanal: 7 }[t.recorrencia];
     const proximaData = dias ? addDaysToISODate(t.proximaData, dias) : addMonthsToISODate(t.proximaData, 1);
     onSaveTasks(tasks.map((x) => (x.id === t.id ? { ...x, proximaData, ...agora } : x)));
+  };
+  // Arrastar um cartão no Kanban pra "Concluída" reaproveita concluirTask
+  // (mesma regra de recorrência); pra qualquer outra coluna é só troca de
+  // status mesmo.
+  const moverStatusTask = (id, novoStatus) => {
+    const t = tasks.find((x) => x.id === id);
+    if (!t || t.status === novoStatus) return;
+    if (novoStatus === "concluida") { concluirTask(t); return; }
+    onSaveTasks(tasks.map((x) => (x.id === id ? { ...x, status: novoStatus } : x)));
   };
 
   // Cronômetro: controle interno de eficiência, nunca visto pelo cliente.
@@ -9665,12 +9887,37 @@ function RotinaView({
 
       <ReportCard
         title="Tarefas e obrigações"
-        subtitle="Tarefas manuais (diárias/semanais/mensais/pontuais) misturadas com as obrigações fiscais já validadas desta empresa — uma visão única do que precisa acontecer."
+        subtitle={modoTarefas === "quadro"
+          ? "Quadro Kanban das tarefas manuais desta empresa — arraste o cartão pra mudar de etapa. As obrigações fiscais (Calendário Fiscal) só aparecem na visão em lista."
+          : "Tarefas manuais (diárias/semanais/mensais/pontuais) misturadas com as obrigações fiscais já validadas desta empresa — uma visão única do que precisa acontecer."}
       >
-        <div className="flex justify-end mb-2">
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <div className="inline-flex rounded-lg overflow-hidden" style={{ border: `1px solid ${COLORS.border}` }}>
+            <button
+              onClick={() => setModoTarefas("lista")}
+              className="px-3 py-1.5 text-sm"
+              style={{ background: modoTarefas === "lista" ? COLORS.primary : "transparent", color: modoTarefas === "lista" ? "#fff" : COLORS.inkSoft }}
+            >
+              Lista
+            </button>
+            <button
+              onClick={() => setModoTarefas("quadro")}
+              className="px-3 py-1.5 text-sm"
+              style={{ background: modoTarefas === "quadro" ? COLORS.primary : "transparent", color: modoTarefas === "quadro" ? "#fff" : COLORS.inkSoft }}
+            >
+              Quadro
+            </button>
+          </div>
           <Button onClick={() => setTaskModal({})}><Plus size={14} /> Nova tarefa</Button>
         </div>
-        {itensRotina.length === 0 ? (
+        {modoTarefas === "quadro" ? (
+          <TaskKanban
+            tasks={tasksKanban}
+            onMoveStatus={moverStatusTask}
+            onEdit={(t) => setTaskModal(t)}
+            onDelete={deleteTask}
+          />
+        ) : itensRotina.length === 0 ? (
           <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nada pendente por aqui.</p>
         ) : (
           <table className="w-full text-sm">
