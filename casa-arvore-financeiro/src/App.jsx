@@ -10315,12 +10315,85 @@ function HubSkillsView({ skills, runs, empresaId, userEmail, onSaveSkills, onSav
 /* ---------------------------------------------------------------------- */
 /*  Documentos Recebidos — caixa de entrada do link de upload sem login   */
 /* ---------------------------------------------------------------------- */
+const CHAMADOS_KANBAN_COLUNAS = [
+  { key: "pendente", label: "Pendente", tone: "amber" },
+  { key: "em_analise", label: "Em análise", tone: "gold" },
+  { key: "aguardando_cliente", label: "Aguardando cliente", tone: "blue" },
+  { key: "processado", label: "Resolvido", tone: "green" },
+];
+
+// Quadro Kanban de Chamados — mesma tabela documentUploads de sempre (tem
+// arquivo puro pra lançar e/ou mensagem de cliente, misturados), só que
+// agora com 2 estágios intermediários entre "pendente" e "processado".
+// Arrastar só troca o status, igual o botão que já existia fazia — não
+// cria lançamento nenhum sozinho (isso só acontece via "Visualizar
+// documento e classificar", como sempre foi).
+function ChamadosKanban({ uploads, onMoveStatus, onPreview, onReply, onDelete }) {
+  const [dragId, setDragId] = useState(null);
+  const porColuna = (key) => uploads.filter((u) => u.status === key);
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      {CHAMADOS_KANBAN_COLUNAS.map((col) => {
+        const itens = porColuna(col.key);
+        return (
+          <div
+            key={col.key}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={() => { if (dragId) onMoveStatus(dragId, col.key); setDragId(null); }}
+            className="rounded-xl p-2.5 min-h-[140px]"
+            style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
+          >
+            <p className="text-xs font-semibold mb-2 px-1 flex items-center justify-between" style={{ color: COLORS.inkSoft }}>
+              {col.label} <Badge tone={col.tone}>{itens.length}</Badge>
+            </p>
+            <div className="space-y-2">
+              {itens.map((u) => (
+                <div
+                  key={u.id}
+                  draggable
+                  onDragStart={() => setDragId(u.id)}
+                  className="rounded-lg p-2.5 cursor-grab active:cursor-grabbing"
+                  style={{ background: "#fff", border: `1px solid ${COLORS.border}`, boxShadow: "0 1px 2px rgba(31,58,52,0.06)" }}
+                >
+                  {u.fileName && (
+                    <button onClick={() => onPreview(u)} className="text-sm font-medium hover:underline text-left block truncate w-full" style={{ color: COLORS.ink }} title="Visualizar documento e classificar">
+                      {u.fileName}
+                    </button>
+                  )}
+                  {u.mensagemCliente && (
+                    <p className="text-xs mt-0.5 line-clamp-3" style={{ color: u.fileName ? COLORS.inkSoft : COLORS.ink }}>{u.mensagemCliente}</p>
+                  )}
+                  {u.respostaGestor && (
+                    <p className="text-xs mt-1" style={{ color: COLORS.green }}>Respondido: "{u.respostaGestor}"</p>
+                  )}
+                  <div className="flex items-center justify-between mt-1.5">
+                    <span className="text-xs" style={{ color: COLORS.inkSoft }}>{timeAgo(u.created_at)}</span>
+                    <div className="flex gap-1">
+                      <button onClick={() => onReply(u)} title="Responder" className="p-1 rounded-md hover:bg-black/5"><MessageCircle size={13} color={COLORS.primary} /></button>
+                      <button onClick={() => onDelete(u.id)} title="Excluir" className="p-1 rounded-md hover:bg-black/5"><Trash2 size={13} color={COLORS.red} /></button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {itens.length === 0 && (
+                <p className="text-xs text-center py-4" style={{ color: COLORS.inkSoft }}>Arraste um cartão pra aqui</p>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function DocumentUploadsView({ uploads, empresas, selectedEmpresa, userEmail, onSave, onProcess, processError }) {
   const [preview, setPreview] = useState(null); // { item, url }
   const [previewError, setPreviewError] = useState("");
   const [processing, setProcessing] = useState(false);
   const [replyModal, setReplyModal] = useState(null); // item sendo respondido
   const [replyText, setReplyText] = useState("");
+  const [modoChamados, setModoChamados] = useState("lista"); // "lista" | "quadro"
 
   const empresaAtual = empresas.find((e) => e.id === selectedEmpresa);
 
@@ -10373,6 +10446,34 @@ function DocumentUploadsView({ uploads, empresas, selectedEmpresa, userEmail, on
           <AlertTriangle size={15} /> {processError}
         </div>
       )}
+      {visible.length > 0 && (
+        <div className="inline-flex rounded-lg overflow-hidden" style={{ border: `1px solid ${COLORS.border}` }}>
+          <button
+            onClick={() => setModoChamados("lista")}
+            className="px-3 py-1.5 text-sm"
+            style={{ background: modoChamados === "lista" ? COLORS.primary : "transparent", color: modoChamados === "lista" ? "#fff" : COLORS.inkSoft }}
+          >
+            Lista
+          </button>
+          <button
+            onClick={() => setModoChamados("quadro")}
+            className="px-3 py-1.5 text-sm"
+            style={{ background: modoChamados === "quadro" ? COLORS.primary : "transparent", color: modoChamados === "quadro" ? "#fff" : COLORS.inkSoft }}
+          >
+            Quadro
+          </button>
+        </div>
+      )}
+
+      {visible.length > 0 && modoChamados === "quadro" ? (
+        <ChamadosKanban
+          uploads={visible}
+          onMoveStatus={setStatus}
+          onPreview={openPreview}
+          onReply={(u) => { setReplyModal(u); setReplyText(u.respostaGestor || ""); }}
+          onDelete={remove}
+        />
+      ) : (
       <Card className="overflow-x-auto">
         {visible.length === 0 ? (
           <EmptyState
@@ -10408,7 +10509,9 @@ function DocumentUploadsView({ uploads, empresas, selectedEmpresa, userEmail, on
                   </td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{timeAgo(u.created_at)}</td>
                   <td className="px-4 py-2.5">
-                    <Badge tone={u.status === "processado" ? "green" : "amber"}>{u.status === "processado" ? "Processado" : "Pendente"}</Badge>
+                    <Select value={u.status} onChange={(e) => setStatus(u.id, e.target.value)} style={{ height: 30, padding: "0 8px" }}>
+                      {CHAMADOS_KANBAN_COLUNAS.map((col) => <option key={col.key} value={col.key}>{col.label}</option>)}
+                    </Select>
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
@@ -10419,13 +10522,6 @@ function DocumentUploadsView({ uploads, empresas, selectedEmpresa, userEmail, on
                       )}
                       <button onClick={() => { setReplyModal(u); setReplyText(u.respostaGestor || ""); }} title="Responder" className="p-1.5 rounded-md hover:bg-black/5">
                         <MessageCircle size={14} color={COLORS.primary} />
-                      </button>
-                      <button
-                        onClick={() => setStatus(u.id, u.status === "processado" ? "pendente" : "processado")}
-                        title={u.status === "processado" ? "Marcar como pendente" : "Marcar como processado"}
-                        className="p-1.5 rounded-md hover:bg-black/5"
-                      >
-                        <Check size={14} color={u.status === "processado" ? COLORS.inkSoft : COLORS.green} />
                       </button>
                       <button onClick={() => remove(u.id)} title="Excluir da caixa de entrada" className="p-1.5 rounded-md hover:bg-black/5">
                         <Trash2 size={14} color={COLORS.red} />
@@ -10438,6 +10534,7 @@ function DocumentUploadsView({ uploads, empresas, selectedEmpresa, userEmail, on
           </table>
         )}
       </Card>
+      )}
 
       {preview && (
         <Modal title={preview.item.fileName} onClose={() => setPreview(null)} wide>
