@@ -467,6 +467,41 @@ const contratoAlerta = (empresa) => {
   return null;
 };
 
+// Checklist padrão de onboarding — baseado no roteiro de onboarding BPO
+// (diagnóstico → acessos → equipe → go-live). Empresa nova já nasce com
+// isso; empresa antiga ganha via botão "Gerar checklist" na tela
+// Onboarding, caso o gestor queira usar nela também.
+const ONBOARDING_FASES = [
+  { key: "diagnostico", label: "Diagnóstico e Alinhamento", tone: "neutral" },
+  { key: "acessos", label: "Acessos e Ferramentas", tone: "gold" },
+  { key: "equipe", label: "Equipe e Cultura", tone: "blue" },
+  { key: "golive", label: "Operação Assistida (Go-Live)", tone: "green" },
+];
+const ONBOARDING_CHECKLIST_PADRAO = [
+  { fase: "diagnostico", titulo: "Plano de Contas definido/sugerido" },
+  { fase: "diagnostico", titulo: "Calendário de obrigações fixas mapeado" },
+  { fase: "diagnostico", titulo: "Regras de cobrança definidas" },
+  { fase: "diagnostico", titulo: "Lista de fornecedores/clientes importada" },
+  { fase: "acessos", titulo: "Certificado digital recebido" },
+  { fase: "acessos", titulo: 'Acesso bancário "Operador" criado (sem senha master)' },
+  { fase: "acessos", titulo: "ERP/sistema do cliente configurado (se houver)" },
+  { fase: "acessos", titulo: "Canal oficial de comunicação definido" },
+  { fase: "equipe", titulo: "Analista responsável alocado" },
+  { fase: "equipe", titulo: "Apresentação oficial ao cliente feita" },
+  { fase: "equipe", titulo: "Aprovador final (dono) identificado e com acesso criado" },
+  { fase: "golive", titulo: "Primeira rotina executada com supervisão" },
+  { fase: "golive", titulo: "Primeira validação semanal feita" },
+  { fase: "golive", titulo: "Comando definitivo transferido pro BPO" },
+];
+// Puro — só monta as linhas. Quem grava é persist() (via onboardingItems
+// no FinanceiroApp), pro estado local ficar sincronizado na hora — nada
+// aqui chama supabase.from(...) direto, como o resto do app já faz.
+function buildOnboardingChecklistRows(empresaId) {
+  return ONBOARDING_CHECKLIST_PADRAO.map((item) => ({
+    id: uid(), empresaId, fase: item.fase, titulo: item.titulo, status: "pendente",
+  }));
+}
+
 const monthIndex = (iso) => (iso ? parseInt(iso.slice(5, 7), 10) - 1 : -1);
 const yearOf = (iso) => (iso ? parseInt(iso.slice(0, 4), 10) : null);
 
@@ -505,6 +540,7 @@ const STORE_KEYS = {
   bpoSkills: "bpoSkills",
   skillRuns: "skillRuns",
   remessasCnab: "remessasCnab",
+  onboardingItems: "onboardingItems",
   selectedEmpresa: "selectedEmpresa",
 };
 
@@ -738,6 +774,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [bpoSkills, setBpoSkills] = useState([]);
   const [skillRuns, setSkillRuns] = useState([]);
   const [remessasCnab, setRemessasCnab] = useState([]);
+  const [onboardingItems, setOnboardingItems] = useState([]);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
   const [navQuery, setNavQuery] = useState("");
@@ -774,6 +811,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setBpoSkills(data.bpoSkills || []);
       setSkillRuns(data.skillRuns || []);
       setRemessasCnab(data.remessasCnab || []);
+      setOnboardingItems(data.onboardingItems || []);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
       // cards de todas), pra escolher com qual vai trabalhar.
@@ -871,8 +909,15 @@ function FinanceiroApp({ userEmail, onLogout }) {
         natureza: t.natureza,
       }));
       persist("categories", [...categories, ...novasCategorias], setCategories);
+      persist("onboardingItems", [...onboardingItems, ...buildOnboardingChecklistRows(empresaCriada.id)], setOnboardingItems);
     }
-  }, [empresas, categories, persist]);
+  }, [empresas, categories, onboardingItems, persist]);
+
+  // "Gerar checklist" na tela Onboarding — pra empresa que já existia antes
+  // dessa feature (não ganhou o checklist sozinha na criação).
+  const gerarOnboardingChecklist = useCallback((empresaId) => {
+    persist("onboardingItems", [...onboardingItems, ...buildOnboardingChecklistRows(empresaId)], setOnboardingItems);
+  }, [onboardingItems, persist]);
 
   const changeEmpresa = useCallback((id) => {
     setSelectedEmpresa(id);
@@ -1247,6 +1292,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     ...(role !== "owner" ? [{ id: "settlementPartners", label: "Repasses de Terceiros", icon: Percent }] : []),
     ...(role === "gestor" ? [{ id: "pendencias", label: "Inconsistência/Pendências", icon: AlertTriangle }] : []),
     ...(role === "gestor" ? [{ id: "fechamento", label: "Fechamento", icon: ListChecks }] : []),
+    ...(role === "gestor" ? [{ id: "onboarding", label: "Onboarding", icon: ClipboardList }] : []),
     ...(role === "gestor" ? [{ id: "hubSkills", label: "Hub de Skills", icon: Zap }] : []),
     ...(role === "gestor" ? [{ id: "reports", label: "Relatórios", icon: FileText }] : []),
     { id: "documentUploads", label: "Documentos Recebidos", icon: Inbox },
@@ -1269,7 +1315,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     // Análise: supervisão e auditoria — só Gestor.
     ...(role === "gestor" ? [{
       id: "analise", label: "Análise", icon: FileText,
-      items: ["fechamento", "pendencias", "reports", "hubSkills", "lixeira"],
+      items: ["fechamento", "onboarding", "pendencias", "reports", "hubSkills", "lixeira"],
     }] : []),
     // Acompanhamento: o que o Dono/Sócio acompanha da própria empresa.
     ...(role === "owner" ? [{ id: "acompanhamento", label: "Acompanhamento", icon: Inbox, items: ["documentUploads", "payables"] }] : []),
@@ -1694,6 +1740,17 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 onSaveTasks={(v) => persist("bpoTasks", v, setBpoTasks)}
                 onSolicitarFechamento={solicitarFechamento}
                 onReabrirMes={reabrirMes}
+              />
+            )}
+
+            {view === "onboarding" && (
+              <OnboardingView
+                items={onboardingItems}
+                empresaId={selectedEmpresa}
+                empresaNome={currentEmpresa?.nome}
+                userEmail={userEmail}
+                onSave={(v) => persist("onboardingItems", v, setOnboardingItems)}
+                onGerarChecklist={gerarOnboardingChecklist}
               />
             )}
 
@@ -9725,6 +9782,131 @@ function PendenciasView({
           )}
         </>
       )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Onboarding — checklist de cliente novo, em quadro Kanban por fase       */
+/* ---------------------------------------------------------------------- */
+function AddOnboardingItemModal({ onClose, onSubmit }) {
+  const [titulo, setTitulo] = useState("");
+  const [fase, setFase] = useState(ONBOARDING_FASES[0].key);
+  return (
+    <Modal title="Novo item do checklist" onClose={onClose}>
+      <div className="grid gap-3">
+        <Field label="Item">
+          <TextInput value={titulo} onChange={(e) => setTitulo(e.target.value)} autoFocus placeholder="Ex.: Validar acesso ao ERP do cliente" />
+        </Field>
+        <Field label="Fase">
+          <Select value={fase} onChange={(e) => setFase(e.target.value)}>
+            {ONBOARDING_FASES.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+          </Select>
+        </Field>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => titulo.trim() && onSubmit({ titulo: titulo.trim(), fase })} disabled={!titulo.trim()}>Adicionar</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Colunas = as 4 fases do roteiro (categoria fixa do item, não um
+// progresso) — concluir é um check dentro do próprio cartão, não uma
+// coluna. Arrastar reclassifica o item pra outra fase, se o gestor decidir
+// que ele encaixa melhor ali.
+function OnboardingView({ items, empresaId, empresaNome, userEmail, onSave, onGerarChecklist }) {
+  const [addModal, setAddModal] = useState(false);
+  const [dragId, setDragId] = useState(null);
+  const itensF = items.filter((i) => i.empresaId === empresaId);
+  const concluidos = itensF.filter((i) => i.status === "concluido").length;
+
+  const toggleConcluido = (item) => {
+    const novoStatus = item.status === "concluido" ? "pendente" : "concluido";
+    onSave(items.map((x) => (x.id === item.id
+      ? { ...x, status: novoStatus, concluidoEm: novoStatus === "concluido" ? new Date().toISOString() : null, concluidoPor: novoStatus === "concluido" ? userEmail : null }
+      : x)));
+  };
+  const mover = (id, novaFase) => onSave(items.map((x) => (x.id === id ? { ...x, fase: novaFase } : x)));
+  const adicionar = (form) => {
+    onSave([...items, { id: uid(), empresaId, fase: form.fase, titulo: form.titulo, status: "pendente" }]);
+    setAddModal(false);
+  };
+  const excluir = (item) => {
+    if (!confirmDelete(`Excluir "${item.titulo}" do checklist?`)) return;
+    onSave(items.filter((x) => x.id !== item.id));
+  };
+
+  if (itensF.length === 0) {
+    return (
+      <div className="space-y-4">
+        <Header title="Onboarding" subtitle={`Checklist de integração — ${empresaNome || "empresa"}`} />
+        <Card className="p-8">
+          <EmptyState
+            icon={ListChecks}
+            title="Sem checklist ainda"
+            subtitle="Essa empresa não tem o roteiro de onboarding gerado. Empresas criadas de agora em diante já nascem com ele."
+          />
+          <div className="flex justify-center mt-3">
+            <Button onClick={() => onGerarChecklist(empresaId)}>Gerar checklist padrão</Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Header title="Onboarding" subtitle={`${concluidos}/${itensF.length} itens concluídos — ${empresaNome || "empresa"}`}>
+        <Button variant="ghost" onClick={() => setAddModal(true)}><Plus size={15} /> Novo item</Button>
+      </Header>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        {ONBOARDING_FASES.map((faseInfo) => {
+          const itensFase = itensF.filter((i) => i.fase === faseInfo.key);
+          return (
+            <div
+              key={faseInfo.key}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => { if (dragId) mover(dragId, faseInfo.key); setDragId(null); }}
+              className="rounded-xl p-2.5 min-h-[160px]"
+              style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
+            >
+              <p className="text-xs font-semibold mb-2 px-1 flex items-center justify-between" style={{ color: COLORS.inkSoft }}>
+                {faseInfo.label} <Badge tone={faseInfo.tone}>{itensFase.filter((i) => i.status === "concluido").length}/{itensFase.length}</Badge>
+              </p>
+              <div className="space-y-2">
+                {itensFase.map((item) => (
+                  <div
+                    key={item.id}
+                    draggable
+                    onDragStart={() => setDragId(item.id)}
+                    className="rounded-lg p-2.5 cursor-grab active:cursor-grabbing flex items-start gap-2"
+                    style={{ background: "#fff", border: `1px solid ${COLORS.border}`, boxShadow: "0 1px 2px rgba(31,58,52,0.06)" }}
+                  >
+                    <button onClick={() => toggleConcluido(item)} title={item.status === "concluido" ? "Marcar como pendente" : "Marcar como concluído"} className="shrink-0 mt-0.5">
+                      {item.status === "concluido" ? <CheckCircle2 size={16} color={COLORS.green} /> : <span className="w-4 h-4 rounded-full inline-block" style={{ border: `1.5px solid ${COLORS.border}` }} />}
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm" style={{ color: item.status === "concluido" ? COLORS.inkSoft : COLORS.ink, textDecoration: item.status === "concluido" ? "line-through" : "none" }}>
+                        {item.titulo}
+                      </p>
+                      {item.status === "concluido" && item.concluidoPor && (
+                        <p className="text-[11px] mt-0.5 truncate" style={{ color: COLORS.inkSoft }}>{item.concluidoPor} · {fmtDate(item.concluidoEm?.slice(0, 10))}</p>
+                      )}
+                    </div>
+                    <button onClick={() => excluir(item)} title="Excluir item" className="shrink-0"><Trash2 size={12} color={COLORS.red} /></button>
+                  </div>
+                ))}
+                {itensFase.length === 0 && (
+                  <p className="text-xs text-center py-4" style={{ color: COLORS.inkSoft }}>Arraste um cartão pra aqui</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {addModal && <AddOnboardingItemModal onClose={() => setAddModal(false)} onSubmit={adicionar} />}
     </div>
   );
 }

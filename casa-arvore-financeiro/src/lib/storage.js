@@ -29,6 +29,7 @@ const TABLE_NAMES = {
   bpoSkills: "bpo_skills",
   skillRuns: "skill_runs",
   remessasCnab: "remessas_cnab",
+  onboardingItems: "onboarding_items",
 };
 
 // selectedEmpresa é só preferência de navegação de quem está olhando a
