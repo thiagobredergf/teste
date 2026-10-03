@@ -2739,7 +2739,7 @@ function AdmView({ role, empresas = [], userEmail }) {
         )}
       </Card>
 
-      <AuditLogReport empresas={empresas} users={users} />
+      <AuditLogReport empresas={empresas} users={users || []} />
 
       {modal && <NovoUsuarioModal onClose={() => setModal(null)} onSubmit={criarUsuario} busy={busy} />}
       {accessModal && (
