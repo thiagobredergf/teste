@@ -10272,6 +10272,16 @@ function RotinaView({
     return out;
   }, []);
 
+  // Dos 12 meses, só os "Aberto" pedem atenção de verdade — os já
+  // fechados viram histórico. Aponta pro mais antigo ainda aberto (é o
+  // mais atrasado, o que mais precisa ser resolvido primeiro); se estiver
+  // tudo fechado, aponta pro mês corrente.
+  const mesesAbertos = meses.filter((m) => !isLocked(m));
+  const [competenciaSelecionada, setCompetenciaSelecionada] = useState(
+    () => mesesAbertos[mesesAbertos.length - 1] || meses[0]
+  );
+  const [verTodosMeses, setVerTodosMeses] = useState(false);
+
   const [taskModal, setTaskModal] = useState(null); // null | {} | tarefa
   const [modoTarefas, setModoTarefas] = useState("lista"); // "lista" | "quadro"
   const tasksF = tasks.filter((t) => t.empresaId === empresaId && t.status !== "concluida");
@@ -10360,44 +10370,102 @@ function RotinaView({
         title="Fechamento mensal"
         subtitle='Fecha um mês depois de entregar o relatório ao cliente — protege contra edição/exclusão/baixa acidental de um lançamento que já foi reportado. "Mês" aqui é a data do lançamento (data de lançamento, ou vencimento quando não houver), não a data de pagamento.'
       >
-        <table className="w-full text-sm">
-          <thead>
-            <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
-              <th className="text-left font-medium px-2 py-1.5">Mês</th>
-              <th className="text-left font-medium px-2 py-1.5">Situação</th>
-              <th className="text-right font-medium px-2 py-1.5">Ação</th>
-            </tr>
-          </thead>
-          <tbody>
-            {meses.map((m) => {
-              const lock = lockOf(m);
-              const locked = isLocked(m);
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+          <span
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full"
+            style={{
+              background: mesesAbertos.length === 0 ? COLORS.greenSoft : COLORS.amberSoft,
+              color: mesesAbertos.length === 0 ? COLORS.green : COLORS.amber,
+            }}
+          >
+            {mesesAbertos.length === 0 ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+            {mesesAbertos.length === 0 ? "Todos os últimos 12 meses estão fechados" : `${mesesAbertos.length} mês(es) em aberto`}
+          </span>
+          <button
+            onClick={() => setVerTodosMeses((v) => !v)}
+            className="text-xs font-medium"
+            style={{ color: COLORS.primary }}
+          >
+            {verTodosMeses ? "Ocultar histórico completo" : "Ver histórico completo (12 meses)"}
+          </button>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-3 items-end mb-1">
+          <Field label="Exercício">
+            <Select value={competenciaSelecionada} onChange={(e) => setCompetenciaSelecionada(e.target.value)}>
+              {meses.map((m) => (
+                <option key={m} value={m}>{fmtCompetencia(m)} — {isLocked(m) ? "Fechado" : "Aberto"}</option>
+              ))}
+            </Select>
+          </Field>
+          <div className="flex items-center justify-between gap-2 pb-0.5">
+            {(() => {
+              const lock = lockOf(competenciaSelecionada);
+              const locked = isLocked(competenciaSelecionada);
               return (
-                <tr key={m} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <td className="px-2 py-1.5 capitalize" style={{ color: COLORS.ink }}>{fmtCompetencia(m)}</td>
-                  <td className="px-2 py-1.5">
+                <>
+                  <div>
                     {locked ? (
                       <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: COLORS.redSoft, color: COLORS.red }}>
                         <Lock size={11} /> Fechado em {fmtDateTime(lock.fechadoEm)} por {lock.fechadoPor}
                       </span>
                     ) : lock ? (
-                      <span className="text-xs" style={{ color: COLORS.inkSoft }}>Reaberto em {fmtDateTime(lock.reabertoEm)} por {lock.reabertoPor} (fechado antes em {fmtDateTime(lock.fechadoEm)})</span>
+                      <span className="text-xs" style={{ color: COLORS.inkSoft }}>Reaberto em {fmtDateTime(lock.reabertoEm)} por {lock.reabertoPor}</span>
                     ) : (
                       <span className="text-xs" style={{ color: COLORS.inkSoft }}>Aberto</span>
                     )}
-                  </td>
-                  <td className="px-2 py-1.5 text-right">
-                    {locked ? (
-                      <Button variant="ghost" onClick={() => onReabrirMes(m)}><Unlock size={13} /> Reabrir</Button>
-                    ) : (
-                      <Button variant="subtle" onClick={() => onSolicitarFechamento(m)}><Lock size={13} /> Fechar mês</Button>
-                    )}
-                  </td>
-                </tr>
+                  </div>
+                  {locked ? (
+                    <Button variant="ghost" onClick={() => onReabrirMes(competenciaSelecionada)}><Unlock size={13} /> Reabrir</Button>
+                  ) : (
+                    <Button variant="subtle" onClick={() => onSolicitarFechamento(competenciaSelecionada)}><Lock size={13} /> Fechar mês</Button>
+                  )}
+                </>
               );
-            })}
-          </tbody>
-        </table>
+            })()}
+          </div>
+        </div>
+
+        {verTodosMeses && (
+          <table className="w-full text-sm mt-3" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-2 py-1.5">Mês</th>
+                <th className="text-left font-medium px-2 py-1.5">Situação</th>
+                <th className="text-right font-medium px-2 py-1.5">Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {meses.map((m) => {
+                const lock = lockOf(m);
+                const locked = isLocked(m);
+                return (
+                  <tr key={m} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <td className="px-2 py-1.5 capitalize" style={{ color: COLORS.ink }}>{fmtCompetencia(m)}</td>
+                    <td className="px-2 py-1.5">
+                      {locked ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+                          <Lock size={11} /> Fechado em {fmtDateTime(lock.fechadoEm)} por {lock.fechadoPor}
+                        </span>
+                      ) : lock ? (
+                        <span className="text-xs" style={{ color: COLORS.inkSoft }}>Reaberto em {fmtDateTime(lock.reabertoEm)} por {lock.reabertoPor} (fechado antes em {fmtDateTime(lock.fechadoEm)})</span>
+                      ) : (
+                        <span className="text-xs" style={{ color: COLORS.inkSoft }}>Aberto</span>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      {locked ? (
+                        <Button variant="ghost" onClick={() => onReabrirMes(m)}><Unlock size={13} /> Reabrir</Button>
+                      ) : (
+                        <Button variant="subtle" onClick={() => onSolicitarFechamento(m)}><Lock size={13} /> Fechar mês</Button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
         <p className="text-xs mt-2" style={{ color: COLORS.inkSoft }}>
           "Fechar mês" leva pra Análise → Inconsistência/Pendências, recortada pra essa competência, antes de travar de verdade.
         </p>
