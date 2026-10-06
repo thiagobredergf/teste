@@ -372,12 +372,13 @@ async function listarDocumentosDaEmpresa(empresaId) {
 }
 
 // Junta tudo num .zip e sobe pro Storage com link assinado (7 dias) — é
-// esse link que vai pro dono, por WhatsApp; signed URL do Supabase
-// funciona pra qualquer um que tiver o link, sem precisar de login, até
-// expirar, então não trava o dono pedindo senha pra baixar os próprios
-// documentos.
-async function gerarExportacaoDocumentos(empresa) {
-  const arquivos = await listarDocumentosDaEmpresa(empresa.id);
+// esse link que vai pro dono/contador, por WhatsApp; signed URL do
+// Supabase funciona pra qualquer um que tiver o link, sem precisar de
+// login, até expirar, então não trava quem recebe pedindo senha pra
+// baixar os documentos. Compartilhado entre a exportação completa (fim
+// de contrato) e a exportação recortada por competência (fechamento
+// mensal → contador).
+async function zipESubirDocumentos(empresaId, arquivos, nomeArquivoBase) {
   if (arquivos.length === 0) return { total: 0, url: null };
   const zip = new JSZip();
   for (const arq of arquivos) {
@@ -388,12 +389,45 @@ async function gerarExportacaoDocumentos(empresa) {
     zip.file(arq.nome, await res.blob());
   }
   const zipBlob = await zip.generateAsync({ type: "blob" });
-  const zipPath = `${empresa.id}/export_${Date.now()}.zip`;
+  const zipPath = `${empresaId}/${nomeArquivoBase}_${Date.now()}.zip`;
   const { error: upErr } = await supabase.storage.from("documentos-export").upload(zipPath, zipBlob, { contentType: "application/zip" });
   if (upErr) throw new Error(upErr.message);
   const { data: signedZip, error: signErr } = await supabase.storage.from("documentos-export").createSignedUrl(zipPath, 60 * 60 * 24 * 7);
   if (signErr) throw new Error(signErr.message);
   return { total: arquivos.length, url: signedZip.signedUrl };
+}
+
+async function gerarExportacaoDocumentos(empresa) {
+  const arquivos = await listarDocumentosDaEmpresa(empresa.id);
+  return zipESubirDocumentos(empresa.id, arquivos, "export");
+}
+
+// Só os anexos (comprovante/NF/boleto importado) dos lançamentos cuja
+// competência bate com o mês sendo fechado — não o histórico inteiro da
+// empresa (isso já existe em gerarExportacaoDocumentos, pro fim de
+// contrato). "documentos-recebidos" (caixa de entrada) fica de fora de
+// propósito: não tem vínculo com uma competência específica.
+async function listarDocumentosDaCompetencia(empresaId, competencia, { payables, receivables, bankEntries, transfers }) {
+  const idsPorTipo = {
+    payables: new Set(payables.filter((p) => p.empresaId === empresaId && competenciaOf(PERIOD_DATE_FIELD.payables(p)) === competencia).map((p) => p.id)),
+    receivables: new Set(receivables.filter((r) => r.empresaId === empresaId && competenciaOf(PERIOD_DATE_FIELD.receivables(r)) === competencia).map((r) => r.id)),
+    bankEntries: new Set(bankEntries.filter((b) => b.empresaId === empresaId && competenciaOf(PERIOD_DATE_FIELD.bankEntries(b)) === competencia).map((b) => b.id)),
+    transfers: new Set(transfers.filter((t) => t.empresaId === empresaId && competenciaOf(PERIOD_DATE_FIELD.transfers(t)) === competencia).map((t) => t.id)),
+  };
+  const arquivos = [];
+  for (const tipo of ["payables", "receivables", "bankEntries", "transfers"]) {
+    const { data: lista } = await supabase.storage.from("documentos-lancamentos").list(`${empresaId}/${tipo}`, { limit: 1000 });
+    (lista || []).filter((f) => f.id).forEach((f) => {
+      const id = f.name.split(".")[0];
+      if (idsPorTipo[tipo].has(id)) arquivos.push({ bucket: "documentos-lancamentos", path: `${empresaId}/${tipo}/${f.name}`, nome: `${tipo}-${f.name}` });
+    });
+  }
+  return arquivos;
+}
+
+async function gerarExportacaoDocumentosCompetencia(empresa, competencia, dados) {
+  const arquivos = await listarDocumentosDaCompetencia(empresa.id, competencia, dados);
+  return zipESubirDocumentos(empresa.id, arquivos, `export_${competencia}`);
 }
 
 // Apaga de vez os originais dos dois buckets — separado e manual de
@@ -962,6 +996,28 @@ function FinanceiroApp({ userEmail, onLogout }) {
     setClosingCompetencia(null);
     setView("fechamento");
   }, []);
+  // Depois de travar o mês, se a empresa tiver contato de contabilidade
+  // cadastrado (Cadastros → Editar empresa), gera na hora o pacote só com
+  // os anexos daquela competência e abre o WhatsApp pro contador —
+  // automático, sem precisar passar pelo ADM/"Exportar documentos"
+  // manualmente. Silencioso se não tiver contato cadastrado ou não houver
+  // nenhum documento anexado nesse mês (nada pra mandar).
+  const enviarDocumentosContador = useCallback(async (empresaId, competencia) => {
+    const empresa = empresas.find((e) => e.id === empresaId);
+    if (!empresa?.contabilidadeContato) return;
+    try {
+      const { total, url } = await gerarExportacaoDocumentosCompetencia(empresa, competencia, {
+        payables, receivables, bankEntries, transfers,
+      });
+      if (total === 0) return;
+      logAudit(empresaId, "empresa", empresaId, "exportar_documentos", `Gerou exportação com ${total} arquivo(s) do fechamento de ${fmtCompetencia(competencia)} pro contador`, userEmail);
+      const mensagem = `Olá! Segue o pacote de documentos do fechamento de ${fmtCompetencia(competencia)} (${empresa.nome}) — ${total} arquivo(s). O link fica disponível por 7 dias:\n\n${url}`;
+      openWhatsApp(empresa.contabilidadeContato, mensagem);
+    } catch (err) {
+      console.error("Falha ao gerar exportação de documentos pro contador:", err);
+    }
+  }, [empresas, payables, receivables, bankEntries, transfers, userEmail]);
+
   const fecharMes = useCallback((competencia) => {
     if (!confirmDelete(`Fechar ${fmtCompetencia(competencia)}? Depois de fechado, nenhum lançamento datado dentro desse mês (Contas a Pagar/Receber, Lançamentos Bancários, Transferências, Calendário Fiscal) poderá ser criado, editado, excluído ou baixado até reabrir.`)) return;
     const existing = periodLocks.find((l) => l.empresaId === selectedEmpresa && l.competencia === competencia);
@@ -972,9 +1028,10 @@ function FinanceiroApp({ userEmail, onLogout }) {
     } else {
       persist("periodLocks", [...periodLocks, { id: uid(), empresaId: selectedEmpresa, competencia, fechadoEm: new Date().toISOString(), fechadoPor: userEmail }], setPeriodLocks);
     }
+    enviarDocumentosContador(selectedEmpresa, competencia);
     setClosingCompetencia(null);
     setView("fechamento");
-  }, [periodLocks, selectedEmpresa, userEmail, persist]);
+  }, [periodLocks, selectedEmpresa, userEmail, persist, enviarDocumentosContador]);
   const reabrirMes = useCallback((competencia) => {
     if (!confirmDelete(`Reabrir ${fmtCompetencia(competencia)}? Os lançamentos desse mês voltam a poder ser editados normalmente.`)) return;
     const existing = periodLocks.find((l) => l.empresaId === selectedEmpresa && l.competencia === competencia);
@@ -10307,7 +10364,7 @@ function RotinaView({
 
       <ReportCard
         title="Fechamento mensal"
-        subtitle='Fecha um mês depois de entregar o relatório ao cliente — protege contra edição/exclusão/baixa acidental de um lançamento que já foi reportado. "Mês" aqui é a data do lançamento (data de lançamento, ou vencimento quando não houver), não a data de pagamento.'
+        subtitle='Fecha um mês depois de entregar o relatório ao cliente — protege contra edição/exclusão/baixa acidental de um lançamento que já foi reportado. "Mês" aqui é a data do lançamento (data de lançamento, ou vencimento quando não houver), não a data de pagamento. Se a empresa tiver contato de contabilidade cadastrado (Cadastros → Editar empresa), o pacote de documentos daquele mês é gerado e enviado por WhatsApp pro contador automaticamente ao fechar.'
       >
         <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
           <span
