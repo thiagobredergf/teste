@@ -2727,12 +2727,12 @@ function AdmView({ role, empresas = [], userEmail }) {
           <table className="w-full text-sm min-w-[720px]">
             <thead>
               <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
-                <th className="text-left font-medium px-4 py-2.5">Nome</th>
-                <th className="text-left font-medium px-4 py-2.5">E-mail</th>
-                <th className="text-left font-medium px-4 py-2.5">CPF</th>
-                <th className="text-left font-medium px-4 py-2.5">Papel</th>
-                <th className="text-left font-medium px-4 py-2.5">Empresas com acesso</th>
-                <th className="text-right font-medium px-4 py-2.5">Ações</th>
+                <th className="text-left font-medium text-xs px-2.5 py-1.5">Nome</th>
+                <th className="text-left font-medium text-xs px-2.5 py-1.5">E-mail</th>
+                <th className="text-left font-medium text-xs px-2.5 py-1.5">CPF</th>
+                <th className="text-left font-medium text-xs px-2.5 py-1.5">Papel</th>
+                <th className="text-left font-medium text-xs px-2.5 py-1.5">Empresas com acesso</th>
+                <th className="text-right font-medium text-xs px-2.5 py-1.5">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -2740,21 +2740,21 @@ function AdmView({ role, empresas = [], userEmail }) {
                 const meusIds = staffAccess[u.id];
                 const restrito = meusIds && meusIds.size > 0;
                 return (
-                <tr key={u.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{u.nome || "—"}</td>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{u.email}</td>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{u.cpf || "—"}</td>
-                  <td className="px-4 py-2.5">
+                <tr key={u.id} style={{ borderTop: `1px solid #F0EEE7` }}>
+                  <td className="px-2.5 py-1.5" style={{ color: COLORS.ink }}>{u.nome || "—"}</td>
+                  <td className="px-2.5 py-1.5" style={{ color: COLORS.ink }}>{u.email}</td>
+                  <td className="px-2.5 py-1.5" style={{ color: COLORS.inkSoft }}>{u.cpf || "—"}</td>
+                  <td className="px-2.5 py-1.5">
                     {u.role === "owner" ? (
                       <Badge tone="blue">Dono</Badge>
                     ) : (
-                      <Select value={u.role} onChange={(e) => mudarPapel(u, e.target.value)} style={{ height: 32, padding: "0 10px" }}>
+                      <Select value={u.role} onChange={(e) => mudarPapel(u, e.target.value)} style={{ height: 28, padding: "0 8px", width: 112 }}>
                         <option value="gestor">Gestor</option>
                         <option value="operador">Operador</option>
                       </Select>
                     )}
                   </td>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>
+                  <td className="px-2.5 py-1.5" style={{ color: COLORS.inkSoft }}>
                     {u.role === "owner" ? (
                       (empresasByOwner[u.id] || []).join(", ") || "Nenhuma vinculada"
                     ) : restrito ? (
@@ -2763,12 +2763,12 @@ function AdmView({ role, empresas = [], userEmail }) {
                       <Badge tone="green">Todas as empresas</Badge>
                     )}
                   </td>
-                  <td className="px-4 py-2.5 text-right">
-                    <div className="flex justify-end gap-1.5">
+                  <td className="px-2.5 py-1.5 text-right">
+                    <div className="flex justify-end gap-1">
                       {u.role !== "owner" && (
-                        <Button variant="ghost" onClick={() => setAccessModal(u)}><Building2 size={13} /> Gerenciar acesso</Button>
+                        <Button variant="ghost" onClick={() => setAccessModal(u)} style={{ padding: "4px 9px", fontSize: 12.5 }}><Building2 size={12} /> Gerenciar acesso</Button>
                       )}
-                      <Button variant="ghost" onClick={() => resetSenha(u)}><RotateCcw size={13} /> Redefinir senha</Button>
+                      <Button variant="ghost" onClick={() => resetSenha(u)} style={{ padding: "4px 9px", fontSize: 12.5 }}><RotateCcw size={12} /> Redefinir senha</Button>
                     </div>
                   </td>
                 </tr>
