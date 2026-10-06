@@ -9799,68 +9799,6 @@ function TaskModal({ initial, onClose, onSubmit }) {
   );
 }
 
-const TASK_KANBAN_COLUNAS = [
-  { key: "pendente", label: "Pendente", tone: "neutral" },
-  { key: "em_andamento", label: "Em andamento", tone: "gold" },
-  { key: "concluida", label: "Concluída", tone: "green" },
-];
-
-// Quadro Kanban — arrastar e soltar nativo do navegador (sem lib extra).
-// Tarefa recorrente não tem "Concluída" como estado estável (ela avança a
-// própria data e volta pra "pendente" — ver concluirTask): soltar um
-// cartão recorrente na coluna Concluída dispara esse mesmo avanço, então
-// o cartão volta pra Pendente no instante seguinte. É o comportamento já
-// existente no botão "Concluir", só acessível agora pelo arrastar também.
-function TaskKanban({ tasks, onMoveStatus, onEdit, onDelete }) {
-  const [dragId, setDragId] = useState(null);
-  const porColuna = (key) => tasks.filter((t) => t.status === key);
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-      {TASK_KANBAN_COLUNAS.map((col) => (
-        <div
-          key={col.key}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={() => { if (dragId) onMoveStatus(dragId, col.key); setDragId(null); }}
-          className="rounded-xl p-2.5 min-h-[140px]"
-          style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
-        >
-          <p className="text-xs font-semibold mb-2 px-1 flex items-center justify-between" style={{ color: COLORS.inkSoft }}>
-            {col.label} <Badge tone={col.tone}>{porColuna(col.key).length}</Badge>
-          </p>
-          <div className="space-y-2">
-            {porColuna(col.key).map((t) => (
-              <div
-                key={t.id}
-                draggable
-                onDragStart={() => setDragId(t.id)}
-                className="rounded-lg p-2.5 cursor-grab active:cursor-grabbing"
-                style={{ background: "#fff", border: `1px solid ${COLORS.border}`, boxShadow: "0 1px 2px rgba(31,58,52,0.06)" }}
-              >
-                <p className="text-sm font-medium" style={{ color: COLORS.ink }}>{t.titulo}</p>
-                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                  <Badge tone="neutral">{RECORRENCIA_LABEL[t.recorrencia]}</Badge>
-                  <span className="text-xs" style={{ color: COLORS.inkSoft }}>{fmtDate(t.proximaData)}</span>
-                </div>
-                {t.responsavelEmail && (
-                  <p className="text-xs mt-1 truncate" style={{ color: COLORS.inkSoft }} title={t.responsavelEmail}>{t.responsavelEmail}</p>
-                )}
-                <div className="flex justify-end gap-1.5 mt-1.5">
-                  <button onClick={() => onEdit(t)} title="Editar"><Pencil size={12} color={COLORS.inkSoft} /></button>
-                  <button onClick={() => onDelete(t)} title="Excluir"><Trash2 size={12} color={COLORS.red} /></button>
-                </div>
-              </div>
-            ))}
-            {porColuna(col.key).length === 0 && (
-              <p className="text-xs text-center py-4" style={{ color: COLORS.inkSoft }}>Arraste um cartão pra aqui</p>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function fmtDuracao(segundos) {
   const h = Math.floor(segundos / 3600);
   const m = Math.floor((segundos % 3600) / 60);
@@ -10283,11 +10221,7 @@ function RotinaView({
   const [verTodosMeses, setVerTodosMeses] = useState(false);
 
   const [taskModal, setTaskModal] = useState(null); // null | {} | tarefa
-  const [modoTarefas, setModoTarefas] = useState("lista"); // "lista" | "quadro"
   const tasksF = tasks.filter((t) => t.empresaId === empresaId && t.status !== "concluida");
-  // O quadro Kanban mostra também as concluídas (pra ter uma 3ª coluna de
-  // verdade) — diferente da lista acima, que some com elas de propósito.
-  const tasksKanban = tasks.filter((t) => t.empresaId === empresaId);
   // Só obrigação já validada (não "Sugerido", que ainda nem é real) entra
   // na lista unificada — mistura com as tarefas manuais só pra dar uma
   // visão única do que precisa acontecer, sem duplicar o dado: concluir a
@@ -10298,6 +10232,20 @@ function RotinaView({
     ...tasksF.map((t) => ({ origem: "tarefa", data: t.proximaData, item: t })),
     ...fiscalF.map((o) => ({ origem: "fiscal", data: o.vencimento, item: o })),
   ].sort((a, b) => (a.data || "").localeCompare(b.data || ""));
+
+  // Filtro + limite de linhas — pra lista não crescer indefinidamente e
+  // obrigar scroll: por padrão mostra só os ITENS_ROTINA_LIMITE mais
+  // próximos, e "Ver todos" ou um filtro de origem reduzem/expandem o que
+  // aparece, sem nunca depender de rolar a tela pra encontrar algo.
+  const ITENS_ROTINA_LIMITE = 8;
+  const [tarefasOrigemFiltro, setTarefasOrigemFiltro] = useState(""); // "" | "tarefa" | "fiscal"
+  const [tarefasVerTodas, setTarefasVerTodas] = useState(false);
+  const itensRotinaFiltrados = tarefasOrigemFiltro
+    ? itensRotina.filter((i) => i.origem === tarefasOrigemFiltro)
+    : itensRotina;
+  const itensRotinaExibidos = tarefasVerTodas
+    ? itensRotinaFiltrados
+    : itensRotinaFiltrados.slice(0, ITENS_ROTINA_LIMITE);
 
   const saveTask = (form) => {
     if (form.id) onSaveTasks(tasks.map((t) => (t.id === form.id ? { ...t, ...form } : t)));
@@ -10321,15 +10269,6 @@ function RotinaView({
     const dias = { diaria: 1, semanal: 7 }[t.recorrencia];
     const proximaData = dias ? addDaysToISODate(t.proximaData, dias) : addMonthsToISODate(t.proximaData, 1);
     onSaveTasks(tasks.map((x) => (x.id === t.id ? { ...x, proximaData, ...agora } : x)));
-  };
-  // Arrastar um cartão no Kanban pra "Concluída" reaproveita concluirTask
-  // (mesma regra de recorrência); pra qualquer outra coluna é só troca de
-  // status mesmo.
-  const moverStatusTask = (id, novoStatus) => {
-    const t = tasks.find((x) => x.id === id);
-    if (!t || t.status === novoStatus) return;
-    if (novoStatus === "concluida") { concluirTask(t); return; }
-    onSaveTasks(tasks.map((x) => (x.id === id ? { ...x, status: novoStatus } : x)));
   };
 
   // Cronômetro: controle interno de eficiência, nunca visto pelo cliente.
@@ -10473,75 +10412,70 @@ function RotinaView({
 
       <ReportCard
         title="Tarefas e obrigações"
-        subtitle={modoTarefas === "quadro"
-          ? "Quadro Kanban das tarefas manuais desta empresa — arraste o cartão pra mudar de etapa. As obrigações fiscais (Calendário Fiscal) só aparecem na visão em lista."
-          : "Tarefas manuais (diárias/semanais/mensais/pontuais) misturadas com as obrigações fiscais já validadas desta empresa — uma visão única do que precisa acontecer."}
+        subtitle="Tarefas manuais (diárias/semanais/mensais/pontuais) misturadas com as obrigações fiscais já validadas desta empresa — uma visão única do que precisa acontecer."
       >
         <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-          <div className="inline-flex rounded-lg overflow-hidden" style={{ border: `1px solid ${COLORS.border}` }}>
-            <button
-              onClick={() => setModoTarefas("lista")}
-              className="px-3 py-1.5 text-sm"
-              style={{ background: modoTarefas === "lista" ? COLORS.primary : "transparent", color: modoTarefas === "lista" ? "#fff" : COLORS.inkSoft }}
-            >
-              Lista
-            </button>
-            <button
-              onClick={() => setModoTarefas("quadro")}
-              className="px-3 py-1.5 text-sm"
-              style={{ background: modoTarefas === "quadro" ? COLORS.primary : "transparent", color: modoTarefas === "quadro" ? "#fff" : COLORS.inkSoft }}
-            >
-              Quadro
-            </button>
-          </div>
+          <Select
+            value={tarefasOrigemFiltro}
+            onChange={(e) => { setTarefasOrigemFiltro(e.target.value); setTarefasVerTodas(false); }}
+            style={{ width: 176 }}
+          >
+            <option value="">Todas as origens</option>
+            <option value="tarefa">Só tarefas manuais</option>
+            <option value="fiscal">Só obrigações fiscais</option>
+          </Select>
           <Button onClick={() => setTaskModal({})}><Plus size={14} /> Nova tarefa</Button>
         </div>
-        {modoTarefas === "quadro" ? (
-          <TaskKanban
-            tasks={tasksKanban}
-            onMoveStatus={moverStatusTask}
-            onEdit={(t) => setTaskModal(t)}
-            onDelete={deleteTask}
-          />
-        ) : itensRotina.length === 0 ? (
+        {itensRotinaFiltrados.length === 0 ? (
           <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nada pendente por aqui.</p>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
-                <th className="text-left font-medium px-2 py-1.5">Data</th>
-                <th className="text-left font-medium px-2 py-1.5">Item</th>
-                <th className="text-left font-medium px-2 py-1.5">Origem</th>
-                <th className="text-right font-medium px-2 py-1.5">Ação</th>
-              </tr>
-            </thead>
-            <tbody>
-              {itensRotina.map(({ origem, data, item }) => (
-                <tr key={`${origem}-${item.id}`} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{fmtDate(data)}</td>
-                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{origem === "tarefa" ? item.titulo : item.tributo}</td>
-                  <td className="px-2 py-1.5">
-                    {origem === "tarefa" ? (
-                      <Badge tone="neutral">{RECORRENCIA_LABEL[item.recorrencia]}</Badge>
-                    ) : (
-                      <Badge tone="gold">Fiscal</Badge>
-                    )}
-                  </td>
-                  <td className="px-2 py-1.5 text-right">
-                    {origem === "tarefa" ? (
-                      <div className="flex justify-end gap-1.5">
-                        <Button variant="ghost" onClick={() => concluirTask(item)}><Check size={13} /> Concluir</Button>
-                        <button onClick={() => setTaskModal(item)} title="Editar"><Pencil size={14} color={COLORS.inkSoft} /></button>
-                        <button onClick={() => deleteTask(item)} title="Excluir"><Trash2 size={14} color={COLORS.red} /></button>
-                      </div>
-                    ) : (
-                      <span className="text-xs" style={{ color: COLORS.inkSoft }}>Concluir no Calendário Fiscal</span>
-                    )}
-                  </td>
+          <>
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                  <th className="text-left font-medium px-2 py-1.5">Data</th>
+                  <th className="text-left font-medium px-2 py-1.5">Item</th>
+                  <th className="text-left font-medium px-2 py-1.5">Origem</th>
+                  <th className="text-right font-medium px-2 py-1.5">Ação</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {itensRotinaExibidos.map(({ origem, data, item }) => (
+                  <tr key={`${origem}-${item.id}`} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{fmtDate(data)}</td>
+                    <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{origem === "tarefa" ? item.titulo : item.tributo}</td>
+                    <td className="px-2 py-1.5">
+                      {origem === "tarefa" ? (
+                        <Badge tone="neutral">{RECORRENCIA_LABEL[item.recorrencia]}</Badge>
+                      ) : (
+                        <Badge tone="gold">Fiscal</Badge>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      {origem === "tarefa" ? (
+                        <div className="flex justify-end gap-1.5">
+                          <Button variant="ghost" onClick={() => concluirTask(item)}><Check size={13} /> Concluir</Button>
+                          <button onClick={() => setTaskModal(item)} title="Editar"><Pencil size={14} color={COLORS.inkSoft} /></button>
+                          <button onClick={() => deleteTask(item)} title="Excluir"><Trash2 size={14} color={COLORS.red} /></button>
+                        </div>
+                      ) : (
+                        <span className="text-xs" style={{ color: COLORS.inkSoft }}>Concluir no Calendário Fiscal</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!tarefasVerTodas && itensRotinaFiltrados.length > ITENS_ROTINA_LIMITE && (
+              <button
+                onClick={() => setTarefasVerTodas(true)}
+                className="text-xs font-medium mt-2"
+                style={{ color: COLORS.primary }}
+              >
+                Ver mais {itensRotinaFiltrados.length - ITENS_ROTINA_LIMITE} item(ns)
+              </button>
+            )}
+          </>
         )}
       </ReportCard>
 
