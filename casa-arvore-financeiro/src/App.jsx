@@ -1978,11 +1978,18 @@ function Dashboard({
     Acumulado: Math.round(monthlyFlow.acumulado[i] * 100) / 100,
   }));
 
+  // Sparkline dos últimos 5 meses — escala própria por tile, altura 4-22px.
+  const sparkOf = (serie) => {
+    const ultimos = serie.slice(-5);
+    const max = Math.max(1, ...ultimos.map((v) => Math.abs(v)));
+    return ultimos.map((v) => Math.round((Math.abs(v) / max) * 18) + 4);
+  };
+
   const kpis = [
-    { label: "Entradas no ano", value: totals.totalEntradas, icon: TrendingUp, tone: "green" },
-    { label: "Saídas no ano", value: totals.totalSaidas, icon: TrendingDown, tone: "red" },
-    { label: "Saldo líquido", value: totals.saldo, icon: CircleDollarSign, tone: totals.saldo >= 0 ? "green" : "red" },
-    { label: "Saldo em contas", value: totalBalance, icon: Landmark, tone: "gold" },
+    { label: "Entradas no ano", value: totals.totalEntradas, icon: TrendingUp, tone: "green", spark: sparkOf(monthlyFlow.entradas) },
+    { label: "Saídas no ano", value: totals.totalSaidas, icon: TrendingDown, tone: "red", spark: sparkOf(monthlyFlow.saidas) },
+    { label: "Saldo líquido", value: totals.saldo, icon: CircleDollarSign, tone: totals.saldo >= 0 ? "green" : "red", spark: sparkOf(monthlyFlow.acumulado) },
+    { label: "Saldo em contas", value: totalBalance, icon: Landmark, tone: "gold", spark: null },
   ];
 
   return (
@@ -2003,15 +2010,25 @@ function Dashboard({
         {kpis.map((k) => {
           const Icon = k.icon;
           const toneColor = k.tone === "green" ? COLORS.green : k.tone === "red" ? COLORS.red : COLORS.gold;
+          const toneBg = k.tone === "green" ? COLORS.greenSoft : k.tone === "red" ? COLORS.redSoft : COLORS.goldSoft;
           return (
-            <Card key={k.label} className="p-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium" style={{ color: COLORS.inkSoft }}>{k.label}</span>
-                <Icon size={16} color={toneColor} />
+            <Card key={k.label} className="p-3.5 flex items-center gap-3">
+              <div className="w-[30px] h-[30px] rounded-[9px] flex items-center justify-center shrink-0" style={{ background: toneBg }}>
+                <Icon size={15} color={toneColor} />
               </div>
-              <p className="text-lg font-semibold tabular-nums" style={{ color: toneColor, fontVariantNumeric: "tabular-nums" }}>
-                {fmtBRL(k.value)}
-              </p>
+              <div className="flex-1 min-w-0">
+                <p className="text-[11.5px] mb-0.5" style={{ color: COLORS.inkSoft }}>{k.label}</p>
+                <p className="text-base font-bold tabular-nums" style={{ color: toneColor, fontVariantNumeric: "tabular-nums" }}>
+                  {fmtBRL(k.value)}
+                </p>
+              </div>
+              {k.spark && (
+                <div className="flex items-end gap-0.5 h-6 shrink-0">
+                  {k.spark.map((h, i) => (
+                    <div key={i} className="w-1 rounded-sm" style={{ background: toneColor, height: h }} />
+                  ))}
+                </div>
+              )}
             </Card>
           );
         })}
@@ -2042,50 +2059,67 @@ function Dashboard({
           {accounts.length === 0 ? (
             <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma conta cadastrada ainda.</p>
           ) : (
-            <div className="space-y-2">
-              {accounts.map((a) => (
-                <div key={a.id} className="flex items-center justify-between py-1.5" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
-                  <div>
-                    <p className="text-sm font-medium" style={{ color: COLORS.ink }}>{a.nome}</p>
-                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>{a.tipo}</p>
-                  </div>
-                  <p className="text-sm font-semibold tabular-nums" style={{ color: accountBalance(a.id) >= 0 ? COLORS.green : COLORS.red }}>
-                    {fmtBRL(accountBalance(a.id))}
-                  </p>
-                </div>
-              ))}
+            <div className="space-y-3">
+              {(() => {
+                const maxSaldo = Math.max(1, ...accounts.map((a) => Math.abs(accountBalance(a.id))));
+                return accounts.map((a) => {
+                  const saldo = accountBalance(a.id);
+                  const cor = saldo >= 0 ? COLORS.green : COLORS.red;
+                  return (
+                    <div key={a.id}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs" style={{ color: COLORS.ink }}>{a.nome}</span>
+                        <span className="text-xs font-semibold tabular-nums" style={{ color: cor }}>{fmtBRL(saldo)}</span>
+                      </div>
+                      <div className="h-[7px] rounded-full overflow-hidden" style={{ background: "#F0EEE7" }}>
+                        <div className="h-full rounded-full" style={{ background: cor, width: `${Math.round((Math.abs(saldo) / maxSaldo) * 100)}%` }} />
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           )}
         </Card>
 
         <Card className="p-4">
           <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.ink }}>Próximos vencimentos</h2>
-          <div className="space-y-3">
+          <div className="space-y-2">
             {upcomingPayables.length === 0 && upcomingReceivables.length === 0 && (
               <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nada pendente no momento.</p>
             )}
-            {upcomingPayables.map((p) => (
-              <div key={p.id} className="flex items-center justify-between">
-                <div className="min-w-0">
-                  <p className="text-sm truncate" style={{ color: COLORS.ink }}>{p.fornecedor}</p>
-                  <p className="text-xs" style={{ color: COLORS.inkSoft }}>Pagar · {fmtDate(p.vencimento)}</p>
+            {upcomingPayables.map((p) => {
+              const dias = daysUntil(p.vencimento);
+              const cor = dias < 0 ? COLORS.red : dias <= 10 ? COLORS.amber : COLORS.border;
+              return (
+                <div key={p.id} className="flex items-center gap-2.5 py-1">
+                  <span className="w-[3px] self-stretch rounded shrink-0" style={{ background: cor }} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm truncate" style={{ color: COLORS.ink }}>{p.fornecedor}</p>
+                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>Pagar · {fmtDate(p.vencimento)}</p>
+                  </div>
+                  <p className="text-sm font-medium tabular-nums shrink-0" style={{ color: COLORS.red }}>
+                    −{fmtBRL(p.valor)}
+                  </p>
                 </div>
-                <p className="text-sm font-medium tabular-nums shrink-0 ml-2" style={{ color: COLORS.red }}>
-                  −{fmtBRL(p.valor)}
-                </p>
-              </div>
-            ))}
-            {upcomingReceivables.map((r) => (
-              <div key={r.id} className="flex items-center justify-between">
-                <div className="min-w-0">
-                  <p className="text-sm truncate" style={{ color: COLORS.ink }}>{r.cliente}</p>
-                  <p className="text-xs" style={{ color: COLORS.inkSoft }}>Receber · {fmtDate(r.vencimento)}</p>
+              );
+            })}
+            {upcomingReceivables.map((r) => {
+              const dias = daysUntil(r.vencimento);
+              const cor = dias < 0 ? COLORS.red : dias <= 10 ? COLORS.amber : COLORS.border;
+              return (
+                <div key={r.id} className="flex items-center gap-2.5 py-1">
+                  <span className="w-[3px] self-stretch rounded shrink-0" style={{ background: cor }} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm truncate" style={{ color: COLORS.ink }}>{r.cliente}</p>
+                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>Receber · {fmtDate(r.vencimento)}</p>
+                  </div>
+                  <p className="text-sm font-medium tabular-nums shrink-0" style={{ color: COLORS.green }}>
+                    +{fmtBRL(r.valor)}
+                  </p>
                 </div>
-                <p className="text-sm font-medium tabular-nums shrink-0 ml-2" style={{ color: COLORS.green }}>
-                  +{fmtBRL(r.valor)}
-                </p>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
       </div>
@@ -2871,8 +2905,8 @@ function ProdutividadeView({ role, empresas = [], timeSessions = [] }) {
   const porAnalista = acumular("analista");
   const porEmpresa = acumular("empresa");
 
-  const chartAnalista = porAnalista.map(([email, v]) => ({ nome: nomePorEmail.get(email) || email, Horas: +(v.segundos / 3600).toFixed(1) }));
-  const chartEmpresa = porEmpresa.map(([id, v]) => ({ nome: empresaNome(id), Horas: +(v.segundos / 3600).toFixed(1) }));
+  const totalSegundos = (lista) => lista.reduce((s, [, v]) => s + v.segundos, 0);
+  const DOTS = [COLORS.primary, COLORS.gold, COLORS.blue, COLORS.green, COLORS.red];
 
   return (
     <div className="space-y-4">
@@ -2885,38 +2919,64 @@ function ProdutividadeView({ role, empresas = [], timeSessions = [] }) {
 
       <div className="grid md:grid-cols-2 gap-3">
         <Card className="p-4">
-          <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.ink }}>Horas por analista</h2>
-          {chartAnalista.length === 0 ? (
+          <div className="flex items-center gap-2.5 mb-3.5">
+            <div className="w-[30px] h-[30px] rounded-[9px] flex items-center justify-center shrink-0" style={{ background: COLORS.greenSoft }}>
+              <CalendarClock size={15} color={COLORS.primary} />
+            </div>
+            <h2 className="text-sm font-semibold flex-1" style={{ color: COLORS.ink }}>Horas por analista</h2>
+            <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full" style={{ background: COLORS.greenSoft, color: COLORS.primary }}>
+              {fmtDuracao(totalSegundos(porAnalista))}
+            </span>
+          </div>
+          {porAnalista.length === 0 ? (
             <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft }}>Sem cronômetro registrado nesse período.</p>
           ) : (
-            <div style={{ width: "100%", height: 220 }}>
-              <ResponsiveContainer>
-                <ComposedChart data={chartAnalista} layout="vertical" margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 11, fill: COLORS.inkSoft }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-                  <YAxis type="category" dataKey="nome" tick={{ fontSize: 12, fill: COLORS.inkSoft }} axisLine={false} tickLine={false} width={110} />
-                  <Tooltip formatter={(v) => `${v} h`} contentStyle={{ borderRadius: 8, border: `1px solid ${COLORS.border}`, fontSize: 12 }} />
-                  <Bar dataKey="Horas" fill={COLORS.primary} radius={[0, 3, 3, 0]} />
-                </ComposedChart>
-              </ResponsiveContainer>
+            <div className="space-y-3">
+              {(() => {
+                const max = Math.max(1, ...porAnalista.map(([, v]) => v.segundos));
+                return porAnalista.map(([email, v]) => (
+                  <div key={email}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs truncate" style={{ color: COLORS.ink }}>{nomePorEmail.get(email) || email}</span>
+                      <span className="text-xs font-semibold tabular-nums shrink-0 ml-2" style={{ color: COLORS.primary }}>{fmtDuracao(v.segundos)}</span>
+                    </div>
+                    <div className="h-[8px] rounded-full overflow-hidden" style={{ background: "#F0EEE7" }}>
+                      <div className="h-full rounded-full" style={{ background: COLORS.primary, width: `${Math.round((v.segundos / max) * 100)}%` }} />
+                    </div>
+                  </div>
+                ));
+              })()}
             </div>
           )}
         </Card>
         <Card className="p-4">
-          <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.ink }}>Horas por empresa</h2>
-          {chartEmpresa.length === 0 ? (
+          <div className="flex items-center gap-2.5 mb-3.5">
+            <div className="w-[30px] h-[30px] rounded-[9px] flex items-center justify-center shrink-0" style={{ background: COLORS.goldSoft }}>
+              <Building2 size={15} color={COLORS.gold} />
+            </div>
+            <h2 className="text-sm font-semibold flex-1" style={{ color: COLORS.ink }}>Horas por empresa</h2>
+            <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full" style={{ background: COLORS.goldSoft, color: COLORS.gold }}>
+              {fmtDuracao(totalSegundos(porEmpresa))}
+            </span>
+          </div>
+          {porEmpresa.length === 0 ? (
             <p className="text-sm py-8 text-center" style={{ color: COLORS.inkSoft }}>Sem cronômetro registrado nesse período.</p>
           ) : (
-            <div style={{ width: "100%", height: 220 }}>
-              <ResponsiveContainer>
-                <ComposedChart data={chartEmpresa} layout="vertical" margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 11, fill: COLORS.inkSoft }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-                  <YAxis type="category" dataKey="nome" tick={{ fontSize: 12, fill: COLORS.inkSoft }} axisLine={false} tickLine={false} width={110} />
-                  <Tooltip formatter={(v) => `${v} h`} contentStyle={{ borderRadius: 8, border: `1px solid ${COLORS.border}`, fontSize: 12 }} />
-                  <Bar dataKey="Horas" fill={COLORS.gold} radius={[0, 3, 3, 0]} />
-                </ComposedChart>
-              </ResponsiveContainer>
+            <div className="space-y-3">
+              {(() => {
+                const max = Math.max(1, ...porEmpresa.map(([, v]) => v.segundos));
+                return porEmpresa.map(([id, v]) => (
+                  <div key={id}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs truncate" style={{ color: COLORS.ink }}>{empresaNome(id)}</span>
+                      <span className="text-xs font-semibold tabular-nums shrink-0 ml-2" style={{ color: COLORS.gold }}>{fmtDuracao(v.segundos)}</span>
+                    </div>
+                    <div className="h-[8px] rounded-full overflow-hidden" style={{ background: "#F0EEE7" }}>
+                      <div className="h-full rounded-full" style={{ background: COLORS.gold, width: `${Math.round((v.segundos / max) * 100)}%` }} />
+                    </div>
+                  </div>
+                ));
+              })()}
             </div>
           )}
         </Card>
@@ -2935,9 +2995,12 @@ function ProdutividadeView({ role, empresas = [], timeSessions = [] }) {
               </tr>
             </thead>
             <tbody>
-              {porAnalista.map(([email, v]) => (
+              {porAnalista.map(([email, v], i) => (
                 <tr key={email} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{nomePorEmail.get(email) || email}</td>
+                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>
+                    <span className="inline-block w-[7px] h-[7px] rounded-full mr-2" style={{ background: DOTS[i % DOTS.length] }} />
+                    {nomePorEmail.get(email) || email}
+                  </td>
                   <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtDuracao(v.segundos)}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{v.acoes}</td>
                 </tr>
@@ -2960,9 +3023,12 @@ function ProdutividadeView({ role, empresas = [], timeSessions = [] }) {
               </tr>
             </thead>
             <tbody>
-              {porEmpresa.map(([id, v]) => (
+              {porEmpresa.map(([id, v], i) => (
                 <tr key={id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{empresaNome(id)}</td>
+                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>
+                    <span className="inline-block w-[7px] h-[7px] rounded-full mr-2" style={{ background: DOTS[i % DOTS.length] }} />
+                    {empresaNome(id)}
+                  </td>
                   <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtDuracao(v.segundos)}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{v.acoes}</td>
                 </tr>
@@ -11113,6 +11179,29 @@ function monthFlowFor(payables, receivables, bankEntries, y, m) {
   return { entradas, saidas };
 }
 
+// Mesma composição do monthFlowFor, mas linha a linha — alimenta o extrato
+// de um mês ao clicar na barra no Resumo (decidir se vale antecipar algo
+// naquele mês em vez de só ver o total agregado).
+function monthMovementsFor(payables, receivables, bankEntries, y, m) {
+  const movs = [];
+  receivables.forEach((r) => {
+    if (r.status === "Recebido" && yearOf(r.dataReceb) === y && monthIndex(r.dataReceb) === m) {
+      movs.push({ nome: r.cliente, data: r.dataReceb, valor: Number(r.valorRecebido || r.valor || 0), tipo: "entrada" });
+    }
+  });
+  payables.forEach((p) => {
+    if (p.status === "Pago" && yearOf(p.dataPgto) === y && monthIndex(p.dataPgto) === m) {
+      movs.push({ nome: p.fornecedor, data: p.dataPgto, valor: Number(p.valorPago || p.valor || 0), tipo: "saida" });
+    }
+  });
+  bankEntries.forEach((b) => {
+    if (yearOf(b.data) === y && monthIndex(b.data) === m) {
+      movs.push({ nome: b.descricao || "Lançamento bancário", data: b.data, valor: Number(b.valor || 0), tipo: b.tipo === "Entrada" ? "entrada" : "saida" });
+    }
+  });
+  return movs.sort((a, b) => (a.data || "").localeCompare(b.data || ""));
+}
+
 // Lista simples de itens (já filtrados por status) ordenada por vencimento
 // — cada aba do ExposureCard já chega aqui só com o que pertence àquele
 // status, então não precisa mais filtrar/agrupar por data aqui dentro.
@@ -11188,6 +11277,7 @@ function ExposureCard({ title, items, nameField, tipo }) {
 
 function ResumoView({ accounts, payables, receivables, bankEntries, transfers, accountBalance, totalBalance, accountAvailableBalance, totalAvailableBalance }) {
   const [monthOffset, setMonthOffset] = useState(0);
+  const [selectedFlowIdx, setSelectedFlowIdx] = useState(null);
   const now = new Date();
 
   const months = [-1, 0, 1].map((d) => {
@@ -11195,6 +11285,11 @@ function ResumoView({ accounts, payables, receivables, bankEntries, transfers, a
     return { y: dt.getFullYear(), m: dt.getMonth() };
   });
   const flow = months.map(({ y, m }) => ({ y, m, ...monthFlowFor(payables, receivables, bankEntries, y, m) }));
+  const BAR_MAX = 55;
+  const maxMov = Math.max(1, ...flow.map((f) => Math.max(f.entradas, f.saidas)));
+  const mudarMes = (fn) => { setMonthOffset(fn); setSelectedFlowIdx(null); };
+  const selecionado = selectedFlowIdx !== null ? flow[selectedFlowIdx] : null;
+  const extratoSelecionado = selecionado ? monthMovementsFor(payables, receivables, bankEntries, selecionado.y, selecionado.m) : [];
 
   return (
     <div className="space-y-4">
@@ -11234,26 +11329,73 @@ function ResumoView({ accounts, payables, receivables, bankEntries, transfers, a
         </Card>
 
         <Card className="p-4">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-1">
             <h2 className="text-sm font-semibold" style={{ color: COLORS.ink }}>Fluxo de caixa</h2>
-            <div className="flex items-center gap-1">
-              <button onClick={() => setMonthOffset((o) => o - 1)} title="Mês anterior" className="p-1 rounded hover:bg-black/5"><ChevronLeft size={16} color={COLORS.inkSoft} /></button>
-              <button onClick={() => setMonthOffset(0)} title="Voltar pro mês atual" className="text-xs px-1.5" style={{ color: COLORS.inkSoft }}>hoje</button>
-              <button onClick={() => setMonthOffset((o) => o + 1)} title="Próximo mês" className="p-1 rounded hover:bg-black/5"><ChevronRight size={16} color={COLORS.inkSoft} /></button>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 text-xs" style={{ color: COLORS.inkSoft }}>
+                <span className="w-2 h-2 rounded-sm inline-block" style={{ background: COLORS.green }} />Entradas
+                <span className="w-2 h-2 rounded-sm inline-block ml-1.5" style={{ background: COLORS.red }} />Saídas
+              </div>
+              <div className="flex items-center gap-1">
+                <button onClick={() => mudarMes((o) => o - 1)} title="Mês anterior" className="p-1 rounded hover:bg-black/5"><ChevronLeft size={16} color={COLORS.inkSoft} /></button>
+                <button onClick={() => mudarMes(() => 0)} title="Voltar pro mês atual" className="text-xs px-1.5" style={{ color: COLORS.inkSoft }}>hoje</button>
+                <button onClick={() => mudarMes((o) => o + 1)} title="Próximo mês" className="p-1 rounded hover:bg-black/5"><ChevronRight size={16} color={COLORS.inkSoft} /></button>
+              </div>
             </div>
           </div>
-          <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
-            {flow.map(({ y, m, entradas, saidas }) => (
-              <div key={`${y}-${m}`} className="rounded-lg p-2.5" style={{ background: "#F8F7F3" }}>
-                <p className="text-xs font-medium mb-1.5" style={{ color: COLORS.inkSoft }}>{MONTH_NAMES[m].slice(0, 3)}/{String(y).slice(2)}</p>
-                <p className="text-xs" style={{ color: COLORS.green }}>+{fmtBRL(entradas)}</p>
-                <p className="text-xs" style={{ color: COLORS.red }}>−{fmtBRL(saidas)}</p>
-                <p className="text-xs font-semibold mt-1" style={{ color: entradas - saidas >= 0 ? COLORS.green : COLORS.red }}>
-                  {fmtBRL(entradas - saidas)}
-                </p>
-              </div>
-            ))}
+          <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>Clique num mês pra ver o extrato e avaliar se vale antecipar pagamento ou recebimento.</p>
+          <div className="flex items-stretch gap-1.5" style={{ height: 130 }}>
+            {flow.map(({ y, m, entradas, saidas }, idx) => {
+              const selected = selectedFlowIdx === idx;
+              return (
+                <button
+                  key={`${y}-${m}`}
+                  onClick={() => setSelectedFlowIdx(selected ? null : idx)}
+                  className="flex-1 min-w-0 flex flex-col items-center rounded-lg"
+                  style={{ background: selected ? COLORS.greenSoft : "transparent", padding: "6px 4px", border: "none", cursor: "pointer" }}
+                >
+                  <div className="flex-1 flex flex-col justify-end w-full items-center">
+                    <div style={{ width: "58%", background: COLORS.green, borderRadius: "3px 3px 0 0", height: Math.round((entradas / maxMov) * BAR_MAX) }} />
+                  </div>
+                  <div className="w-full shrink-0" style={{ height: 1, background: COLORS.border }} />
+                  <div className="flex-1 flex flex-col w-full items-center">
+                    <div style={{ width: "58%", background: COLORS.red, borderRadius: "0 0 3px 3px", height: Math.round((saidas / maxMov) * BAR_MAX) }} />
+                  </div>
+                  <p className="text-xs font-medium mt-1.5" style={{ color: selected ? COLORS.primary : COLORS.inkSoft }}>
+                    {MONTH_NAMES[m].slice(0, 3)}/{String(y).slice(2)}
+                  </p>
+                </button>
+              );
+            })}
           </div>
+          {selecionado && (
+            <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold" style={{ color: COLORS.ink }}>
+                  Extrato de {MONTH_NAMES[selecionado.m].slice(0, 3)}/{String(selecionado.y).slice(2)}
+                </p>
+                <button onClick={() => setSelectedFlowIdx(null)} className="text-xs underline" style={{ color: COLORS.inkSoft }}>fechar</button>
+              </div>
+              {extratoSelecionado.length === 0 ? (
+                <p className="text-xs py-1.5" style={{ color: COLORS.inkSoft }}>Nada neste mês.</p>
+              ) : (
+                <div className="space-y-1">
+                  {extratoSelecionado.map((e, i) => (
+                    <div key={i} className="flex items-center gap-2.5 py-1.5" style={{ borderBottom: i < extratoSelecionado.length - 1 ? `1px solid #F0EEE7` : "none" }}>
+                      <span className="w-[3px] self-stretch rounded shrink-0" style={{ background: e.tipo === "entrada" ? COLORS.green : COLORS.red }} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs" style={{ color: COLORS.ink }}>{e.nome}</p>
+                        <p className="text-[11px]" style={{ color: COLORS.inkSoft }}>{fmtDate(e.data)} · {e.tipo === "entrada" ? "Entrada" : "Saída"}</p>
+                      </div>
+                      <p className="text-xs font-semibold tabular-nums" style={{ color: e.tipo === "entrada" ? COLORS.green : COLORS.red }}>
+                        {e.tipo === "entrada" ? "+" : "−"}{fmtBRL(e.valor)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </Card>
       </div>
 
