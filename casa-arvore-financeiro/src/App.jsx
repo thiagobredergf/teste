@@ -3331,6 +3331,13 @@ function AccountModal({ initial, onClose, onSubmit }) {
 /*  Contatos (fornecedores/clientes) — cadastro único, usado tanto em      */
 /*  Contas a Pagar quanto em Contas a Receber, pra futura cobrança.        */
 /* ---------------------------------------------------------------------- */
+const TIPO_CONTATO_LABELS = {
+  cliente: "Cliente",
+  fornecedor: "Fornecedor",
+  socio: "Sócio",
+  funcionario: "Funcionário",
+};
+
 function ContactsView({ contacts, selectedEmpresa, onSave }) {
   const [modal, setModal] = useState(null);
   const [importModal, setImportModal] = useState(false);
@@ -3366,6 +3373,7 @@ function ContactsView({ contacts, selectedEmpresa, onSave }) {
             <thead>
               <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
                 <th className="text-left font-medium px-4 py-2.5">Nome</th>
+                <th className="text-left font-medium px-4 py-2.5">Tipo</th>
                 <th className="text-left font-medium px-4 py-2.5">CPF/CNPJ</th>
                 <th className="text-left font-medium px-4 py-2.5">Contato</th>
                 <th className="text-right font-medium px-4 py-2.5">Ações</th>
@@ -3378,6 +3386,7 @@ function ContactsView({ contacts, selectedEmpresa, onSave }) {
                     <p className="font-medium">{c.nome}</p>
                     {c.email && <p className="text-xs" style={{ color: COLORS.inkSoft }}>{c.email}</p>}
                   </td>
+                  <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{TIPO_CONTATO_LABELS[c.tipoContato] || "—"}</td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{c.documento || "—"}</td>
                   <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{c.contato || "—"}</td>
                   <td className="px-4 py-2.5">
@@ -3560,10 +3569,47 @@ function ContactModal({ initial, contacts = [], onClose, onSubmit }) {
     nome: "", documento: "", contato: "", email: "",
     bancoCnab: "", agenciaCnab: "", contaCnab: "", contaCnabDigito: "", tipoContaCnab: "CC",
     ...initial,
+    tipoPessoa: initial.tipoPessoa || "juridica",
+    tipoContato: initial.tipoContato || "",
   });
   const [bancoCnabOutro, setBancoCnabOutro] = useState(() => !!form.bancoCnab && !BANCOS_BRASIL.some((b) => b.codigo === form.bancoCnab));
   const [autoFillNote, setAutoFillNote] = useState("");
+  const [cnpjStatus, setCnpjStatus] = useState(""); // "", "loading", "error"
+  const [cnpjError, setCnpjError] = useState("");
   const valid = form.nome.trim() && form.empresaId;
+
+  const handleTipoPessoa = (tipoPessoa) => {
+    if (tipoPessoa === form.tipoPessoa) return;
+    setCnpjError("");
+    setForm((f) => ({ ...f, tipoPessoa, documento: "" }));
+  };
+
+  // Mesma consulta pública (BrasilAPI) já usada no cadastro de Empresas —
+  // só se aplica a CNPJ (não existe consulta pública gratuita por CPF).
+  const buscarCnpj = async () => {
+    const digits = (form.documento || "").replace(/\D/g, "");
+    if (digits.length !== 14) {
+      setCnpjError("CNPJ precisa ter 14 dígitos.");
+      return;
+    }
+    setCnpjStatus("loading");
+    setCnpjError("");
+    try {
+      const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`);
+      if (!res.ok) throw new Error(res.status === 404 ? "CNPJ não encontrado." : "Falha ao consultar.");
+      const data = await res.json();
+      setForm((f) => ({ ...f, nome: f.nome.trim() ? f.nome : (data.nome_fantasia || data.razao_social || f.nome) }));
+      setCnpjStatus("");
+    } catch (err) {
+      setCnpjStatus("error");
+      const generic = !err.message || /failed to fetch/i.test(err.message);
+      setCnpjError(
+        generic
+          ? "Não consegui buscar agora — o serviço de consulta de CNPJ pode estar temporariamente sobrecarregado. Tente de novo em alguns instantes, ou preencha os campos manualmente."
+          : err.message
+      );
+    }
+  };
 
   // Mesmo nome já cadastrado em OUTRA empresa (ex: um fornecedor que atende
   // mais de uma do grupo) — copia CPF/CNPJ, contato e e-mail de lá pra não
@@ -3593,7 +3639,54 @@ function ContactModal({ initial, contacts = [], onClose, onSubmit }) {
           </p>
         )}
         <Field label="Nome"><TextInput value={form.nome} onChange={(e) => handleNome(e.target.value)} /></Field>
-        <Field label="CPF/CNPJ"><TextInput value={form.documento} onChange={(e) => setForm({ ...form, documento: e.target.value })} placeholder="000.000.000-00 ou 00.000.000/0000-00" /></Field>
+
+        <Field label="Tipo de pessoa">
+          <div className="inline-flex rounded-lg overflow-hidden" style={{ border: `1px solid ${COLORS.border}` }}>
+            <button
+              type="button"
+              onClick={() => handleTipoPessoa("juridica")}
+              className="px-3 py-1.5 text-sm"
+              style={{ background: form.tipoPessoa === "juridica" ? COLORS.primary : "transparent", color: form.tipoPessoa === "juridica" ? "#fff" : COLORS.inkSoft }}
+            >
+              Pessoa Jurídica
+            </button>
+            <button
+              type="button"
+              onClick={() => handleTipoPessoa("fisica")}
+              className="px-3 py-1.5 text-sm"
+              style={{ background: form.tipoPessoa === "fisica" ? COLORS.primary : "transparent", color: form.tipoPessoa === "fisica" ? "#fff" : COLORS.inkSoft }}
+            >
+              Pessoa Física
+            </button>
+          </div>
+        </Field>
+
+        <Field label={form.tipoPessoa === "fisica" ? "CPF" : "CNPJ"}>
+          <div className="flex gap-2">
+            <TextInput
+              value={form.documento}
+              onChange={(e) => setForm({ ...form, documento: form.tipoPessoa === "fisica" ? formatCPF(e.target.value) : formatCNPJ(e.target.value) })}
+              placeholder={form.tipoPessoa === "fisica" ? "000.000.000-00" : "00.000.000/0000-00"}
+            />
+            {form.tipoPessoa === "juridica" && (
+              <Button type="button" variant="subtle" onClick={buscarCnpj} disabled={cnpjStatus === "loading"}>
+                <Search size={14} /> {cnpjStatus === "loading" ? "Buscando…" : "Buscar"}
+              </Button>
+            )}
+          </div>
+          {cnpjError && <p className="text-xs mt-1" style={{ color: COLORS.red }}>{cnpjError}</p>}
+        </Field>
+
+        <Field label="Tipo de contato (opcional)">
+          <Select value={form.tipoContato} onChange={(e) => setForm({ ...form, tipoContato: e.target.value })}>
+            <option value="">Não classificado</option>
+            <option value="cliente">Cliente</option>
+            <option value="fornecedor">Fornecedor</option>
+            <option value="socio">Sócio</option>
+            <option value="funcionario">Funcionário</option>
+          </Select>
+        </Field>
+
         <Field label="Contato (telefone/WhatsApp)"><TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} /></Field>
         <Field label="E-mail"><TextInput type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
 
