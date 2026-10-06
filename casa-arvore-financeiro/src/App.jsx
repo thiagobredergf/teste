@@ -1988,6 +1988,15 @@ function Dashboard({
     return ultimos.map((v) => Math.round((Math.abs(v) / max) * 18) + 4);
   };
 
+  const proximosVencimentos = useMemo(() => {
+    const itens = [
+      ...upcomingPayables.map((p) => ({ ...p, tipo: "pagar" })),
+      ...upcomingReceivables.map((r) => ({ ...r, tipo: "receber" })),
+    ];
+    itens.sort((a, b) => a.vencimento.localeCompare(b.vencimento));
+    return itens.slice(0, 6);
+  }, [upcomingPayables, upcomingReceivables]);
+
   const kpis = [
     { label: "Entradas no ano", value: totals.totalEntradas, icon: TrendingUp, tone: "green", spark: sparkOf(monthlyFlow.entradas) },
     { label: "Saídas no ano", value: totals.totalSaidas, icon: TrendingDown, tone: "red", spark: sparkOf(monthlyFlow.saidas) },
@@ -2041,15 +2050,15 @@ function Dashboard({
         <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.ink }}>Entradas × Saídas × Saldo acumulado</h2>
         <div style={{ width: "100%", height: 260 }}>
           <ResponsiveContainer>
-            <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }} barGap={2}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} vertical={false} />
               <XAxis dataKey="mes" tick={{ fontSize: 12, fill: COLORS.inkSoft }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
               <YAxis tick={{ fontSize: 11, fill: COLORS.inkSoft }} axisLine={false} tickLine={false} width={70}
                 tickFormatter={(v) => v.toLocaleString("pt-BR", { notation: "compact", compactDisplay: "short" })} />
               <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 8, border: `1px solid ${COLORS.border}`, fontSize: 12 }} />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="Entradas" fill={COLORS.green} radius={[3, 3, 0, 0]} />
-              <Bar dataKey="Saídas" fill={COLORS.red} radius={[3, 3, 0, 0]} />
+              <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" iconSize={8} />
+              <Bar dataKey="Entradas" fill="#BFDBC9" radius={[3, 3, 0, 0]} maxBarSize={22} />
+              <Bar dataKey="Saídas" fill="#E3C9C0" radius={[3, 3, 0, 0]} maxBarSize={22} />
               <Line type="monotone" dataKey="Acumulado" stroke={COLORS.primary} strokeWidth={2} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -2092,38 +2101,23 @@ function Dashboard({
 
         <Card className="p-4">
           <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.ink }}>Próximos vencimentos</h2>
-          <div className="space-y-2">
-            {upcomingPayables.length === 0 && upcomingReceivables.length === 0 && (
+          <div className="space-y-1.5">
+            {proximosVencimentos.length === 0 && (
               <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nada pendente no momento.</p>
             )}
-            {upcomingPayables.map((p) => {
-              const dias = daysUntil(p.vencimento);
+            {proximosVencimentos.map((item) => {
+              const dias = daysUntil(item.vencimento);
               const cor = dias < 0 ? COLORS.red : dias <= 10 ? COLORS.amber : COLORS.border;
+              const ehPagar = item.tipo === "pagar";
               return (
-                <div key={p.id} className="flex items-center gap-2.5 py-1">
+                <div key={`${item.tipo}-${item.id}`} className="flex items-center gap-2.5 py-0.5">
                   <span className="w-[3px] self-stretch rounded shrink-0" style={{ background: cor }} />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm truncate" style={{ color: COLORS.ink }}>{p.fornecedor}</p>
-                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>Pagar · {fmtDate(p.vencimento)}</p>
+                    <p className="text-sm truncate" style={{ color: COLORS.ink }}>{ehPagar ? item.fornecedor : item.cliente}</p>
+                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>{ehPagar ? "Pagar" : "Receber"} · {fmtDate(item.vencimento)}</p>
                   </div>
-                  <p className="text-sm font-medium tabular-nums shrink-0" style={{ color: COLORS.red }}>
-                    −{fmtBRL(p.valor)}
-                  </p>
-                </div>
-              );
-            })}
-            {upcomingReceivables.map((r) => {
-              const dias = daysUntil(r.vencimento);
-              const cor = dias < 0 ? COLORS.red : dias <= 10 ? COLORS.amber : COLORS.border;
-              return (
-                <div key={r.id} className="flex items-center gap-2.5 py-1">
-                  <span className="w-[3px] self-stretch rounded shrink-0" style={{ background: cor }} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm truncate" style={{ color: COLORS.ink }}>{r.cliente}</p>
-                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>Receber · {fmtDate(r.vencimento)}</p>
-                  </div>
-                  <p className="text-sm font-medium tabular-nums shrink-0" style={{ color: COLORS.green }}>
-                    +{fmtBRL(r.valor)}
+                  <p className="text-sm font-medium tabular-nums shrink-0" style={{ color: ehPagar ? COLORS.red : COLORS.green }}>
+                    {ehPagar ? "−" : "+"}{fmtBRL(item.valor)}
                   </p>
                 </div>
               );
@@ -2135,16 +2129,18 @@ function Dashboard({
       <div className="grid md:grid-cols-2 gap-4">
         <Card className="p-4">
           <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.ink }}>Despesas por categoria</h2>
-          <BreakdownTable
+          <CategoryBarChart
             data={categoryBreakdown}
-            columns={[{ key: "pago", label: "Pago" }, { key: "aPagar", label: "A pagar" }]}
+            labels={[{ key: "pago", label: "Pago" }, { key: "aPagar", label: "A pagar" }]}
+            tone="red"
           />
         </Card>
         <Card className="p-4">
           <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.ink }}>Receitas por categoria</h2>
-          <BreakdownTable
+          <CategoryBarChart
             data={receivableBreakdown}
-            columns={[{ key: "recebido", label: "Recebido" }, { key: "aReceber", label: "A receber" }]}
+            labels={[{ key: "recebido", label: "Recebido" }, { key: "aReceber", label: "A receber" }]}
+            tone="green"
           />
         </Card>
       </div>
@@ -2152,32 +2148,39 @@ function Dashboard({
   );
 }
 
-function BreakdownTable({ data, columns }) {
-  const rows = Object.entries(data);
+function CategoryBarChart({ data, labels, tone }) {
+  const rows = Object.entries(data)
+    .map(([cat, vals]) => ({ cat, a: vals[labels[0].key] || 0, b: vals[labels[1].key] || 0 }))
+    .sort((x, y) => (y.a + y.b) - (x.a + x.b));
   if (rows.length === 0) return <p className="text-sm" style={{ color: COLORS.inkSoft }}>Sem lançamentos ainda.</p>;
+  const maxTotal = Math.max(1, ...rows.map((r) => r.a + r.b));
+  const corForte = tone === "red" ? COLORS.red : COLORS.green;
+  const corRealizado = tone === "red" ? "#E3C9C0" : "#BFDBC9";
+  const corPendente = tone === "red" ? "#F1E3DD" : "#DCEDE1";
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr style={{ color: COLORS.inkSoft }}>
-          <th className="text-left font-medium pb-2">Categoria</th>
-          {columns.map((c) => (
-            <th key={c.key} className="text-right font-medium pb-2">{c.label}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map(([cat, vals]) => (
-          <tr key={cat} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-            <td className="py-1.5" style={{ color: COLORS.ink }}>{cat}</td>
-            {columns.map((c) => (
-              <td key={c.key} className="py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>
-                {fmtBRL(vals[c.key] || 0)}
-              </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div>
+      <div className="space-y-2.5">
+        {rows.map((r) => {
+          const total = r.a + r.b;
+          const pctA = (r.a / maxTotal) * 100;
+          const pctB = (r.b / maxTotal) * 100;
+          return (
+            <div key={r.cat} className="flex items-center gap-2.5">
+              <span className="w-28 text-xs shrink-0 truncate" style={{ color: COLORS.inkSoft }}>{r.cat}</span>
+              <div className="flex-1 flex rounded overflow-hidden" style={{ height: 14, background: COLORS.bg }}>
+                <div style={{ width: `${pctA}%`, background: corRealizado }} />
+                <div style={{ width: `${pctB}%`, background: corPendente }} />
+              </div>
+              <span className="w-24 text-right text-xs font-semibold tabular-nums shrink-0" style={{ color: corForte }}>{fmtBRL(total)}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex items-center gap-3 pt-2.5 text-[10.5px]" style={{ color: COLORS.inkSoft }}>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: corRealizado }} />{labels[0].label}</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: corPendente }} />{labels[1].label}</span>
+      </div>
+    </div>
   );
 }
 
