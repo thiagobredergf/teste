@@ -3842,8 +3842,12 @@ function FilterBar({ search, setSearch, status, setStatus, statusOptions, placeh
 }
 
 function StatusSummary({ items, statuses }) {
+  // auto-fit (em vez de repeat(N, 1fr) fixo) deixa o card nunca passar de
+  // minmax — numa tela mais estreita (notebook menor) os cards que não
+  // couberem na linha quebram pra linha de baixo, em vez de espremer até
+  // o texto virar ilegível/sobrepor.
   return (
-    <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${statuses.length}, minmax(0,1fr))` }}>
+    <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))" }}>
       {statuses.map(({ key, label, tone }) => {
         const subset = items.filter((i) => i.statusDisplay === key);
         const total = subset.reduce((s, i) => s + Number(i.valor || 0), 0);
@@ -7705,7 +7709,7 @@ function AgingTable({ title, tone, items, dateField, nameField }) {
 
   return (
     <ReportCard title={title}>
-      <div className="grid grid-cols-5 gap-2 mb-4">
+      <div className="grid gap-2 mb-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))" }}>
         {Object.entries(buckets).map(([label, valor]) => (
           <div key={label} className="rounded-lg p-2.5 text-center" style={{ background: valor > 0 ? (tone === "red" ? COLORS.redSoft : COLORS.amberSoft) : "#F3F2ED" }}>
             <p className="text-[11px]" style={{ color: COLORS.inkSoft }}>{label}</p>
@@ -8781,7 +8785,7 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
 
       {result && (
         <>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
             <Card className="p-3 text-center">
               <p className="text-xs" style={{ color: COLORS.inkSoft }}>Bateram automaticamente</p>
               <p className="text-xl font-semibold" style={{ color: COLORS.green }}>{result.matches.length}</p>
@@ -11242,7 +11246,7 @@ function ResumoView({ accounts, payables, receivables, bankEntries, transfers, a
               <button onClick={() => setMonthOffset((o) => o + 1)} title="Próximo mês" className="p-1 rounded hover:bg-black/5"><ChevronRight size={16} color={COLORS.inkSoft} /></button>
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
             {flow.map(({ y, m, entradas, saidas }) => (
               <div key={`${y}-${m}`} className="rounded-lg p-2.5" style={{ background: "#F8F7F3" }}>
                 <p className="text-xs font-medium mb-1.5" style={{ color: COLORS.inkSoft }}>{MONTH_NAMES[m].slice(0, 3)}/{String(y).slice(2)}</p>
