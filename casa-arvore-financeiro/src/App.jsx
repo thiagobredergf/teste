@@ -1831,43 +1831,15 @@ function FinanceiroApp({ userEmail, onLogout }) {
         )}
           </main>
 
-          {/* Atividade recente */}
+          {/* Pendências primeiro (o que precisa de ação), Atividade recente
+              depois (o que já aconteceu) — inverter a ordem de antes
+              prioriza o que exige decisão sobre o que é só histórico. */}
           <aside
             className="w-72 shrink-0 p-5 space-y-4 print:hidden hidden xl:flex xl:flex-col overflow-y-auto"
             style={{ background: COLORS.panel, borderLeft: `1px solid ${COLORS.border}` }}
           >
-            <div>
-              <p className="font-semibold text-sm" style={{ color: COLORS.ink }}>Atividade recente</p>
-              <p className="text-xs" style={{ color: COLORS.inkSoft }}>Últimos lançamentos registrados</p>
-            </div>
-            {recentActivity.length === 0 ? (
-              <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma atividade ainda.</p>
-            ) : (
-              <div className="space-y-3">
-                {recentActivity.map((item) => {
-                  const meta = ACTIVITY_META[item.tipo];
-                  const Icon = meta.icon;
-                  return (
-                    <div key={item.id} className="flex items-start gap-2.5">
-                      <span
-                        className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
-                        style={{ background: meta.bg, color: meta.fg }}
-                      >
-                        <Icon size={14} />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium truncate" style={{ color: COLORS.ink }}>{item.label}</p>
-                        <p className="text-xs truncate" style={{ color: COLORS.inkSoft }}>{item.sub || meta.label} · {fmtBRL(item.valor)}</p>
-                        <p className="text-[11px]" style={{ color: COLORS.inkSoft }}>{timeAgo(item.data)}</p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
             {selectedEmpresa && (
-              <div className="pt-4 mt-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+              <div>
                 <p className="font-semibold text-sm" style={{ color: COLORS.ink }}>Pendências</p>
                 <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>O que precisa de atenção nesta empresa</p>
                 {pendingDocs.length === 0 && pendingContacts.length === 0 && pendingSemCategoria === 0 && pendingNaoConciliados === 0 && pendingVencidos === 0 ? (
@@ -1892,7 +1864,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                     )}
                     {pendingNaoConciliados > 0 && (
                       <button
-                        onClick={() => goToView("pendencias")}
+                        onClick={() => goToView("reconciliation")}
                         className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
                       >
                         <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
@@ -1956,6 +1928,36 @@ function FinanceiroApp({ userEmail, onLogout }) {
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            <div className={selectedEmpresa ? "pt-4 mt-1" : ""} style={selectedEmpresa ? { borderTop: `1px solid ${COLORS.border}` } : undefined}>
+              <p className="font-semibold text-sm" style={{ color: COLORS.ink }}>Atividade recente</p>
+              <p className="text-xs" style={{ color: COLORS.inkSoft }}>Últimos lançamentos registrados</p>
+            </div>
+            {recentActivity.length === 0 ? (
+              <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma atividade ainda.</p>
+            ) : (
+              <div className="space-y-3">
+                {recentActivity.map((item) => {
+                  const meta = ACTIVITY_META[item.tipo];
+                  const Icon = meta.icon;
+                  return (
+                    <div key={item.id} className="flex items-start gap-2.5">
+                      <span
+                        className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+                        style={{ background: meta.bg, color: meta.fg }}
+                      >
+                        <Icon size={14} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium truncate" style={{ color: COLORS.ink }}>{item.label}</p>
+                        <p className="text-xs truncate" style={{ color: COLORS.inkSoft }}>{item.sub || meta.label} · {fmtBRL(item.valor)}</p>
+                        <p className="text-[11px]" style={{ color: COLORS.inkSoft }}>{timeAgo(item.data)}</p>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </aside>
