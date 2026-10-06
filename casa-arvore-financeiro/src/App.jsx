@@ -4318,9 +4318,23 @@ function PayablesView({
   // (Dar baixa) mexe nesses campos.
   const confirmSchedule = (ids, agendadoPara, contaAgendadaId) => {
     const idSet = new Set(ids);
-    onSave(payables.map((p) => (idSet.has(p.id) ? { ...p, status: "Agendado", agendadoPara, contaAgendadaId } : p)));
+    const foiLote = scheduleModal === true;
+    const atualizados = payables.map((p) => (idSet.has(p.id) ? { ...p, status: "Agendado", agendadoPara, contaAgendadaId } : p));
+    onSave(atualizados);
     ids.forEach((id) => logAudit(selectedEmpresa, "payable", id, "agendar", `Incluído na ordem de pagamento — proposto pra ${fmtDate(agendadoPara)}`, userEmail));
     setScheduleModal(false);
+    // "Agendar pagamentos" em lote (toolbar, usado tanto na Lista quanto
+    // no Quadro) é um clique explícito de "terminei de selecionar" —
+    // avisa o dono na hora. Um arrasto individual no Kanban não tem esse
+    // sinal (pode vir mais um arrasto em seguida), por isso só fica
+    // pendente e é consolidado quando a tela for fechada (ver useEffect
+    // de cleanup, mais abaixo).
+    if (foiLote) {
+      const pendentes = atualizados.filter((p) => p.empresaId === selectedEmpresa && p.status === "Agendado" && !p.notificadoDonoEm);
+      enviarNotificacaoDono(pendentes, atualizados, {
+        onFail: () => alert("Cadastre o celular do dono em Cadastros → Editar empresa antes de notificar — o agendamento foi salvo normalmente."),
+      });
+    }
   };
 
   const confirmBatchPayment = (items, dataPgto, contaPgtoId) => {
@@ -4419,21 +4433,58 @@ function PayablesView({
     setCnabModal(false);
   };
 
-  const notifyOwner = () => {
-    const linhas = agendados.map((p) => `• ${p.fornecedor} — ${fmtBRL(p.valor)} — proposto pra ${fmtDate(p.agendadoPara)}`);
-    const mensagem = [
-      `Olá! Segue a relação de pagamentos aguardando sua autorização${empresa ? ` (${empresa.nome})` : ""}:`,
-      "",
-      ...linhas,
-      "",
-      `Total: ${fmtBRL(agendados.reduce((s, p) => s + Number(p.valor || 0), 0))}`,
-      "",
-      "Pode confirmar a autorização e/ou efetivação desses pagamentos?",
-    ].join("\n");
-    if (!openWhatsApp(empresa?.contatoCelular, mensagem)) {
-      alert("Cadastre o celular do dono em Cadastros → Editar empresa antes de notificar.");
+  const buildMensagemAgendados = (lista) => [
+    `Olá! Segue a relação de pagamentos aguardando sua autorização${empresa ? ` (${empresa.nome})` : ""}:`,
+    "",
+    ...lista.map((p) => `• ${p.fornecedor} — ${fmtBRL(p.valor)} — proposto pra ${fmtDate(p.agendadoPara)}`),
+    "",
+    `Total: ${fmtBRL(lista.reduce((s, p) => s + Number(p.valor || 0), 0))}`,
+    "",
+    "Pode confirmar a autorização e/ou efetivação desses pagamentos?",
+  ].join("\n");
+
+  // Compartilhado pelo clique manual "Notificar dono" e pelos dois
+  // gatilhos automáticos (confirmar "Agendar pagamentos" em lote, sair da
+  // tela com arrasto pendente no Kanban) — sempre ordena pela data mais
+  // próxima primeiro e marca os itens inclusos como avisados, pra uma
+  // próxima mensagem automática nunca repetir nem perder item.
+  const enviarNotificacaoDono = (lista, sourcePayables, { onFail } = {}) => {
+    if (lista.length === 0) return false;
+    const ordenada = [...lista].sort((a, b) => (a.agendadoPara || "").localeCompare(b.agendadoPara || ""));
+    const enviou = openWhatsApp(empresa?.contatoCelular, buildMensagemAgendados(ordenada));
+    if (enviou) {
+      const ids = new Set(ordenada.map((p) => p.id));
+      const agora = new Date().toISOString();
+      onSave(sourcePayables.map((p) => (ids.has(p.id) ? { ...p, notificadoDonoEm: agora } : p)));
+    } else {
+      onFail?.();
     }
+    return enviou;
   };
+
+  const notifyOwner = () => {
+    enviarNotificacaoDono(agendados, payables, {
+      onFail: () => alert("Cadastre o celular do dono em Cadastros → Editar empresa antes de notificar."),
+    });
+  };
+
+  // Ao sair da tela Contas a Pagar (trocar de view), consolida numa única
+  // mensagem automática qualquer agendamento feito arrastando cartão por
+  // cartão no Kanban que ainda não foi avisado — o lote confirmado pelo
+  // toolbar já avisa na hora (ver confirmSchedule); isso só cobre o caso
+  // de vários arrastos individuais em seguida, sem abrir um WhatsApp por
+  // cartão. O cleanup roda no desmonte de verdade, por isso lê sempre do
+  // ref (a closure do efeito, com deps vazias, ficaria presa nos valores
+  // do primeiro render).
+  const latestRef = useRef();
+  latestRef.current = { payables, selectedEmpresa, enviarNotificacaoDono };
+  useEffect(() => {
+    return () => {
+      const { payables, selectedEmpresa, enviarNotificacaoDono } = latestRef.current;
+      const pendentes = payables.filter((p) => p.empresaId === selectedEmpresa && p.status === "Agendado" && !p.notificadoDonoEm);
+      enviarNotificacaoDono(pendentes, payables);
+    };
+  }, []);
 
   return (
     <>
