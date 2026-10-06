@@ -1547,6 +1547,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 totalBalance={totalBalance}
                 accountAvailableBalance={accountAvailableBalance}
                 totalAvailableBalance={totalAvailableBalance}
+                goToView={goToView}
               />
             )}
 
@@ -2059,27 +2060,32 @@ function Dashboard({
           {accounts.length === 0 ? (
             <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma conta cadastrada ainda.</p>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-3.5">
               {(() => {
-                const maxSaldo = Math.max(1, ...accounts.map((a) => Math.abs(accountBalance(a.id))));
+                const maxAbs = Math.max(1, ...accounts.map((a) => Math.abs(accountBalance(a.id))));
                 return accounts.map((a) => {
                   const saldo = accountBalance(a.id);
                   const cor = saldo >= 0 ? COLORS.green : COLORS.red;
+                  const barBg = saldo < 0 ? "#E3C9C0" : "#BFDBC9";
+                  const pct = (Math.abs(saldo) / maxAbs) * 48;
                   return (
-                    <div key={a.id}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs" style={{ color: COLORS.ink }}>{a.nome}</span>
-                        <span className="text-xs font-semibold tabular-nums" style={{ color: cor }}>{fmtBRL(saldo)}</span>
+                    <div key={a.id} className="flex items-center gap-2.5">
+                      <span className="w-20 text-xs shrink-0 truncate" style={{ color: COLORS.inkSoft }}>{a.nome}</span>
+                      <div className="flex-1 relative" style={{ height: 18 }}>
+                        <div className="absolute top-0 bottom-0" style={{ left: "50%", width: 1, background: "#C7C2B3" }} />
+                        <div
+                          className="absolute rounded"
+                          style={{ top: 3, bottom: 3, background: barBg, left: `${saldo < 0 ? 50 - pct : 50}%`, width: `${pct}%` }}
+                        />
                       </div>
-                      <div className="h-[7px] rounded-full overflow-hidden" style={{ background: "#F0EEE7" }}>
-                        <div className="h-full rounded-full" style={{ background: cor, width: `${Math.round((Math.abs(saldo) / maxSaldo) * 100)}%` }} />
-                      </div>
+                      <span className="w-24 text-right text-xs font-semibold tabular-nums shrink-0" style={{ color: cor }}>{fmtBRL(saldo)}</span>
                     </div>
                   );
                 });
               })()}
             </div>
           )}
+          <p className="text-[10.5px] mt-1" style={{ color: COLORS.inkSoft }}>A linha vertical é o zero — barra pra esquerda é saldo negativo, pra direita é positivo.</p>
         </Card>
 
         <Card className="p-4">
@@ -11158,48 +11164,83 @@ function GestorDashboard({ empresas, empresaBreakdown, year, documentUploads, on
 /* ---------------------------------------------------------------------- */
 /*  Resumo (visão estilo BPO — saldo, fluxo navegável, próximos/aberto/vencido) */
 /* ---------------------------------------------------------------------- */
-function monthFlowFor(payables, receivables, bankEntries, y, m) {
-  let entradas = 0, saidas = 0;
-  receivables.forEach((r) => {
-    if (r.status === "Recebido" && yearOf(r.dataReceb) === y && monthIndex(r.dataReceb) === m) {
-      entradas += Number(r.valorRecebido || r.valor || 0);
-    }
-  });
-  payables.forEach((p) => {
-    if (p.status === "Pago" && yearOf(p.dataPgto) === y && monthIndex(p.dataPgto) === m) {
-      saidas += Number(p.valorPago || p.valor || 0);
-    }
-  });
-  bankEntries.forEach((b) => {
-    if (yearOf(b.data) === y && monthIndex(b.data) === m) {
-      if (b.tipo === "Entrada") entradas += Number(b.valor || 0);
-      else saidas += Number(b.valor || 0);
-    }
-  });
-  return { entradas, saidas };
+// Fluxo de caixa diário (não mais por mês): projeta o saldo dia a dia a
+// partir do saldo real de hoje, somando o que já foi realizado nos
+// últimos PAST_DAYS (reconstrução pra desenhar o trecho sólido do
+// gráfico) e o que está agendado/a vencer nos próximos FUTURE_DAYS
+// (trecho pontilhado). Além de montar a série, já diagnostica: se o
+// saldo projetado vai ficar negativo em algum dia futuro, e se existe um
+// único recebível futuro que, antecipado, cobriria o buraco sozinho —
+// pra não só mostrar o problema, mas já sugerir a saída (diferente do
+// usuário ter que interpretar o gráfico por conta própria).
+const FLUXO_PAST_DAYS = 10;
+const FLUXO_FUTURE_DAYS = 20;
+
+function addDaysISO(iso, n) {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
 }
 
-// Mesma composição do monthFlowFor, mas linha a linha — alimenta o extrato
-// de um mês ao clicar na barra no Resumo (decidir se vale antecipar algo
-// naquele mês em vez de só ver o total agregado).
-function monthMovementsFor(payables, receivables, bankEntries, y, m) {
-  const movs = [];
+function dailyCashFlow(payables, receivables, bankEntries, totalBalance) {
+  const hoje = todayISO();
+  const inicioJanela = addDaysISO(hoje, -FLUXO_PAST_DAYS);
+  const limiteFuturo = addDaysISO(hoje, FLUXO_FUTURE_DAYS);
+
+  const passados = [];
   receivables.forEach((r) => {
-    if (r.status === "Recebido" && yearOf(r.dataReceb) === y && monthIndex(r.dataReceb) === m) {
-      movs.push({ nome: r.cliente, data: r.dataReceb, valor: Number(r.valorRecebido || r.valor || 0), tipo: "entrada" });
+    if (r.status === "Recebido" && r.dataReceb >= inicioJanela && r.dataReceb < hoje) {
+      passados.push({ nome: r.cliente, data: r.dataReceb, valor: Number(r.valorRecebido || r.valor || 0), tipo: "entrada" });
     }
   });
   payables.forEach((p) => {
-    if (p.status === "Pago" && yearOf(p.dataPgto) === y && monthIndex(p.dataPgto) === m) {
-      movs.push({ nome: p.fornecedor, data: p.dataPgto, valor: Number(p.valorPago || p.valor || 0), tipo: "saida" });
+    if (p.status === "Pago" && p.dataPgto >= inicioJanela && p.dataPgto < hoje) {
+      passados.push({ nome: p.fornecedor, data: p.dataPgto, valor: Number(p.valorPago || p.valor || 0), tipo: "saida" });
     }
   });
   bankEntries.forEach((b) => {
-    if (yearOf(b.data) === y && monthIndex(b.data) === m) {
-      movs.push({ nome: b.descricao || "Lançamento bancário", data: b.data, valor: Number(b.valor || 0), tipo: b.tipo === "Entrada" ? "entrada" : "saida" });
+    if (b.data >= inicioJanela && b.data < hoje) {
+      passados.push({ nome: b.descricao || "Lançamento bancário", data: b.data, valor: Number(b.valor || 0), tipo: b.tipo === "Entrada" ? "entrada" : "saida" });
     }
   });
-  return movs.sort((a, b) => (a.data || "").localeCompare(b.data || ""));
+  passados.sort((a, b) => a.data.localeCompare(b.data));
+
+  const futuros = [];
+  receivables.forEach((r) => {
+    if (r.status !== "Recebido" && r.vencimento > hoje && r.vencimento <= limiteFuturo) {
+      futuros.push({ id: r.id, nome: r.cliente, data: r.vencimento, valor: Number(r.valor || 0), tipo: "entrada" });
+    }
+  });
+  payables.forEach((p) => {
+    if (p.status !== "Pago" && p.vencimento > hoje && p.vencimento <= limiteFuturo) {
+      futuros.push({ id: p.id, nome: p.fornecedor, data: p.vencimento, valor: Number(p.valor || 0), tipo: "saida" });
+    }
+  });
+  futuros.sort((a, b) => a.data.localeCompare(b.data));
+
+  const totalPassados = passados.reduce((s, e) => s + (e.tipo === "entrada" ? e.valor : -e.valor), 0);
+  let saldoCursor = totalBalance - totalPassados; // saldo no início da janela (PAST_DAYS atrás)
+  const pontos = [];
+  for (let off = -FLUXO_PAST_DAYS; off <= FLUXO_FUTURE_DAYS; off++) {
+    const data = addDaysISO(hoje, off);
+    if (off > -FLUXO_PAST_DAYS) {
+      const evDia = off < 0 ? passados.filter((e) => e.data === data) : off > 0 ? futuros.filter((e) => e.data === data) : [];
+      evDia.forEach((e) => { saldoCursor += e.tipo === "entrada" ? e.valor : -e.valor; });
+    }
+    pontos.push({ offset: off, data, saldo: saldoCursor });
+  }
+
+  const diaCritico = pontos.find((p) => p.offset > 0 && p.saldo < 0);
+  let diagnostico = null;
+  if (diaCritico) {
+    const deficit = Math.abs(diaCritico.saldo);
+    const candidatos = futuros
+      .filter((e) => e.tipo === "entrada" && e.data > diaCritico.data && e.valor >= deficit)
+      .sort((a, b) => a.data.localeCompare(b.data) || a.valor - b.valor);
+    diagnostico = { data: diaCritico.data, deficit, sugestao: candidatos[0] || null };
+  }
+
+  return { pontos, passados, futuros, diagnostico };
 }
 
 // Lista simples de itens (já filtrados por status) ordenada por vencimento
@@ -11275,21 +11316,27 @@ function ExposureCard({ title, items, nameField, tipo }) {
   );
 }
 
-function ResumoView({ accounts, payables, receivables, bankEntries, transfers, accountBalance, totalBalance, accountAvailableBalance, totalAvailableBalance }) {
-  const [monthOffset, setMonthOffset] = useState(0);
-  const [selectedFlowIdx, setSelectedFlowIdx] = useState(null);
-  const now = new Date();
+function ResumoView({ accounts, payables, receivables, bankEntries, transfers, accountBalance, totalBalance, accountAvailableBalance, totalAvailableBalance, goToView }) {
+  const { pontos, passados, futuros, diagnostico } = useMemo(
+    () => dailyCashFlow(payables, receivables, bankEntries, totalBalance),
+    [payables, receivables, bankEntries, totalBalance]
+  );
 
-  const months = [-1, 0, 1].map((d) => {
-    const dt = new Date(now.getFullYear(), now.getMonth() + monthOffset + d, 1);
-    return { y: dt.getFullYear(), m: dt.getMonth() };
+  const W = 760, H = 190, padX = 6, baseY = 150, topY = 10;
+  const saldos = pontos.map((p) => p.saldo);
+  const min = Math.min(0, ...saldos), max = Math.max(0, ...saldos);
+  const xFor = (i) => padX + (i / (pontos.length - 1)) * (W - padX * 2);
+  const yFor = (v) => baseY - ((v - min) / (max - min || 1)) * (baseY - topY);
+  const hojeIdx = pontos.findIndex((p) => p.offset === 0);
+  const zeroY = yFor(0);
+  const hojeX = xFor(hojeIdx);
+  const realizadoPts = pontos.slice(0, hojeIdx + 1).map((p, i) => `${xFor(i)},${yFor(p.saldo)}`).join(" ");
+  const projetadoPts = pontos.slice(hojeIdx).map((p, i) => `${xFor(i + hojeIdx)},${yFor(p.saldo)}`).join(" ");
+  const tickOffsets = [-FLUXO_PAST_DAYS, -Math.round(FLUXO_PAST_DAYS / 2), 0, Math.round(FLUXO_FUTURE_DAYS / 2), FLUXO_FUTURE_DAYS];
+  const tickLabels = tickOffsets.map((off) => {
+    const idx = pontos.findIndex((p) => p.offset === off);
+    return { x: xFor(idx), label: off === 0 ? "Hoje" : fmtDate(pontos[idx].data).slice(0, 5) };
   });
-  const flow = months.map(({ y, m }) => ({ y, m, ...monthFlowFor(payables, receivables, bankEntries, y, m) }));
-  const BAR_MAX = 55;
-  const maxMov = Math.max(1, ...flow.map((f) => Math.max(f.entradas, f.saidas)));
-  const mudarMes = (fn) => { setMonthOffset(fn); setSelectedFlowIdx(null); };
-  const selecionado = selectedFlowIdx !== null ? flow[selectedFlowIdx] : null;
-  const extratoSelecionado = selecionado ? monthMovementsFor(payables, receivables, bankEntries, selecionado.y, selecionado.m) : [];
 
   return (
     <div className="space-y-4">
@@ -11328,76 +11375,93 @@ function ResumoView({ accounts, payables, receivables, bankEntries, transfers, a
           )}
         </Card>
 
-        <Card className="p-4">
-          <div className="flex items-center justify-between mb-1">
-            <h2 className="text-sm font-semibold" style={{ color: COLORS.ink }}>Fluxo de caixa</h2>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1.5 text-xs" style={{ color: COLORS.inkSoft }}>
-                <span className="w-2 h-2 rounded-sm inline-block" style={{ background: COLORS.green }} />Entradas
-                <span className="w-2 h-2 rounded-sm inline-block ml-1.5" style={{ background: COLORS.red }} />Saídas
-              </div>
-              <div className="flex items-center gap-1">
-                <button onClick={() => mudarMes((o) => o - 1)} title="Mês anterior" className="p-1 rounded hover:bg-black/5"><ChevronLeft size={16} color={COLORS.inkSoft} /></button>
-                <button onClick={() => mudarMes(() => 0)} title="Voltar pro mês atual" className="text-xs px-1.5" style={{ color: COLORS.inkSoft }}>hoje</button>
-                <button onClick={() => mudarMes((o) => o + 1)} title="Próximo mês" className="p-1 rounded hover:bg-black/5"><ChevronRight size={16} color={COLORS.inkSoft} /></button>
-              </div>
-            </div>
-          </div>
-          <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>Clique num mês pra ver o extrato e avaliar se vale antecipar pagamento ou recebimento.</p>
-          <div className="flex items-stretch gap-1.5" style={{ height: 130 }}>
-            {flow.map(({ y, m, entradas, saidas }, idx) => {
-              const selected = selectedFlowIdx === idx;
-              return (
-                <button
-                  key={`${y}-${m}`}
-                  onClick={() => setSelectedFlowIdx(selected ? null : idx)}
-                  className="flex-1 min-w-0 flex flex-col items-center rounded-lg"
-                  style={{ background: selected ? COLORS.greenSoft : "transparent", padding: "6px 4px", border: "none", cursor: "pointer" }}
-                >
-                  <div className="flex-1 flex flex-col justify-end w-full items-center">
-                    <div style={{ width: "58%", background: COLORS.green, borderRadius: "3px 3px 0 0", height: Math.round((entradas / maxMov) * BAR_MAX) }} />
-                  </div>
-                  <div className="w-full shrink-0" style={{ height: 1, background: COLORS.border }} />
-                  <div className="flex-1 flex flex-col w-full items-center">
-                    <div style={{ width: "58%", background: COLORS.red, borderRadius: "0 0 3px 3px", height: Math.round((saidas / maxMov) * BAR_MAX) }} />
-                  </div>
-                  <p className="text-xs font-medium mt-1.5" style={{ color: selected ? COLORS.primary : COLORS.inkSoft }}>
-                    {MONTH_NAMES[m].slice(0, 3)}/{String(y).slice(2)}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
-          {selecionado && (
-            <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${COLORS.border}` }}>
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs font-semibold" style={{ color: COLORS.ink }}>
-                  Extrato de {MONTH_NAMES[selecionado.m].slice(0, 3)}/{String(selecionado.y).slice(2)}
-                </p>
-                <button onClick={() => setSelectedFlowIdx(null)} className="text-xs underline" style={{ color: COLORS.inkSoft }}>fechar</button>
-              </div>
-              {extratoSelecionado.length === 0 ? (
-                <p className="text-xs py-1.5" style={{ color: COLORS.inkSoft }}>Nada neste mês.</p>
-              ) : (
-                <div className="space-y-1">
-                  {extratoSelecionado.map((e, i) => (
-                    <div key={i} className="flex items-center gap-2.5 py-1.5" style={{ borderBottom: i < extratoSelecionado.length - 1 ? `1px solid #F0EEE7` : "none" }}>
-                      <span className="w-[3px] self-stretch rounded shrink-0" style={{ background: e.tipo === "entrada" ? COLORS.green : COLORS.red }} />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs" style={{ color: COLORS.ink }}>{e.nome}</p>
-                        <p className="text-[11px]" style={{ color: COLORS.inkSoft }}>{fmtDate(e.data)} · {e.tipo === "entrada" ? "Entrada" : "Saída"}</p>
-                      </div>
-                      <p className="text-xs font-semibold tabular-nums" style={{ color: e.tipo === "entrada" ? COLORS.green : COLORS.red }}>
-                        {e.tipo === "entrada" ? "+" : "−"}{fmtBRL(e.valor)}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </Card>
       </div>
+
+      <Card className="p-4">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-sm font-semibold" style={{ color: COLORS.ink }}>Fluxo de caixa</h2>
+          <div className="flex items-center gap-4 text-xs" style={{ color: COLORS.inkSoft }}>
+            <span className="flex items-center gap-1.5"><span style={{ width: 14, height: 2, background: COLORS.green, display: "inline-block" }} />Realizado</span>
+            <span className="flex items-center gap-1.5"><span style={{ width: 14, height: 0, borderTop: `2px dashed ${COLORS.gold}`, display: "inline-block" }} />Projetado</span>
+          </div>
+        </div>
+        <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>Saldo dia a dia, com o que já foi agendado — se a linha cruzar o zero, ainda dá tempo de agir.</p>
+
+        <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ overflow: "visible" }}>
+          <line x1={0} y1={zeroY} x2={W} y2={zeroY} stroke={COLORS.border} strokeWidth="1" strokeDasharray="4 4" />
+          <line x1={hojeX} y1={8} x2={hojeX} y2={baseY} stroke={COLORS.inkSoft} strokeWidth="1" strokeDasharray="3 3" />
+          <text x={hojeX} y={baseY + 14} textAnchor="middle" fontSize="10.5" fontWeight="700" fill={COLORS.ink}>Hoje</text>
+          <polyline points={realizadoPts} fill="none" stroke={COLORS.green} strokeWidth="2.5" />
+          <polyline points={projetadoPts} fill="none" stroke={COLORS.gold} strokeWidth="2.5" strokeDasharray="6 5" />
+          {tickLabels.map((t, i) => (
+            <text key={i} x={t.x} y={baseY + 28} textAnchor="middle" fontSize="10" fill="#8A8678">{t.label}</text>
+          ))}
+          {diagnostico && (
+            <circle cx={xFor(pontos.findIndex((p) => p.data === diagnostico.data))} cy={yFor(-diagnostico.deficit)} r="3.5" fill={COLORS.red} />
+          )}
+        </svg>
+
+        {diagnostico ? (
+          <div className="mt-2 p-3 rounded-lg" style={{ background: COLORS.redSoft }}>
+            <p className="text-xs font-semibold" style={{ color: COLORS.red }}>
+              ⚠ O saldo projetado fica negativo ({fmtBRL(-diagnostico.deficit)}) em {fmtDate(diagnostico.data)}.
+            </p>
+            {diagnostico.sugestao ? (
+              <div className="flex items-center justify-between gap-2 mt-1.5">
+                <p className="text-xs" style={{ color: COLORS.ink }}>
+                  Antecipando o recebível de <strong>{diagnostico.sugestao.nome}</strong> ({fmtBRL(diagnostico.sugestao.valor)}, venc. {fmtDate(diagnostico.sugestao.data)}) resolve.
+                </p>
+                <Button variant="subtle" onClick={() => goToView && goToView("receivables")} style={{ padding: "5px 11px", fontSize: 12, whiteSpace: "nowrap" }}>
+                  Ver em Contas a Receber
+                </Button>
+              </div>
+            ) : (
+              <p className="text-xs mt-1" style={{ color: COLORS.ink }}>Nenhum recebível futuro sozinho cobre o buraco — vale revisar pagamentos ou negociar prazo com fornecedor.</p>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs font-medium mt-2" style={{ color: COLORS.green }}>✓ O saldo projetado não fica negativo nos próximos {FLUXO_FUTURE_DAYS} dias.</p>
+        )}
+
+        <div className="grid md:grid-cols-2 gap-5 mt-4">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wide mb-1.5" style={{ color: COLORS.inkSoft }}>Agendamentos passados</p>
+            {passados.length === 0 ? (
+              <p className="text-xs" style={{ color: COLORS.inkSoft }}>Nada nos últimos {FLUXO_PAST_DAYS} dias.</p>
+            ) : (
+              passados.map((e, i) => (
+                <div key={i} className="flex items-center justify-between py-1.5" style={{ borderBottom: i < passados.length - 1 ? `1px solid #F0EEE7` : "none" }}>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs" style={{ color: COLORS.ink }}>{e.nome}</p>
+                    <p className="text-[11px]" style={{ color: COLORS.inkSoft }}>{fmtDate(e.data)}</p>
+                  </div>
+                  <p className="text-xs font-semibold tabular-nums" style={{ color: e.tipo === "entrada" ? COLORS.green : COLORS.red }}>
+                    {e.tipo === "entrada" ? "+" : "−"}{fmtBRL(e.valor)}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wide mb-1.5" style={{ color: COLORS.inkSoft }}>Agendamentos futuros</p>
+            {futuros.length === 0 ? (
+              <p className="text-xs" style={{ color: COLORS.inkSoft }}>Nada nos próximos {FLUXO_FUTURE_DAYS} dias.</p>
+            ) : (
+              futuros.map((e, i) => (
+                <div key={i} className="flex items-center justify-between py-1.5" style={{ borderBottom: i < futuros.length - 1 ? `1px solid #F0EEE7` : "none" }}>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs" style={{ color: COLORS.ink }}>{e.nome}</p>
+                    <p className="text-[11px]" style={{ color: COLORS.inkSoft }}>{fmtDate(e.data)}</p>
+                  </div>
+                  <p className="text-xs font-semibold tabular-nums" style={{ color: e.tipo === "entrada" ? COLORS.green : COLORS.red }}>
+                    {e.tipo === "entrada" ? "+" : "−"}{fmtBRL(e.valor)}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </Card>
 
       <div className="grid md:grid-cols-2 gap-3">
         <ExposureCard title="Recebimentos" items={receivables} nameField="cliente" tipo="receber" />
