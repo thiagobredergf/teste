@@ -1254,11 +1254,22 @@ function FinanceiroApp({ userEmail, onLogout }) {
   // Inconsistência/Pendências) — antes este painel só cobria os dois de
   // cima, então ficava "em branco" mesmo com pendência real (vencido,
   // não conciliado) esperando na empresa.
-  const pendingSemCategoria = useMemo(
-    () => bankEntriesF.filter((b) => !b.categoria || b.categoria === "A classificar").length
-      + payablesF.filter((p) => !p.categoria).length
-      + receivablesF.filter((r) => !r.categoria).length,
-    [bankEntriesF, payablesF, receivablesF]
+  // Cada contador de pendência abaixo tem sua própria tela de destino —
+  // quebrados por origem (em vez de um "sem categoria"/"vencidos" único
+  // somando pagar+receber+banco) justamente pra que clicar leve direto
+  // pra onde a ação é feita, nunca pro relatório agregado de
+  // Inconsistência/Pendências (que é só auditoria, sem ação nenhuma).
+  const pendingBankSemCategoria = useMemo(
+    () => bankEntriesF.filter((b) => !b.categoria || b.categoria === "A classificar").length,
+    [bankEntriesF]
+  );
+  const pendingPayablesSemCategoria = useMemo(
+    () => payablesF.filter((p) => !p.categoria).length,
+    [payablesF]
+  );
+  const pendingReceivablesSemCategoria = useMemo(
+    () => receivablesF.filter((r) => !r.categoria).length,
+    [receivablesF]
   );
   const pendingNaoConciliados = useMemo(
     () => bankEntriesF.filter((b) => !b.conciliado).length
@@ -1267,10 +1278,13 @@ function FinanceiroApp({ userEmail, onLogout }) {
       + receivablesF.filter((r) => r.status === "Recebido" && !r.conciliado).length,
     [bankEntriesF, transfersF, payablesF, receivablesF]
   );
-  const pendingVencidos = useMemo(
-    () => payablesF.filter((p) => p.status !== "Pago" && (p.vencimento || "") < todayISO()).length
-      + receivablesF.filter((r) => r.status !== "Recebido" && (r.vencimento || "") < todayISO()).length,
-    [payablesF, receivablesF]
+  const pendingPayablesVencidos = useMemo(
+    () => payablesF.filter((p) => p.status !== "Pago" && (p.vencimento || "") < todayISO()).length,
+    [payablesF]
+  );
+  const pendingReceivablesVencidos = useMemo(
+    () => receivablesF.filter((r) => r.status !== "Recebido" && (r.vencimento || "") < todayISO()).length,
+    [receivablesF]
   );
 
   if (!ready) {
@@ -1842,13 +1856,13 @@ function FinanceiroApp({ userEmail, onLogout }) {
               <div>
                 <p className="font-semibold text-sm" style={{ color: COLORS.ink }}>Pendências</p>
                 <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>O que precisa de atenção nesta empresa</p>
-                {pendingDocs.length === 0 && pendingContacts.length === 0 && pendingSemCategoria === 0 && pendingNaoConciliados === 0 && pendingVencidos === 0 ? (
+                {pendingDocs.length === 0 && pendingContacts.length === 0 && pendingBankSemCategoria === 0 && pendingPayablesSemCategoria === 0 && pendingReceivablesSemCategoria === 0 && pendingNaoConciliados === 0 && pendingPayablesVencidos === 0 && pendingReceivablesVencidos === 0 ? (
                   <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nada pendente por aqui.</p>
                 ) : (
                   <div className="space-y-1.5">
-                    {pendingVencidos > 0 && (
+                    {pendingPayablesVencidos > 0 && (
                       <button
-                        onClick={() => goToView("pendencias")}
+                        onClick={() => goToView("payables")}
                         className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
                       >
                         <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.redSoft, color: COLORS.red }}>
@@ -1856,9 +1870,25 @@ function FinanceiroApp({ userEmail, onLogout }) {
                         </span>
                         <span className="min-w-0 flex-1">
                           <p className="text-sm font-medium" style={{ color: COLORS.ink }}>
-                            {pendingVencidos} vencido{pendingVencidos > 1 ? "s" : ""}
+                            {pendingPayablesVencidos} a pagar vencida{pendingPayablesVencidos > 1 ? "s" : ""}
                           </p>
-                          <p className="text-xs" style={{ color: COLORS.inkSoft }}>A pagar/receber em aberto, já vencidas</p>
+                          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Revisar em Contas a Pagar</p>
+                        </span>
+                      </button>
+                    )}
+                    {pendingReceivablesVencidos > 0 && (
+                      <button
+                        onClick={() => goToView("receivables")}
+                        className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
+                      >
+                        <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+                          <AlertTriangle size={14} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <p className="text-sm font-medium" style={{ color: COLORS.ink }}>
+                            {pendingReceivablesVencidos} a receber vencida{pendingReceivablesVencidos > 1 ? "s" : ""}
+                          </p>
+                          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Revisar em Contas a Receber</p>
                         </span>
                       </button>
                     )}
@@ -1878,9 +1908,9 @@ function FinanceiroApp({ userEmail, onLogout }) {
                         </span>
                       </button>
                     )}
-                    {pendingSemCategoria > 0 && (
+                    {pendingBankSemCategoria > 0 && (
                       <button
-                        onClick={() => goToView("pendencias")}
+                        onClick={() => goToView("bank")}
                         className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
                       >
                         <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
@@ -1888,9 +1918,41 @@ function FinanceiroApp({ userEmail, onLogout }) {
                         </span>
                         <span className="min-w-0 flex-1">
                           <p className="text-sm font-medium" style={{ color: COLORS.ink }}>
-                            {pendingSemCategoria} sem categoria
+                            {pendingBankSemCategoria} lançamento{pendingBankSemCategoria > 1 ? "s" : ""} sem categoria
                           </p>
-                          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Preenchimento incompleto</p>
+                          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Revisar em Lançamentos Bancários</p>
+                        </span>
+                      </button>
+                    )}
+                    {pendingPayablesSemCategoria > 0 && (
+                      <button
+                        onClick={() => goToView("payables")}
+                        className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
+                      >
+                        <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
+                          <ListTree size={14} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <p className="text-sm font-medium" style={{ color: COLORS.ink }}>
+                            {pendingPayablesSemCategoria} a pagar sem categoria
+                          </p>
+                          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Revisar em Contas a Pagar</p>
+                        </span>
+                      </button>
+                    )}
+                    {pendingReceivablesSemCategoria > 0 && (
+                      <button
+                        onClick={() => goToView("receivables")}
+                        className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
+                      >
+                        <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
+                          <ListTree size={14} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <p className="text-sm font-medium" style={{ color: COLORS.ink }}>
+                            {pendingReceivablesSemCategoria} a receber sem categoria
+                          </p>
+                          <p className="text-xs" style={{ color: COLORS.inkSoft }}>Revisar em Contas a Receber</p>
                         </span>
                       </button>
                     )}
@@ -9757,6 +9819,48 @@ function fmtDuracao(segundos) {
 /* ---------------------------------------------------------------------- */
 /*  Inconsistência/Pendências — auditoria do operador antes do fechamento */
 /* ---------------------------------------------------------------------- */
+
+// Barra horizontal por origem (um valor por categoria é "parte-do-todo",
+// não comparação par-a-par — por isso barra em vez de pizza: dá pra ler
+// quantidade e valor exatos de cada origem de cabeça, sem precisar
+// comparar ângulo/área de fatias).
+const ORIGEM_COLORS = {
+  "Lançamento Bancário": COLORS.blue,
+  "Transferência": COLORS.gold,
+  "Conta a Pagar (paga)": COLORS.red,
+  "Conta a Receber (recebida)": COLORS.green,
+};
+function OrigemBreakdownChart({ items }) {
+  const grouped = {};
+  items.forEach((x) => {
+    if (!grouped[x.origem]) grouped[x.origem] = { count: 0, valor: 0 };
+    grouped[x.origem].count += 1;
+    grouped[x.origem].valor += Number(x.valor) || 0;
+  });
+  const rows = Object.entries(grouped)
+    .map(([origem, v]) => ({ origem, ...v, cor: ORIGEM_COLORS[origem] || COLORS.amber }))
+    .sort((a, b) => b.valor - a.valor);
+  if (rows.length <= 1) return null;
+  const maxValor = Math.max(1, ...rows.map((r) => r.valor));
+  return (
+    <div className="space-y-2 mb-4 pb-4" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+      {rows.map((r) => (
+        <div key={r.origem} className="flex items-center gap-2.5">
+          <span className="w-44 text-xs shrink-0 truncate flex items-center gap-1.5" style={{ color: COLORS.inkSoft }}>
+            <span className="w-2 h-2 rounded-sm inline-block shrink-0" style={{ background: r.cor }} />
+            {r.origem}
+          </span>
+          <div className="flex-1 rounded overflow-hidden" style={{ height: 14, background: COLORS.bg }}>
+            <div style={{ width: `${(r.valor / maxValor) * 100}%`, height: "100%", background: r.cor, opacity: 0.45 }} />
+          </div>
+          <span className="w-10 text-right text-xs shrink-0" style={{ color: COLORS.inkSoft }}>{r.count}×</span>
+          <span className="w-24 text-right text-xs font-semibold tabular-nums shrink-0" style={{ color: COLORS.ink }}>{fmtBRL(r.valor)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function PendenciasView({
   payables, receivables, bankEntries, transfers, empresaId, empresaNome, empresa,
   competenciaFechamento, onFecharMes, onCancelarFechamento,
@@ -9892,6 +9996,7 @@ function PendenciasView({
 
           {naoConciliados.length > 0 && (
             <ReportCard title="Não conciliados" subtitle="Já movimentaram dinheiro mas ainda não foram batidos contra o extrato — resolva em Conciliação Bancária.">
+              <OrigemBreakdownChart items={naoConciliados} />
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
@@ -11347,40 +11452,37 @@ function ResumoView({ accounts, payables, receivables, bankEntries, transfers, a
     <div className="space-y-4">
       <Header title="Resumo" subtitle="Saldos, fluxo de caixa e o que está por vir — tudo em um lugar." />
 
-      <div className="grid md:grid-cols-2 gap-3">
-        <Card className="p-4">
-          <div className="flex items-center justify-between mb-1">
-            <h2 className="text-sm font-semibold" style={{ color: COLORS.ink }}>Saldo</h2>
-            <p className="text-lg font-semibold tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(totalBalance)}</p>
-          </div>
-          {totalAvailableBalance !== totalBalance && (
-            <p className="text-xs mb-2" style={{ color: COLORS.inkSoft }}>
-              Disponível após agendamentos: <span className="font-medium">{fmtBRL(totalAvailableBalance)}</span>
-            </p>
-          )}
-          {accounts.length === 0 ? (
-            <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma conta cadastrada.</p>
-          ) : (
-            <div className="space-y-1.5">
-              {accounts.map((a) => (
-                <div key={a.id} className="flex items-center justify-between text-sm py-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <div>
-                    <p style={{ color: COLORS.ink }}>{a.nome}</p>
-                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>{a.tipo}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-medium tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(accountBalance(a.id))}</p>
-                    {accountAvailableBalance(a.id) !== accountBalance(a.id) && (
-                      <p className="text-xs tabular-nums" style={{ color: COLORS.inkSoft }}>disp. {fmtBRL(accountAvailableBalance(a.id))}</p>
-                    )}
-                  </div>
+      <Card className="p-4">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-sm font-semibold" style={{ color: COLORS.ink }}>Saldo</h2>
+          <p className="text-lg font-semibold tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(totalBalance)}</p>
+        </div>
+        {totalAvailableBalance !== totalBalance && (
+          <p className="text-xs mb-2" style={{ color: COLORS.inkSoft }}>
+            Disponível após agendamentos: <span className="font-medium">{fmtBRL(totalAvailableBalance)}</span>
+          </p>
+        )}
+        {accounts.length === 0 ? (
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma conta cadastrada.</p>
+        ) : (
+          <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-x-5 gap-y-1.5">
+            {accounts.map((a) => (
+              <div key={a.id} className="flex items-center justify-between text-sm py-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                <div>
+                  <p style={{ color: COLORS.ink }}>{a.nome}</p>
+                  <p className="text-xs" style={{ color: COLORS.inkSoft }}>{a.tipo}</p>
                 </div>
-              ))}
-            </div>
-          )}
-        </Card>
-
-      </div>
+                <div className="text-right">
+                  <p className="font-medium tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(accountBalance(a.id))}</p>
+                  {accountAvailableBalance(a.id) !== accountBalance(a.id) && (
+                    <p className="text-xs tabular-nums" style={{ color: COLORS.inkSoft }}>disp. {fmtBRL(accountAvailableBalance(a.id))}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
       <Card className="p-4">
         <div className="flex items-center justify-between mb-1">
