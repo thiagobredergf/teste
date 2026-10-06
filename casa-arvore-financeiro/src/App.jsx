@@ -683,9 +683,15 @@ function Field({ label, children }) {
   );
 }
 
+// Largura total por padrão vem do style (não de uma classe w-full) de
+// propósito: classe Tailwind "perde" de outra classe de largura dependendo
+// da ordem em que o Tailwind as gera (não da ordem no className), então um
+// className="w-44" num call site nunca conseguia vencer um w-full fixo
+// aqui. Via style, o merge abaixo (props.style depois de inputStyle) sempre
+// vence de forma previsível — pra um campo mais estreito, use style={{width}}.
 const inputCls =
-  "w-full px-3 py-2 rounded-lg text-sm outline-none focus:ring-2 transition-shadow bg-white";
-const inputStyle = { border: `1px solid ${COLORS.border}` };
+  "px-3 py-2 rounded-lg text-sm outline-none focus:ring-2 transition-shadow bg-white";
+const inputStyle = { border: `1px solid ${COLORS.border}`, width: "100%" };
 
 function TextInput(props) {
   return <input {...props} className={`${inputCls} ${props.className || ""}`} style={{ ...inputStyle, ...(props.style || {}) }} />;
@@ -1986,7 +1992,7 @@ function Dashboard({
           <h1 className="text-xl font-semibold" style={{ color: COLORS.ink }}>Dashboard</h1>
           <p className="text-sm" style={{ color: COLORS.inkSoft }}>Regime de caixa · visão do ano desta empresa</p>
         </div>
-        <Select value={year} onChange={(e) => setYear(Number(e.target.value))} className="w-28">
+        <Select value={year} onChange={(e) => setYear(Number(e.target.value))} style={{ width: 112 }}>
           {[year - 1, year, year + 1].map((y) => (
             <option key={y} value={y}>{y}</option>
           ))}
@@ -3801,7 +3807,7 @@ function FilterBar({ search, setSearch, status, setStatus, statusOptions, placeh
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" color={COLORS.inkSoft} />
         <TextInput value={search} onChange={(e) => setSearch(e.target.value)} placeholder={placeholder} className="pl-8" style={{ height: 38 }} />
       </div>
-      <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-44" style={{ height: 38 }}>
+      <Select value={status} onChange={(e) => setStatus(e.target.value)} style={{ height: 38, width: 176 }}>
         <option value="">Todos os status</option>
         {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
       </Select>
@@ -8225,15 +8231,15 @@ function AuditLogReport({ empresas = [], users = [] }) {
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" color={COLORS.inkSoft} />
           <TextInput value={buscaInput} onChange={(e) => setBuscaInput(e.target.value)} placeholder="Buscar por documento, fornecedor/cliente, valor..." className="pl-8" style={{ height: 38 }} />
         </div>
-        <Select value={empresaId} onChange={(e) => setEmpresaId(e.target.value)} className="w-44" style={{ height: 38 }}>
+        <Select value={empresaId} onChange={(e) => setEmpresaId(e.target.value)} style={{ height: 38, width: 176 }}>
           <option value="">Todas as empresas</option>
           {empresas.map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
         </Select>
-        <Select value={action} onChange={(e) => setAction(e.target.value)} className="w-48" style={{ height: 38 }}>
+        <Select value={action} onChange={(e) => setAction(e.target.value)} style={{ height: 38, width: 176 }}>
           <option value="">Todas as ações</option>
           {Object.entries(AUDIT_ACTION_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
         </Select>
-        <Select value={userEmail} onChange={(e) => setUserEmail(e.target.value)} className="w-52" style={{ height: 38 }}>
+        <Select value={userEmail} onChange={(e) => setUserEmail(e.target.value)} style={{ height: 38, width: 176 }}>
           <option value="">Todos os usuários</option>
           {usuariosOptions.map((email) => <option key={email} value={email}>{email}</option>)}
         </Select>
@@ -11107,16 +11113,19 @@ function monthFlowFor(payables, receivables, bankEntries, y, m) {
   return { entradas, saidas };
 }
 
-function ExposureTable({ items, nameField, mode }) {
-  // mode: "proximos" | "aberto" | "vencido"
-  const today = todayISO();
-  if (mode === "proximos") {
-    const rows = items
-      .filter((i) => (i.vencimento || "") >= today)
-      .sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""))
-      .slice(0, 8);
-    if (rows.length === 0) return <p className="text-sm py-6 text-center" style={{ color: COLORS.inkSoft }}>Nada agendado.</p>;
-    return (
+// Lista simples de itens (já filtrados por status) ordenada por vencimento
+// — cada aba do ExposureCard já chega aqui só com o que pertence àquele
+// status, então não precisa mais filtrar/agrupar por data aqui dentro.
+function ExposureTable({ items, nameField }) {
+  const rows = [...items].sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""));
+  const total = rows.reduce((s, i) => s + Number(i.valor || 0), 0);
+  if (rows.length === 0) return <p className="text-sm py-6 text-center" style={{ color: COLORS.inkSoft }}>Nada por aqui.</p>;
+  return (
+    <div>
+      <div className="flex justify-between text-sm pb-2 mb-2 font-semibold" style={{ borderBottom: `1px solid ${COLORS.border}`, color: COLORS.ink }}>
+        <span>Total</span>
+        <span className="tabular-nums">{fmtBRL(total)}</span>
+      </div>
       <div className="space-y-1.5">
         {rows.map((i) => (
           <div key={i.id} className="flex items-center justify-between text-sm py-1" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
@@ -11128,48 +11137,35 @@ function ExposureTable({ items, nameField, mode }) {
           </div>
         ))}
       </div>
-    );
-  }
-
-  const pool = mode === "vencido" ? items.filter((i) => (i.vencimento || "") < today) : items;
-  const total = pool.reduce((s, i) => s + Number(i.valor || 0), 0);
-  const byName = {};
-  pool.forEach((i) => {
-    const key = i[nameField] || "—";
-    byName[key] = (byName[key] || 0) + Number(i.valor || 0);
-  });
-  const rows = Object.entries(byName).sort((a, b) => b[1] - a[1]);
-
-  return (
-    <div>
-      <div className="flex justify-between text-sm pb-2 mb-2 font-semibold" style={{ borderBottom: `1px solid ${COLORS.border}`, color: COLORS.ink }}>
-        <span>Total {mode === "vencido" ? "vencido" : "em aberto"}</span>
-        <span className="tabular-nums">{fmtBRL(total)}</span>
-      </div>
-      {rows.length === 0 ? (
-        <p className="text-sm py-4 text-center" style={{ color: COLORS.inkSoft }}>Nada por aqui.</p>
-      ) : (
-        <div className="space-y-1.5">
-          {rows.map(([name, valor]) => (
-            <div key={name} className="flex items-center justify-between text-sm py-0.5">
-              <span style={{ color: COLORS.ink }}>{name}</span>
-              <span className="font-medium tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(valor)}</span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
 
-function ExposureCard({ title, items, nameField }) {
-  const [tab, setTab] = useState("proximos");
+// tipo: "pagar" | "receber" — mesma classificação (statusDisplay) e mesmo
+// vocabulário já usados em Contas a Pagar/Receber (Atrasado/Inadimplente,
+// Próximo (10 dias), A Pagar/A Receber), pra não ter um "Vencido"/"Em
+// aberto" genérico aqui e "Atrasado"/"A Pagar" lá — a mesma palavra deve
+// sempre significar a mesma coisa em todo o sistema.
+function ExposureCard({ title, items, nameField, tipo }) {
+  const statusBase = tipo === "pagar" ? "A Pagar" : "A Receber";
+  const statusAtrasado = tipo === "pagar" ? "Atrasado" : "Inadimplente";
+  const withDerived = items
+    .filter((i) => i.status === statusBase)
+    .map((i) => {
+      let statusDisplay = statusBase;
+      if (i.vencimento < todayISO()) statusDisplay = statusAtrasado;
+      else if (daysUntil(i.vencimento) <= 10) statusDisplay = "Próximo";
+      return { ...i, statusDisplay };
+    });
+
   const tabs = [
-    { id: "proximos", label: "Próximos" },
-    { id: "aberto", label: "Em aberto" },
-    { id: "vencido", label: "Vencido" },
+    { id: statusAtrasado, label: statusAtrasado },
+    { id: "Próximo", label: "Próximo (10 dias)" },
+    { id: statusBase, label: statusBase === "A Pagar" ? "A pagar" : "A receber" },
   ];
-  const open = items.filter((i) => i.status !== "Recebido" && i.status !== "Pago");
+  const [tab, setTab] = useState(statusAtrasado);
+  const pool = withDerived.filter((i) => i.statusDisplay === tab);
+
   return (
     <Card className="p-4">
       <h2 className="text-sm font-semibold mb-3" style={{ color: COLORS.ink }}>{title}</h2>
@@ -11185,7 +11181,7 @@ function ExposureCard({ title, items, nameField }) {
           </button>
         ))}
       </div>
-      <ExposureTable items={open} nameField={nameField} mode={tab} />
+      <ExposureTable items={pool} nameField={nameField} />
     </Card>
   );
 }
@@ -11262,8 +11258,8 @@ function ResumoView({ accounts, payables, receivables, bankEntries, transfers, a
       </div>
 
       <div className="grid md:grid-cols-2 gap-3">
-        <ExposureCard title="Recebimentos" items={receivables} nameField="cliente" />
-        <ExposureCard title="Pagamentos" items={payables} nameField="fornecedor" />
+        <ExposureCard title="Recebimentos" items={receivables} nameField="cliente" tipo="receber" />
+        <ExposureCard title="Pagamentos" items={payables} nameField="fornecedor" tipo="pagar" />
       </div>
     </div>
   );
