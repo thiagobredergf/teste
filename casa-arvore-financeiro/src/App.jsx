@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square, Download, Loader2
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square, Download, Loader2, Boxes
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -622,7 +622,7 @@ const competenciaOf = (dateStr) => (dateStr || "").slice(0, 7);
 // específica.
 const ROTINA_TRACK_VIEWS = new Set([
   "documentUploads", "reconciliation", "accounts", "contacts", "payables", "receivables",
-  "bank", "transfers", "settlementPartners", "fiscal", "categories", "fechamento", "pendencias",
+  "bank", "transfers", "settlementPartners", "fiscal", "categories", "costCenters", "fechamento", "pendencias",
 ]);
 
 // Recusa salvar qualquer linha nova/alterada/excluída cuja data caia dentro
@@ -1372,6 +1372,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     ...(role !== "owner" ? [{ id: "transfers", label: "Transferências", icon: ArrowLeftRight }] : []),
     ...(role !== "owner" ? [{ id: "fiscal", label: "Calendário Fiscal", icon: Calendar }] : []),
     ...(role !== "owner" ? [{ id: "categories", label: "Plano de Contas", icon: ListTree }] : []),
+    ...(role !== "owner" ? [{ id: "costCenters", label: "Centro de Custos", icon: Boxes }] : []),
     ...(role !== "owner" ? [{ id: "reconciliation", label: "Conciliação Bancária", icon: CheckCircle2 }] : []),
     ...(role !== "owner" ? [{ id: "settlementPartners", label: "Repasses de Terceiros", icon: Percent }] : []),
     ...(role === "gestor" ? [{ id: "pendencias", label: "Inconsistência/Pendências", icon: AlertTriangle }] : []),
@@ -1394,7 +1395,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
     // Rotina: operações do dia a dia do BPO — Gestor e Operador.
     ...(role !== "owner" ? [{
       id: "rotina", label: "Rotina", icon: ListChecks,
-      items: ["documentUploads", "reconciliation", "accounts", "contacts", "payables", "receivables", "bank", "transfers", "settlementPartners", "fiscal", "categories"],
+      items: ["documentUploads", "reconciliation", "accounts", "contacts", "payables", "receivables", "bank", "transfers", "settlementPartners", "fiscal", "categories", "costCenters"],
     }] : []),
     // Análise: supervisão e auditoria — só Gestor.
     ...(role === "gestor" ? [{
@@ -1758,12 +1759,20 @@ function FinanceiroApp({ userEmail, onLogout }) {
             {view === "categories" && (
               <CategoriesView
                 categories={categories}
-                costCenters={costCenters}
                 selectedEmpresa={selectedEmpresa}
                 currentEmpresa={currentEmpresa}
                 readOnly={role !== "gestor"}
                 onSave={(v) => persist("categories", v, setCategories)}
-                onSaveCostCenters={(v) => persist("costCenters", v, setCostCenters)}
+              />
+            )}
+
+            {view === "costCenters" && (
+              <CostCentersView
+                costCenters={costCenters}
+                selectedEmpresa={selectedEmpresa}
+                currentEmpresa={currentEmpresa}
+                readOnly={role !== "gestor"}
+                onSave={(v) => persist("costCenters", v, setCostCenters)}
               />
             )}
 
@@ -7241,23 +7250,9 @@ function FiscalModal({ initial, onClose, onSubmit }) {
 /* ---------------------------------------------------------------------- */
 /*  Plano de Contas                                                        */
 /* ---------------------------------------------------------------------- */
-function CategoriesView({ categories, costCenters, selectedEmpresa, currentEmpresa, readOnly, onSave, onSaveCostCenters }) {
+function CategoriesView({ categories, selectedEmpresa, currentEmpresa, readOnly, onSave }) {
   const [newNome, setNewNome] = useState({}); // { [grupo]: "texto digitado" }
-  const [newCentro, setNewCentro] = useState("");
   const scoped = categories.filter((c) => c.empresaId === selectedEmpresa);
-  const centrosScoped = costCenters.filter((c) => c.empresaId === selectedEmpresa).sort((a, b) => a.nome.localeCompare(b.nome));
-
-  const addCentro = () => {
-    const nome = newCentro.trim();
-    if (!nome || !selectedEmpresa) return;
-    if (centrosScoped.some((c) => c.nome.toLowerCase() === nome.toLowerCase())) {
-      alert(`Já existe um Centro de Custo chamado "${nome}" nesta empresa.`);
-      return;
-    }
-    onSaveCostCenters([...costCenters, { id: uid(), empresaId: selectedEmpresa, nome }]);
-    setNewCentro("");
-  };
-  const removeCentro = (id) => onSaveCostCenters(costCenters.filter((c) => c.id !== id));
 
   // Próximo código dentro do grupo: olha o maior sufixo numérico já usado
   // (não o total de linhas) pra nunca colidir com um código que ficou
@@ -7361,18 +7356,46 @@ function CategoriesView({ categories, costCenters, selectedEmpresa, currentEmpre
           {PLANO_CONTAS_GRUPOS.despesa.map((g) => renderGrupo("despesa", g))}
         </Card>
       </div>
+    </div>
+  );
+}
 
+// Promovido a tela própria (antes vivia dentro de Plano de Contas) — o
+// operador não encontrava a 3ª seção rolando a tela, então virou um item
+// de menu igual aos outros cadastros, logo abaixo de Plano de Contas.
+function CostCentersView({ costCenters, selectedEmpresa, currentEmpresa, readOnly, onSave }) {
+  const [newCentro, setNewCentro] = useState("");
+  const scoped = costCenters.filter((c) => c.empresaId === selectedEmpresa).sort((a, b) => a.nome.localeCompare(b.nome));
+
+  const addCentro = () => {
+    const nome = newCentro.trim();
+    if (!nome || !selectedEmpresa) return;
+    if (scoped.some((c) => c.nome.toLowerCase() === nome.toLowerCase())) {
+      alert(`Já existe um Centro de Custo chamado "${nome}" nesta empresa.`);
+      return;
+    }
+    onSave([...costCenters, { id: uid(), empresaId: selectedEmpresa, nome }]);
+    setNewCentro("");
+  };
+  const removeCentro = (id) => onSave(costCenters.filter((c) => c.id !== id));
+
+  return (
+    <div className="space-y-4">
+      <Header
+        title="Centro de Custos"
+        subtitle={
+          !currentEmpresa
+            ? "Selecione uma empresa pra ver os centros de custo dela."
+            : "Divisão interna da empresa (área, unidade, departamento...) pra agrupar receita e despesa — alimenta o dropdown \"Centro de Custo\" em Contas a Pagar/Receber e o relatório Rentabilidade por Centro de Custo, em Relatórios."
+        }
+      />
       {currentEmpresa && (
         <Card className="p-4">
-          <h2 className="text-sm font-semibold" style={{ color: COLORS.ink }}>Centros de Custo</h2>
-          <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>
-            Divisão interna da empresa (área, unidade, departamento...) pra agrupar receita e despesa — alimenta o dropdown "Centro de Custo" em Contas a Pagar/Receber e o relatório Rentabilidade por Centro de Custo.
-          </p>
-          {centrosScoped.length === 0 ? (
-            <p className="text-xs italic mb-2" style={{ color: COLORS.inkSoft }}>Nenhum centro de custo cadastrado ainda.</p>
+          {scoped.length === 0 ? (
+            <p className="text-sm italic mb-2" style={{ color: COLORS.inkSoft }}>Nenhum centro de custo cadastrado ainda.</p>
           ) : (
-            <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 mb-2">
-              {centrosScoped.map((c) => (
+            <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 mb-3">
+              {scoped.map((c) => (
                 <div key={c.id} className="flex items-center justify-between text-sm py-0.5">
                   <span style={{ color: COLORS.ink }}>{c.nome}</span>
                   {!readOnly && (
