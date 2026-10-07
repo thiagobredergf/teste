@@ -575,6 +575,7 @@ const STORE_KEYS = {
   skillRuns: "skillRuns",
   remessasCnab: "remessasCnab",
   onboardingItems: "onboardingItems",
+  costCenters: "costCenters",
   selectedEmpresa: "selectedEmpresa",
 };
 
@@ -815,6 +816,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [skillRuns, setSkillRuns] = useState([]);
   const [remessasCnab, setRemessasCnab] = useState([]);
   const [onboardingItems, setOnboardingItems] = useState([]);
+  const [costCenters, setCostCenters] = useState([]);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
   const [navQuery, setNavQuery] = useState("");
@@ -852,6 +854,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setSkillRuns(data.skillRuns || []);
       setRemessasCnab(data.remessasCnab || []);
       setOnboardingItems(data.onboardingItems || []);
+      setCostCenters(data.costCenters || []);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
       // cards de todas), pra escolher com qual vai trabalhar.
@@ -1084,6 +1087,10 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const receitasF = useMemo(() => categoriesF.filter((c) => c.natureza === "receita"), [categoriesF]);
   const despesasF = useMemo(() => categoriesF.filter((c) => c.natureza === "despesa"), [categoriesF]);
   const allCategoryNames = useMemo(() => categoriesF.map((c) => c.nome), [categoriesF]);
+  // Mesmo padrão do Plano de Contas — cadastro por empresa, usado tanto
+  // na tela de gestão (abaixo do Plano de Contas) quanto no dropdown de
+  // "Centro de Custo" dos formulários de Contas a Pagar/Receber.
+  const costCentersF = useMemo(() => costCenters.filter(inScope), [costCenters, inScope]);
 
   /* ------------------------- derived calculations ---------------------- */
   const accountBalance = useCallback(
@@ -1678,6 +1685,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
                 categories={despesasF}
+                costCenters={costCentersF}
                 contacts={contacts}
                 onSaveContacts={(v) => persist("contacts", v, setContacts)}
                 onSave={(v) => persist("payables", v, setPayables)}
@@ -1699,6 +1707,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 empresas={empresas}
                 selectedEmpresa={selectedEmpresa}
                 categories={receitasF}
+                costCenters={costCentersF}
                 contacts={contacts}
                 onSaveContacts={(v) => persist("contacts", v, setContacts)}
                 onSave={(v) => persist("receivables", v, setReceivables)}
@@ -1749,10 +1758,12 @@ function FinanceiroApp({ userEmail, onLogout }) {
             {view === "categories" && (
               <CategoriesView
                 categories={categories}
+                costCenters={costCenters}
                 selectedEmpresa={selectedEmpresa}
                 currentEmpresa={currentEmpresa}
                 readOnly={role !== "gestor"}
                 onSave={(v) => persist("categories", v, setCategories)}
+                onSaveCostCenters={(v) => persist("costCenters", v, setCostCenters)}
               />
             )}
 
@@ -4187,7 +4198,7 @@ function PayablesKanban({ payables, accounts, onDrop, onEdit }) {
 }
 
 function PayablesView({
-  payables, accounts, empresas, selectedEmpresa, categories, contacts, onSaveContacts, onSave,
+  payables, accounts, empresas, selectedEmpresa, categories, costCenters = [], contacts, onSaveContacts, onSave,
   pendingImport, onImportProcessed, userEmail, canEdit = true, role,
   remessasCnab = [], onSaveAccounts, onSaveRemessasCnab,
 }) {
@@ -4716,7 +4727,7 @@ function PayablesView({
 
       {modal && (
         <PayableModal
-          initial={modal} categories={categories} contacts={contacts} accounts={accounts.filter((a) => a.empresaId === modal.empresaId)} aiNote={aiNote} previewDoc={previewDoc}
+          initial={modal} categories={categories} costCenters={costCenters.filter((c) => c.empresaId === modal.empresaId)} contacts={contacts} accounts={accounts.filter((a) => a.empresaId === modal.empresaId)} aiNote={aiNote} previewDoc={previewDoc}
           onClose={() => { setModal(null); setAiNote(""); setPreviewDoc(null); pendingUploadRef.current = null; }}
           onSubmit={submit}
         />
@@ -5079,7 +5090,7 @@ function StatusBadge({ status }) {
   return <Badge tone="neutral">{status}</Badge>;
 }
 
-function PayableModal({ initial, categories, contacts = [], accounts = [], aiNote, previewDoc, onClose, onSubmit }) {
+function PayableModal({ initial, categories, costCenters = [], contacts = [], accounts = [], aiNote, previewDoc, onClose, onSubmit }) {
   const linkedContact = contacts.find((c) => c.id === initial.contactId);
   const [form, setForm] = useState({
     dataLanc: todayISO(), vencimento: todayISO(), fornecedor: "", categoria: categories[0]?.nome || "",
@@ -5157,7 +5168,13 @@ function PayableModal({ initial, categories, contacts = [], accounts = [], aiNot
             <TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone/WhatsApp" />
           </Field>
           <Field label="Centro de Custo">
-            <TextInput value={form.centroCusto} onChange={(e) => setForm({ ...form, centroCusto: e.target.value })} placeholder="Opcional — alimenta Relatórios → Rentabilidade por Centro de Custo" />
+            <Select value={form.centroCusto} onChange={(e) => setForm({ ...form, centroCusto: e.target.value })}>
+              <option value="">Nenhum</option>
+              {costCenters.map((c) => <option key={c.id} value={c.nome}>{c.nome}</option>)}
+              {form.centroCusto && !costCenters.some((c) => c.nome === form.centroCusto) && (
+                <option value={form.centroCusto}>{form.centroCusto} (não cadastrado)</option>
+              )}
+            </Select>
           </Field>
           <Field label="Projeto">
             <TextInput value={form.projeto} onChange={(e) => setForm({ ...form, projeto: e.target.value })} placeholder="Opcional — alimenta Relatórios → Cronograma de Desembolso" />
@@ -5563,7 +5580,7 @@ function BatchSettleModal({ title, items, nameField, valueLabel, dateLabel, acco
 /*  Contas a Receber                                                       */
 /* ---------------------------------------------------------------------- */
 function ReceivablesView({
-  receivables, accounts, empresas = [], selectedEmpresa, categories, contacts, onSaveContacts, onSave,
+  receivables, accounts, empresas = [], selectedEmpresa, categories, costCenters = [], contacts, onSaveContacts, onSave,
   pendingImport, onImportProcessed, userEmail, canEdit = true,
 }) {
   const [modal, setModal] = useState(null);
@@ -5912,7 +5929,7 @@ function ReceivablesView({
 
       {modal && (
         <ReceivableModal
-          initial={modal} categories={categories} contacts={contacts} accounts={accounts.filter((a) => a.empresaId === modal.empresaId)} aiNote={aiNote} previewDoc={previewDoc}
+          initial={modal} categories={categories} costCenters={costCenters.filter((c) => c.empresaId === modal.empresaId)} contacts={contacts} accounts={accounts.filter((a) => a.empresaId === modal.empresaId)} aiNote={aiNote} previewDoc={previewDoc}
           onClose={() => { setModal(null); setAiNote(""); setPreviewDoc(null); pendingUploadRef.current = null; }}
           onSubmit={submit}
         />
@@ -5993,7 +6010,7 @@ function ReceivablesView({
   );
 }
 
-function ReceivableModal({ initial, categories, contacts = [], accounts = [], aiNote, previewDoc, onClose, onSubmit }) {
+function ReceivableModal({ initial, categories, costCenters = [], contacts = [], accounts = [], aiNote, previewDoc, onClose, onSubmit }) {
   const linkedContact = contacts.find((c) => c.id === initial.contactId);
   const [form, setForm] = useState({
     dataLanc: todayISO(), vencimento: todayISO(), cliente: "", categoria: categories[0]?.nome || "",
@@ -6070,7 +6087,13 @@ function ReceivableModal({ initial, categories, contacts = [], accounts = [], ai
             <TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone/WhatsApp" />
           </Field>
           <Field label="Centro de Custo">
-            <TextInput value={form.centroCusto} onChange={(e) => setForm({ ...form, centroCusto: e.target.value })} placeholder="Opcional — alimenta Relatórios → Rentabilidade por Centro de Custo" />
+            <Select value={form.centroCusto} onChange={(e) => setForm({ ...form, centroCusto: e.target.value })}>
+              <option value="">Nenhum</option>
+              {costCenters.map((c) => <option key={c.id} value={c.nome}>{c.nome}</option>)}
+              {form.centroCusto && !costCenters.some((c) => c.nome === form.centroCusto) && (
+                <option value={form.centroCusto}>{form.centroCusto} (não cadastrado)</option>
+              )}
+            </Select>
           </Field>
           <Field label="Projeto">
             <TextInput value={form.projeto} onChange={(e) => setForm({ ...form, projeto: e.target.value })} placeholder="Opcional — alimenta Relatórios → Cronograma de Desembolso" />
@@ -7218,9 +7241,23 @@ function FiscalModal({ initial, onClose, onSubmit }) {
 /* ---------------------------------------------------------------------- */
 /*  Plano de Contas                                                        */
 /* ---------------------------------------------------------------------- */
-function CategoriesView({ categories, selectedEmpresa, currentEmpresa, readOnly, onSave }) {
+function CategoriesView({ categories, costCenters, selectedEmpresa, currentEmpresa, readOnly, onSave, onSaveCostCenters }) {
   const [newNome, setNewNome] = useState({}); // { [grupo]: "texto digitado" }
+  const [newCentro, setNewCentro] = useState("");
   const scoped = categories.filter((c) => c.empresaId === selectedEmpresa);
+  const centrosScoped = costCenters.filter((c) => c.empresaId === selectedEmpresa).sort((a, b) => a.nome.localeCompare(b.nome));
+
+  const addCentro = () => {
+    const nome = newCentro.trim();
+    if (!nome || !selectedEmpresa) return;
+    if (centrosScoped.some((c) => c.nome.toLowerCase() === nome.toLowerCase())) {
+      alert(`Já existe um Centro de Custo chamado "${nome}" nesta empresa.`);
+      return;
+    }
+    onSaveCostCenters([...costCenters, { id: uid(), empresaId: selectedEmpresa, nome }]);
+    setNewCentro("");
+  };
+  const removeCentro = (id) => onSaveCostCenters(costCenters.filter((c) => c.id !== id));
 
   // Próximo código dentro do grupo: olha o maior sufixo numérico já usado
   // (não o total de linhas) pra nunca colidir com um código que ficou
@@ -7324,6 +7361,41 @@ function CategoriesView({ categories, selectedEmpresa, currentEmpresa, readOnly,
           {PLANO_CONTAS_GRUPOS.despesa.map((g) => renderGrupo("despesa", g))}
         </Card>
       </div>
+
+      {currentEmpresa && (
+        <Card className="p-4">
+          <h2 className="text-sm font-semibold" style={{ color: COLORS.ink }}>Centros de Custo</h2>
+          <p className="text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+            Divisão interna da empresa (área, unidade, departamento...) pra agrupar receita e despesa — alimenta o dropdown "Centro de Custo" em Contas a Pagar/Receber e o relatório Rentabilidade por Centro de Custo.
+          </p>
+          {centrosScoped.length === 0 ? (
+            <p className="text-xs italic mb-2" style={{ color: COLORS.inkSoft }}>Nenhum centro de custo cadastrado ainda.</p>
+          ) : (
+            <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 mb-2">
+              {centrosScoped.map((c) => (
+                <div key={c.id} className="flex items-center justify-between text-sm py-0.5">
+                  <span style={{ color: COLORS.ink }}>{c.nome}</span>
+                  {!readOnly && (
+                    <button onClick={() => removeCentro(c.id)} title="Excluir centro de custo" className="p-1 rounded hover:bg-black/5"><Trash2 size={13} color={COLORS.red} /></button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {!readOnly && (
+            <div className="flex gap-2">
+              <TextInput
+                value={newCentro}
+                onChange={(e) => setNewCentro(e.target.value)}
+                placeholder="Novo centro de custo"
+                style={{ height: 32 }}
+                onKeyDown={(e) => e.key === "Enter" && addCentro()}
+              />
+              <Button variant="subtle" onClick={addCentro} title="Adicionar centro de custo" style={{ height: 32 }}><Plus size={13} /></Button>
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   );
 }
