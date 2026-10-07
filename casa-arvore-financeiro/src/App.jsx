@@ -2016,6 +2016,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                 skills={bpoSkills}
                 runs={skillRuns}
                 empresaId={selectedEmpresa}
+                empresaNome={currentEmpresa?.nome}
                 userEmail={userEmail}
                 autoFillBlocks={skillAutoFillBlocks}
                 onSaveSkills={(v) => persist("bpoSkills", v, setBpoSkills)}
@@ -11207,6 +11208,31 @@ function SkillMarkdown({ text }) {
   return <div className="text-sm space-y-0.5">{blocks}</div>;
 }
 
+function slugFileName(text) {
+  return (text || "")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "") // tira acento — nome de arquivo mais portável entre SO
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Gera um .md pra baixar e anexar manualmente num Projeto do claude.ai
+// (ou qualquer outra IA) — nome do arquivo já sai com o código e o título
+// da skill, e o conteúdo carrega um cabeçalho com empresa e data, pra o
+// gestor não ter que digitar isso de novo a cada anexo.
+function downloadSkillResult(skill, texto, empresaNome, geradoEmISO) {
+  const cabecalho = `# ${skill.codigo} — ${skill.titulo}\n\nEmpresa: ${empresaNome || "—"}\nGerado em: ${fmtDateTime(geradoEmISO || new Date().toISOString())}\n\n---\n\n`;
+  const blob = new Blob([cabecalho + texto], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${slugFileName(`${skill.codigo} - ${skill.titulo}`)}.md`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // Alterna entre a versão formatada (pra ler na tela) e o texto bruto (pra
 // conferir exatamente o que vai ser copiado/colado — WhatsApp, por
 // exemplo, não renderiza tabela nem cabeçalho markdown, só o negrito).
@@ -11237,7 +11263,7 @@ function SkillResultView({ texto, maxHClass = "max-h-[60vh]" }) {
   );
 }
 
-function RunSkillModal({ skill, sugestoesCampos, onClose, onRun }) {
+function RunSkillModal({ skill, sugestoesCampos, empresaNome, onClose, onRun }) {
   // Campos com dado automático nascem preenchidos, mas continuam sendo o
   // mesmo <textarea> editável de sempre — o gestor pode apagar, completar
   // ou corrigir antes de mandar pra IA, nunca é travado.
@@ -11325,6 +11351,7 @@ function RunSkillModal({ skill, sugestoesCampos, onClose, onRun }) {
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setResultado(null)}>Rodar de novo</Button>
             <Button variant="subtle" onClick={copiar}><Copy size={14} /> Copiar</Button>
+            <Button variant="subtle" onClick={() => downloadSkillResult(skill, resultado, empresaNome)}><Download size={14} /> Baixar arquivo</Button>
             <Button onClick={onClose}>Fechar</Button>
           </div>
         </div>
@@ -11333,7 +11360,7 @@ function RunSkillModal({ skill, sugestoesCampos, onClose, onRun }) {
   );
 }
 
-function HubSkillsView({ skills, runs, empresaId, userEmail, autoFillBlocks, onSaveSkills, onSaveRuns }) {
+function HubSkillsView({ skills, runs, empresaId, empresaNome, userEmail, autoFillBlocks, onSaveSkills, onSaveRuns }) {
   const [nivelFiltro, setNivelFiltro] = useState("");
   const [busca, setBusca] = useState("");
   const [skillModal, setSkillModal] = useState(null); // null | {} | skill
@@ -11502,11 +11529,21 @@ function HubSkillsView({ skills, runs, empresaId, userEmail, autoFillBlocks, onS
         <SkillModal initial={skillModal.id ? skillModal : null} onClose={() => setSkillModal(null)} onSubmit={saveSkill} />
       )}
       {runModal && (
-        <RunSkillModal skill={runModal} sugestoesCampos={sugestoesPara(runModal)} onClose={() => setRunModal(null)} onRun={executarSkill} />
+        <RunSkillModal skill={runModal} sugestoesCampos={sugestoesPara(runModal)} empresaNome={empresaNome} onClose={() => setRunModal(null)} onRun={executarSkill} />
       )}
       {viewRun && (
         <Modal title={`${viewRun.skillCodigo} — ${viewRun.skillTitulo}`} onClose={() => setViewRun(null)} xwide>
-          <SkillResultView texto={viewRun.resultado} maxHClass="max-h-[70vh]" />
+          <div className="grid gap-3">
+            <SkillResultView texto={viewRun.resultado} maxHClass="max-h-[70vh]" />
+            <div className="flex justify-end">
+              <Button
+                variant="subtle"
+                onClick={() => downloadSkillResult({ codigo: viewRun.skillCodigo, titulo: viewRun.skillTitulo }, viewRun.resultado, empresaNome, viewRun.created_at)}
+              >
+                <Download size={14} /> Baixar arquivo
+              </Button>
+            </div>
+          </div>
         </Modal>
       )}
     </div>
