@@ -5157,10 +5157,10 @@ function PayableModal({ initial, categories, contacts = [], accounts = [], aiNot
             <TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone/WhatsApp" />
           </Field>
           <Field label="Centro de Custo">
-            <TextInput value={form.centroCusto} onChange={(e) => setForm({ ...form, centroCusto: e.target.value })} placeholder="Opcional — área interna responsável" />
+            <TextInput value={form.centroCusto} onChange={(e) => setForm({ ...form, centroCusto: e.target.value })} placeholder="Opcional — alimenta Relatórios → Rentabilidade por Centro de Custo" />
           </Field>
           <Field label="Projeto">
-            <TextInput value={form.projeto} onChange={(e) => setForm({ ...form, projeto: e.target.value })} placeholder="Opcional" />
+            <TextInput value={form.projeto} onChange={(e) => setForm({ ...form, projeto: e.target.value })} placeholder="Opcional — alimenta Relatórios → Cronograma de Desembolso" />
           </Field>
           <div className="md:col-span-2 flex items-start gap-2 pt-1">
             <input
@@ -6070,10 +6070,10 @@ function ReceivableModal({ initial, categories, contacts = [], accounts = [], ai
             <TextInput value={form.contato} onChange={(e) => setForm({ ...form, contato: e.target.value })} placeholder="Telefone/WhatsApp" />
           </Field>
           <Field label="Centro de Custo">
-            <TextInput value={form.centroCusto} onChange={(e) => setForm({ ...form, centroCusto: e.target.value })} placeholder="Opcional — área interna responsável" />
+            <TextInput value={form.centroCusto} onChange={(e) => setForm({ ...form, centroCusto: e.target.value })} placeholder="Opcional — alimenta Relatórios → Rentabilidade por Centro de Custo" />
           </Field>
           <Field label="Projeto">
-            <TextInput value={form.projeto} onChange={(e) => setForm({ ...form, projeto: e.target.value })} placeholder="Opcional" />
+            <TextInput value={form.projeto} onChange={(e) => setForm({ ...form, projeto: e.target.value })} placeholder="Opcional — alimenta Relatórios → Cronograma de Desembolso" />
           </Field>
           <div className="md:col-span-2 flex items-start gap-2 pt-1">
             <input
@@ -7346,7 +7346,7 @@ const REPORT_TABS = [
   { id: "ordem", label: "Ordem de Pagamento", Comp: PaymentOrderReport },
   { id: "cobranca", label: "Relação de Cobrança", Comp: CollectionsReport },
   { id: "aging", label: "Aging", Comp: AgingReport },
-  { id: "rentabilidade", label: "Rentabilidade por Projeto", Comp: RentabilidadeProjetoReport },
+  { id: "rentabilidade", label: "Rentabilidade por Centro de Custo", Comp: RentabilidadeProjetoReport },
   { id: "cronograma", label: "Cronograma de Desembolso", Comp: CronogramaDesembolsoReport },
   { id: "diaSemana", label: "Faturamento por Dia da Semana", Comp: FaturamentoDiaSemanaReport },
   { id: "extrato", label: "Extrato de Conta", Comp: ExtratoContaReport },
@@ -8115,50 +8115,54 @@ function AgingReport({ payables, receivables }) {
 }
 
 /* --- Rentabilidade por Projeto/Contrato --- */
-// Usa o campo "Projeto" que já existe em Contas a Pagar/Receber (texto
-// livre) — receita menos custo direto lançado com o mesmo nome de
-// projeto. Não normaliza maiúsculas/acentos de propósito: é mais simples
-// avisar que "Cliente X" e "cliente x" contam separado do que arriscar
-// juntar dois projetos que só por coincidência têm nomes parecidos.
+// Usa o campo "Centro de Custo" que já existe em Contas a Pagar/Receber
+// (texto livre) — receita menos custo direto lançado com o mesmo nome de
+// centro de custo. Preferido a "Projeto" porque é um conceito universal
+// (toda empresa tem uma divisão interna de custos, nem toda empresa
+// pensa em "projeto") — "Projeto" continua existindo só pro Cronograma
+// de Desembolso (eventos). Não normaliza maiúsculas/acentos de
+// propósito: é mais simples avisar que "Delivery" e "delivery" contam
+// separado do que arriscar juntar dois centros de custo que só por
+// coincidência têm nomes parecidos.
 function RentabilidadeProjetoReport({ year, payables, receivables }) {
-  const receitaPorProjeto = {};
+  const receitaPorCentro = {};
   receivables.forEach((r) => {
-    const proj = (r.projeto || "").trim();
-    if (!proj || yearOf(r.vencimento) !== year) return;
-    receitaPorProjeto[proj] = (receitaPorProjeto[proj] || 0) + Number(r.valor || 0);
+    const centro = (r.centroCusto || "").trim();
+    if (!centro || yearOf(r.vencimento) !== year) return;
+    receitaPorCentro[centro] = (receitaPorCentro[centro] || 0) + Number(r.valor || 0);
   });
-  const custoPorProjeto = {};
+  const custoPorCentro = {};
   payables.forEach((p) => {
-    const proj = (p.projeto || "").trim();
-    if (!proj || yearOf(p.vencimento) !== year) return;
-    custoPorProjeto[proj] = (custoPorProjeto[proj] || 0) + Number(p.valor || 0);
+    const centro = (p.centroCusto || "").trim();
+    if (!centro || yearOf(p.vencimento) !== year) return;
+    custoPorCentro[centro] = (custoPorCentro[centro] || 0) + Number(p.valor || 0);
   });
-  const projetos = [...new Set([...Object.keys(receitaPorProjeto), ...Object.keys(custoPorProjeto)])];
-  const linhas = projetos
-    .map((proj) => {
-      const receita = receitaPorProjeto[proj] || 0;
-      const custo = custoPorProjeto[proj] || 0;
+  const centros = [...new Set([...Object.keys(receitaPorCentro), ...Object.keys(custoPorCentro)])];
+  const linhas = centros
+    .map((centro) => {
+      const receita = receitaPorCentro[centro] || 0;
+      const custo = custoPorCentro[centro] || 0;
       const margem = receita - custo;
-      return { proj, receita, custo, margem, margemPct: receita > 0 ? (margem / receita) * 100 : null };
+      return { centro, receita, custo, margem, margemPct: receita > 0 ? (margem / receita) * 100 : null };
     })
     .sort((a, b) => b.margem - a.margem);
-  const semProjeto = receivables.some((r) => yearOf(r.vencimento) === year && !(r.projeto || "").trim())
-    || payables.some((p) => yearOf(p.vencimento) === year && !(p.projeto || "").trim());
+  const semCentro = receivables.some((r) => yearOf(r.vencimento) === year && !(r.centroCusto || "").trim())
+    || payables.some((p) => yearOf(p.vencimento) === year && !(p.centroCusto || "").trim());
 
   return (
     <div className="space-y-4">
       <ReportCard
-        title={`Rentabilidade por Projeto/Contrato · ${year}`}
-        subtitle='Receita menos custos diretos, agrupados pelo campo "Projeto" (Contas a Pagar/Receber) — mostra quais contratos dão lucro e quais dão prejuízo.'
+        title={`Rentabilidade por Centro de Custo · ${year}`}
+        subtitle='Receita menos custos diretos, agrupados pelo campo "Centro de Custo" (Contas a Pagar/Receber) — mostra qual área/divisão interna dá lucro e qual dá prejuízo.'
       >
         {linhas.length === 0 ? (
-          <EmptyState icon={ListTree} title='Nenhum lançamento com "Projeto" preenchido neste ano' subtitle='Preencha o campo "Projeto" ao lançar contas a pagar/receber pra esse relatório funcionar.' />
+          <EmptyState icon={ListTree} title='Nenhum lançamento com "Centro de Custo" preenchido neste ano' subtitle='Preencha o campo "Centro de Custo" ao lançar contas a pagar/receber pra esse relatório funcionar.' />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
-                  <th className="text-left font-medium px-2 py-1.5">Projeto</th>
+                  <th className="text-left font-medium px-2 py-1.5">Centro de Custo</th>
                   <th className="text-right font-medium px-2 py-1.5">Receita</th>
                   <th className="text-right font-medium px-2 py-1.5">Custo direto</th>
                   <th className="text-right font-medium px-2 py-1.5">Margem</th>
@@ -8167,8 +8171,8 @@ function RentabilidadeProjetoReport({ year, payables, receivables }) {
               </thead>
               <tbody>
                 {linhas.map((l) => (
-                  <tr key={l.proj} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                    <td className="px-2 py-1.5 font-medium" style={{ color: COLORS.ink }}>{l.proj}</td>
+                  <tr key={l.centro} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <td className="px-2 py-1.5 font-medium" style={{ color: COLORS.ink }}>{l.centro}</td>
                     <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.green }}>{fmtBRL(l.receita)}</td>
                     <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.red }}>{fmtBRL(l.custo)}</td>
                     <td className="px-2 py-1.5 text-right tabular-nums font-medium" style={{ color: l.margem >= 0 ? COLORS.green : COLORS.red }}>{fmtBRL(l.margem)}</td>
@@ -8179,9 +8183,9 @@ function RentabilidadeProjetoReport({ year, payables, receivables }) {
             </table>
           </div>
         )}
-        {semProjeto && (
+        {semCentro && (
           <p className="text-xs mt-3" style={{ color: COLORS.inkSoft }}>
-            Há lançamentos deste ano sem "Projeto" preenchido — eles não entram nesse relatório.
+            Há lançamentos deste ano sem "Centro de Custo" preenchido — eles não entram nesse relatório.
           </p>
         )}
       </ReportCard>
