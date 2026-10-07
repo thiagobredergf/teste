@@ -11106,6 +11106,137 @@ function SkillModal({ initial, onClose, onSubmit }) {
   );
 }
 
+// Renderização de markdown simples pro resultado das skills — sem
+// dependência nova, porque a IA sempre devolve um subconjunto previsível
+// de sintaxe (cabeçalho #, negrito **, lista -, tabela |, régua ---), não
+// precisa de uma lib de parsing inteira só pra isso. Antes disso o
+// resultado ia cru pra tela (##, ** e |---|--- apareciam literalmente).
+function renderInlineMarkdown(text) {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.startsWith("**") && part.endsWith("**") && part.length > 4
+      ? <strong key={i}>{part.slice(2, -2)}</strong>
+      : <React.Fragment key={i}>{part}</React.Fragment>
+  );
+}
+
+function SkillMarkdown({ text }) {
+  const lines = (text || "").split("\n");
+  const blocks = [];
+  let listBuffer = null;
+  let tableBuffer = null;
+
+  const flushList = () => {
+    if (!listBuffer) return;
+    const Tag = listBuffer.type === "ol" ? "ol" : "ul";
+    blocks.push(
+      <Tag key={`list-${blocks.length}`} className={Tag === "ol" ? "list-decimal pl-5 space-y-0.5" : "list-disc pl-5 space-y-0.5"}>
+        {listBuffer.items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item)}</li>)}
+      </Tag>
+    );
+    listBuffer = null;
+  };
+  const flushTable = () => {
+    if (!tableBuffer) return;
+    blocks.push(
+      <table key={`table-${blocks.length}`} className="w-full text-sm my-2 border-collapse">
+        <thead>
+          <tr style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+            {tableBuffer.header.map((h, idx) => <th key={idx} className="text-left font-medium px-2 py-1">{renderInlineMarkdown(h)}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {tableBuffer.rows.map((row, ridx) => (
+            <tr key={ridx} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+              {row.map((cell, cidx) => <td key={cidx} className="px-2 py-1 align-top">{renderInlineMarkdown(cell)}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+    tableBuffer = null;
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+      const cells = trimmed.slice(1, -1).split("|").map((c) => c.trim());
+      if (cells.every((c) => /^:?-+:?$/.test(c))) continue; // linha --- da tabela
+      if (!tableBuffer) { flushList(); tableBuffer = { header: cells, rows: [] }; }
+      else tableBuffer.rows.push(cells);
+      continue;
+    }
+    flushTable();
+
+    if (trimmed === "---" || trimmed === "***") {
+      flushList();
+      blocks.push(<hr key={`hr-${blocks.length}`} className="my-3" style={{ borderColor: COLORS.border }} />);
+      continue;
+    }
+
+    const headerMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (headerMatch) {
+      flushList();
+      const level = headerMatch[1].length;
+      const cls = level === 1 ? "text-base font-semibold mt-3 mb-1" : level === 2 ? "text-sm font-semibold mt-3 mb-1" : "text-sm font-medium mt-2 mb-1";
+      blocks.push(<p key={`h-${blocks.length}`} className={cls} style={{ color: COLORS.ink }}>{renderInlineMarkdown(headerMatch[2])}</p>);
+      continue;
+    }
+
+    const bulletMatch = trimmed.match(/^[-*]\s+(.*)$/);
+    if (bulletMatch) {
+      if (!listBuffer || listBuffer.type !== "ul") { flushList(); listBuffer = { type: "ul", items: [] }; }
+      listBuffer.items.push(bulletMatch[1]);
+      continue;
+    }
+
+    const numberedMatch = trimmed.match(/^\d+[.)]\s+(.*)$/);
+    if (numberedMatch) {
+      if (!listBuffer || listBuffer.type !== "ol") { flushList(); listBuffer = { type: "ol", items: [] }; }
+      listBuffer.items.push(numberedMatch[1]);
+      continue;
+    }
+
+    flushList();
+    if (trimmed === "") continue;
+    blocks.push(<p key={`p-${blocks.length}`} className="my-1">{renderInlineMarkdown(line)}</p>);
+  }
+  flushList();
+  flushTable();
+
+  return <div className="text-sm space-y-0.5">{blocks}</div>;
+}
+
+// Alterna entre a versão formatada (pra ler na tela) e o texto bruto (pra
+// conferir exatamente o que vai ser copiado/colado — WhatsApp, por
+// exemplo, não renderiza tabela nem cabeçalho markdown, só o negrito).
+function SkillResultView({ texto, maxHClass = "max-h-[60vh]" }) {
+  const [bruto, setBruto] = useState(false);
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-end gap-1 print:hidden">
+        <button
+          onClick={() => setBruto(false)}
+          className="px-2.5 py-1 rounded-md text-xs font-medium"
+          style={{ background: !bruto ? COLORS.ink : "#EFEEE8", color: !bruto ? "#fff" : COLORS.ink }}
+        >
+          Formatado
+        </button>
+        <button
+          onClick={() => setBruto(true)}
+          className="px-2.5 py-1 rounded-md text-xs font-medium"
+          style={{ background: bruto ? COLORS.ink : "#EFEEE8", color: bruto ? "#fff" : COLORS.ink }}
+        >
+          Texto bruto
+        </button>
+      </div>
+      <div className={`rounded-lg p-4 text-sm overflow-y-auto ${maxHClass}`} style={{ background: "#FAFAF7", border: `1px solid ${COLORS.border}`, color: COLORS.ink }}>
+        {bruto ? <div className="whitespace-pre-wrap">{texto}</div> : <SkillMarkdown text={texto} />}
+      </div>
+    </div>
+  );
+}
+
 function RunSkillModal({ skill, sugestoesCampos, onClose, onRun }) {
   // Campos com dado automático nascem preenchidos, mas continuam sendo o
   // mesmo <textarea> editável de sempre — o gestor pode apagar, completar
@@ -11190,9 +11321,7 @@ function RunSkillModal({ skill, sugestoesCampos, onClose, onRun }) {
         </div>
       ) : (
         <div className="grid gap-3">
-          <div className="rounded-lg p-4 whitespace-pre-wrap text-sm max-h-[60vh] overflow-y-auto" style={{ background: "#FAFAF7", border: `1px solid ${COLORS.border}`, color: COLORS.ink }}>
-            {resultado}
-          </div>
+          <SkillResultView texto={resultado} />
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setResultado(null)}>Rodar de novo</Button>
             <Button variant="subtle" onClick={copiar}><Copy size={14} /> Copiar</Button>
@@ -11377,9 +11506,7 @@ function HubSkillsView({ skills, runs, empresaId, userEmail, autoFillBlocks, onS
       )}
       {viewRun && (
         <Modal title={`${viewRun.skillCodigo} — ${viewRun.skillTitulo}`} onClose={() => setViewRun(null)} xwide>
-          <div className="rounded-lg p-4 whitespace-pre-wrap text-sm max-h-[70vh] overflow-y-auto" style={{ background: "#FAFAF7", border: `1px solid ${COLORS.border}`, color: COLORS.ink }}>
-            {viewRun.resultado}
-          </div>
+          <SkillResultView texto={viewRun.resultado} maxHClass="max-h-[70vh]" />
         </Modal>
       )}
     </div>
