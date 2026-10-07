@@ -53,7 +53,14 @@ Deno.serve(async (req) => {
   try {
     response = await client.messages.create({
       model,
-      max_tokens: 4096,
+      // claude-sonnet-5 (tier "padrao") roda thinking adaptativo por padrão,
+      // mesmo sem o parâmetro "thinking" — esse raciocínio consome parte do
+      // max_tokens antes do texto final. Com 4096 (valor antigo), um prompt
+      // mais longo (skill com vários campos de dado automático) podia gastar
+      // o teto inteiro só pensando e devolver resposta sem bloco de texto
+      // nenhum ("A IA não retornou texto."). 16000 é o default recomendado
+      // pra chamada não-streaming.
+      max_tokens: 16000,
       messages: [{ role: "user", content: prompt }],
     });
   } catch (err) {
@@ -68,7 +75,7 @@ Deno.serve(async (req) => {
   }
 
   const textBlock = (response.content ?? []).find((b): b is Anthropic.TextBlock => b.type === "text");
-  if (!textBlock) return jsonResponse({ error: "A IA não retornou texto." }, 502);
+  if (!textBlock) return jsonResponse({ error: `A IA não retornou texto (stop_reason: ${response.stop_reason}).` }, 502);
 
   return jsonResponse({ ok: true, resultado: textBlock.text }, 200);
 });
