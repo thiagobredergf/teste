@@ -1351,6 +1351,165 @@ function FinanceiroApp({ userEmail, onLogout }) {
     [receivablesF]
   );
 
+  // Blocos de texto já formatados a partir dos dados reais da empresa
+  // selecionada — pré-preenchem (de forma editável) os campos do Hub de
+  // Skills em vez do gestor ter que digitar/colar os números na mão toda
+  // vez que roda uma skill. Qual campo de qual skill usa qual bloco daqui
+  // está em SKILL_AUTOFILL_MAP (perto de HubSkillsView); esse mapa fica
+  // só no front de propósito — a skill no banco continua genérica,
+  // "{{campo}}" não sabe nada sobre de onde o texto veio.
+  const skillAutoFillBlocks = useMemo(() => {
+    const anoAnterior = year - 1;
+    const fmtDiasAuto = (v) => (v == null ? "sem dado" : `${v > 0 ? "+" : ""}${v.toFixed(0)} dia(s)`);
+    const fmtPctAuto = (v) => `${v.toFixed(1)}%`;
+    const listaLimitada = (arr, max, fmt) => {
+      if (arr.length === 0) return "nenhum";
+      const shown = arr.slice(0, max).map(fmt);
+      const resto = arr.length - shown.length;
+      return shown.join("\n") + (resto > 0 ? `\n... e mais ${resto} item(ns)` : "");
+    };
+
+    const ind = computeIndicadores(year, payablesF, receivablesF, totals);
+    const dre = computeDRECaixa(year, payablesF, receivablesF, financialAdjustments);
+
+    const flowAnterior = buildMonthlyFlow(receivablesF, payablesF, bankEntriesF, fiscalObligationsF, anoAnterior);
+    const entradasAnterior = flowAnterior.entradas.reduce((a, b) => a + b, 0);
+    const saidasAnterior = flowAnterior.saidas.reduce((a, b) => a + b, 0);
+    const saldoAnterior = entradasAnterior - saidasAnterior;
+    const margemAnterior = entradasAnterior > 0 ? saldoAnterior / entradasAnterior : 0;
+    const indAnterior = computeIndicadores(anoAnterior, payablesF, receivablesF, { margem: margemAnterior, totalEntradas: entradasAnterior });
+    const dreAnterior = computeDRECaixa(anoAnterior, payablesF, receivablesF, null);
+
+    const indicadoresDoMes =
+`Margem operacional (regime de caixa): ${totals.totalEntradas > 0 ? fmtPctAuto(totals.margem * 100) : "sem dado"}
+Resultado líquido do período: ${fmtBRL(dre.resultado)}
+Taxa de inadimplência: ${fmtPctAuto(ind.inadimplencia)}
+Prazo médio de recebimento: ${fmtDiasAuto(ind.dso)}
+Prazo médio de pagamento: ${fmtDiasAuto(ind.dpo)}
+Ticket médio recebido: ${fmtBRL(ind.ticketMedio)}
+Faturado no ano (a receber): ${fmtBRL(ind.totalFaturado)}
+Saldo atual em contas: ${fmtBRL(totalBalance)}`;
+
+    const comparativoPeriodoAnterior =
+`${anoAnterior} → ${year}
+Entradas: ${fmtBRL(entradasAnterior)} → ${fmtBRL(totals.totalEntradas)}
+Saídas: ${fmtBRL(saidasAnterior)} → ${fmtBRL(totals.totalSaidas)}
+Saldo do ano: ${fmtBRL(saldoAnterior)} → ${fmtBRL(totals.saldo)}
+Margem operacional: ${fmtPctAuto(margemAnterior * 100)} → ${fmtPctAuto(totals.margem * 100)}
+Resultado líquido (DRE): ${fmtBRL(dreAnterior.resultado)} → ${fmtBRL(dre.resultado)}
+Taxa de inadimplência: ${fmtPctAuto(indAnterior.inadimplencia)} → ${fmtPctAuto(ind.inadimplencia)}`;
+
+    const dreAtual =
+`Regime de caixa, ano ${year}
+Total de receitas: ${fmtBRL(dre.totalReceitas)}
+Total de despesas: ${fmtBRL(dre.totalDespesas)}
+Resultado operacional: ${fmtBRL(dre.resultadoOperacional)}
+Resultado líquido do período: ${fmtBRL(dre.resultado)}
+Margem operacional: ${dre.totalReceitas > 0 ? fmtPctAuto(dre.margem * 100) : "sem dado"}`;
+
+    const payablesVencidos = payablesF.filter((p) => p.status !== "Pago" && (p.vencimento || "") < todayISO());
+    const receivablesVencidos = receivablesF.filter((r) => r.status !== "Recebido" && (r.vencimento || "") < todayISO());
+    const bankSemCategoria = bankEntriesF.filter((b) => !b.categoria || b.categoria === "A classificar");
+    const payablesSemCategoria = payablesF.filter((p) => !p.categoria);
+    const receivablesSemCategoria = receivablesF.filter((r) => !r.categoria);
+
+    const pendenciasEmAberto =
+`Contas a pagar vencidas e não pagas (${payablesVencidos.length}):
+${listaLimitada(payablesVencidos, 8, (p) => `- ${p.fornecedor || "sem fornecedor"}: ${fmtBRL(p.valor)}, venceu em ${fmtDate(p.vencimento)}`)}
+
+Contas a receber vencidas e não recebidas (${receivablesVencidos.length}):
+${listaLimitada(receivablesVencidos, 8, (r) => `- ${r.cliente || "sem cliente"}: ${fmtBRL(r.valor)}, venceu em ${fmtDate(r.vencimento)}`)}
+
+Lançamentos bancários não conciliados: ${pendingNaoConciliados}
+Lançamentos sem categoria: banco ${bankSemCategoria.length}, a pagar ${payablesSemCategoria.length}, a receber ${receivablesSemCategoria.length}`;
+
+    const contaNome = (id) => accountsF.find((a) => a.id === id)?.nome || "";
+    const contasEnvolvidasSet = new Set(
+      [
+        ...bankEntriesF.filter((b) => !b.conciliado).map((b) => contaNome(b.contaId)),
+        ...transfersF.filter((t) => !t.conciliado).map((t) => contaNome(t.contaOrigemId)),
+        ...payablesF.filter((p) => p.status === "Pago" && !p.conciliado).map((p) => contaNome(p.contaPgtoId)),
+        ...receivablesF.filter((r) => r.status === "Recebido" && !r.conciliado).map((r) => contaNome(r.contaRecebId)),
+      ].filter(Boolean)
+    );
+    const contasEnvolvidas = contasEnvolvidasSet.size > 0 ? [...contasEnvolvidasSet].join(", ") : "nenhuma conta com pendência de conciliação";
+
+    const fluxo = dailyCashFlow(payablesF, receivablesF, bankEntriesF, totalBalance);
+    const futurosEntrada = fluxo.futuros.filter((f) => f.tipo === "entrada");
+    const futurosSaida = fluxo.futuros.filter((f) => f.tipo === "saida");
+    const saldoAtual = `${fmtBRL(totalBalance)} (soma do saldo de todas as contas ativas)`;
+    const entradasPrevistas = `${fmtBRL(futurosEntrada.reduce((s, f) => s + f.valor, 0))} nos próximos ${FLUXO_FUTURE_DAYS} dias (${futurosEntrada.length} conta(s) a receber em aberto)`;
+    const saidasPrevistas = `${fmtBRL(futurosSaida.reduce((s, f) => s + f.valor, 0))} nos próximos ${FLUXO_FUTURE_DAYS} dias (${futurosSaida.length} conta(s) a pagar em aberto)`;
+
+    const extratoAno = bankEntriesF.filter((b) => yearOf(b.data) === year).sort((a, b) => (a.data || "").localeCompare(b.data || ""));
+    const extratoDoPeriodo = extratoAno.length === 0
+      ? "nenhum lançamento bancário neste ano"
+      : listaLimitada(extratoAno, 20, (b) => `- ${fmtDate(b.data)} · ${b.descricao || "sem descrição"} · ${b.tipo === "Entrada" ? "+" : "−"}${fmtBRL(b.valor)}`);
+
+    const carteiraMap = {};
+    receivablesF.forEach((r) => {
+      const cliente = r.cliente || "sem cliente";
+      carteiraMap[cliente] = carteiraMap[cliente] || { total: 0, vencido: 0 };
+      carteiraMap[cliente].total += Number(r.valor || 0);
+      if (r.status !== "Recebido" && (r.vencimento || "") < todayISO()) carteiraMap[cliente].vencido += Number(r.valor || 0);
+    });
+    const carteiraLinhas = Object.entries(carteiraMap).filter(([, v]) => v.vencido > 0).sort((a, b) => b[1].vencido - a[1].vencido);
+    const carteiraPorCliente = carteiraLinhas.length === 0
+      ? "nenhum cliente com valor vencido em aberto"
+      : listaLimitada(carteiraLinhas, 10, ([cliente, v]) => `- ${cliente}: vencido ${fmtBRL(v.vencido)} de um total de ${fmtBRL(v.total)}`);
+
+    const contasAtuais = categoriesF.length === 0
+      ? "nenhuma categoria cadastrada"
+      : `Receitas: ${receitasF.map((c) => c.nome).join(", ") || "nenhuma"}\nDespesas: ${despesasF.map((c) => c.nome).join(", ") || "nenhuma"}`;
+
+    const receitaPorCentro = {};
+    receivablesF.forEach((r) => {
+      const centro = (r.centroCusto || "").trim();
+      if (!centro || yearOf(r.vencimento) !== year) return;
+      receitaPorCentro[centro] = (receitaPorCentro[centro] || 0) + Number(r.valor || 0);
+    });
+    const custoPorCentro = {};
+    payablesF.forEach((p) => {
+      const centro = (p.centroCusto || "").trim();
+      if (!centro || yearOf(p.vencimento) !== year) return;
+      custoPorCentro[centro] = (custoPorCentro[centro] || 0) + Number(p.valor || 0);
+    });
+    const centros = [...new Set([...Object.keys(receitaPorCentro), ...Object.keys(custoPorCentro)])];
+    const historicoPorCentroCusto = centros.length === 0
+      ? "nenhum lançamento com Centro de Custo preenchido neste ano"
+      : centros.map((c) => {
+          const receita = receitaPorCentro[c] || 0;
+          const custo = custoPorCentro[c] || 0;
+          return `- ${c}: receita ${fmtBRL(receita)}, custo ${fmtBRL(custo)}, margem ${fmtBRL(receita - custo)}`;
+        }).join("\n");
+
+    const prazosRecebimentoPagamentoEstoque =
+`Prazo médio de recebimento (DSO): ${fmtDiasAuto(ind.dso)}
+Prazo médio de pagamento (DPO): ${fmtDiasAuto(ind.dpo)}
+Prazo médio de estoque: o ESEK não tem módulo de controle de estoque — esse dado não existe no sistema; informe à parte se o negócio tiver estoque relevante.`;
+
+    const volumeDeOperacao =
+`Faturado no ano (a receber): ${fmtBRL(ind.totalFaturado)}
+Total de despesas pagas no ano: ${fmtBRL(dre.totalDespesas)}
+Ticket médio recebido: ${fmtBRL(ind.ticketMedio)}`;
+
+    const numerosDoPeriodo =
+`Entrou no caixa em ${year}: ${fmtBRL(totals.totalEntradas)}
+Saiu do caixa em ${year}: ${fmtBRL(totals.totalSaidas)}
+Sobrou (ou faltou) no ano: ${fmtBRL(totals.saldo)}
+Saldo atual em contas: ${fmtBRL(totalBalance)}`;
+
+    return {
+      indicadoresDoMes, comparativoPeriodoAnterior, pendenciasEmAberto, dreAtual,
+      saldoAtual, entradasPrevistas, saidasPrevistas, contasEnvolvidas,
+      extratoDoPeriodo, carteiraPorCliente, contasAtuais,
+      prazosRecebimentoPagamentoEstoque, volumeDeOperacao, historicoPorCentroCusto, numerosDoPeriodo,
+    };
+  }, [
+    year, payablesF, receivablesF, bankEntriesF, fiscalObligationsF, transfersF, accountsF, categoriesF,
+    receitasF, despesasF, totals, totalBalance, financialAdjustments, buildMonthlyFlow, pendingNaoConciliados,
+  ]);
+
   if (!ready) {
     return (
       <div className="w-full h-full flex items-center justify-center" style={{ background: COLORS.bg, minHeight: 480 }}>
@@ -1858,6 +2017,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
                 runs={skillRuns}
                 empresaId={selectedEmpresa}
                 userEmail={userEmail}
+                autoFillBlocks={skillAutoFillBlocks}
                 onSaveSkills={(v) => persist("bpoSkills", v, setBpoSkills)}
                 onSaveRuns={(v) => persist("skillRuns", v, setSkillRuns)}
               />
@@ -7681,6 +7841,25 @@ function DREReport({ year, payables, receivables, financialAdjustments }) {
   );
 }
 
+// Totais do DRE em regime de caixa, isolados do componente — usados pelo
+// auto-preenchimento do Hub de Skills (fase 32), que precisa só do total
+// (não da quebra por categoria que o DREReport renderiza). Mantido como
+// função pura separada (em vez de fazer o DREReport chamá-la) pra não
+// mexer num relatório já em produção só por causa de uma feature nova.
+function computeDRECaixa(ano, payables, receivables, financialAdjustments) {
+  const totalReceitas = receivables
+    .filter((r) => r.status === "Recebido" && yearOf(r.dataReceb) === ano)
+    .reduce((s, r) => s + Number(r.valorRecebido ?? r.valor ?? 0) - Number(r.juros || 0) - Number(r.multa || 0) + Number(r.desconto || 0), 0);
+  const totalDespesas = payables
+    .filter((p) => p.status === "Pago" && yearOf(p.dataPgto) === ano)
+    .reduce((s, p) => s + Number(p.valorPago ?? p.valor ?? 0) - Number(p.juros || 0) - Number(p.multa || 0) + Number(p.desconto || 0), 0);
+  const resultadoOperacional = totalReceitas - totalDespesas;
+  const temFinanceiro = financialAdjustments && (financialAdjustments.receitas > 0 || financialAdjustments.despesas > 0);
+  const resultado = resultadoOperacional + (temFinanceiro ? financialAdjustments.resultado : 0);
+  const margem = totalReceitas > 0 ? resultadoOperacional / totalReceitas : 0;
+  return { totalReceitas, totalDespesas, resultadoOperacional, resultado, margem };
+}
+
 /* --- DFC (Demonstrativo de Fluxo de Caixa) realizado --- */
 // Diferente do Fluxo Projetado (que olha só pro que ainda está em aberto,
 // contas a pagar/receber não liquidadas), este mostra o que JÁ aconteceu
@@ -7754,15 +7933,13 @@ function DFCReport({ year, monthlyFlow }) {
   );
 }
 
-/* --- Indicadores (KPIs) --- */
-// Métricas que nenhum outro relatório dá isolado: margem já existe no DRE,
-// mas inadimplência e prazo médio (de receber/pagar) exigem cruzar
-// vencimento com a data em que a baixa de fato aconteceu — só faz sentido
-// num relatório próprio.
-function KPIReport({ year, payables, receivables, totals }) {
+// Mesmas fórmulas que o KPIReport renderiza, isoladas numa função pura —
+// usadas pelo relatório E pelo auto-preenchimento do Hub de Skills (fase
+// 32), uma fonte só pra margem/inadimplência/DSO/DPO/ticket médio/faturado.
+function computeIndicadores(ano, payables, receivables, totals) {
   const today = todayISO();
 
-  const receivablesAno = receivables.filter((r) => yearOf(r.vencimento) === year);
+  const receivablesAno = receivables.filter((r) => yearOf(r.vencimento) === ano);
   const recebidosAno = receivablesAno.filter((r) => r.status === "Recebido");
   const totalFaturado = receivablesAno.reduce((s, r) => s + Number(r.valor || 0), 0);
   const vencidoNaoRecebido = receivablesAno
@@ -7777,10 +7954,22 @@ function KPIReport({ year, payables, receivables, totals }) {
     ? recebidosAno.reduce((s, r) => s + Number(r.valorRecebido ?? r.valor ?? 0), 0) / recebidosAno.length
     : 0;
 
-  const payablesAno = payables.filter((p) => yearOf(p.vencimento) === year);
+  const payablesAno = payables.filter((p) => yearOf(p.vencimento) === ano);
   const pagosAno = payablesAno.filter((p) => p.status === "Pago");
   const prazosPagamento = pagosAno.filter((p) => p.vencimento && p.dataPgto).map((p) => daysBetween(p.vencimento, p.dataPgto));
   const dpo = prazosPagamento.length > 0 ? prazosPagamento.reduce((a, b) => a + b, 0) / prazosPagamento.length : null;
+
+  const margem = totals ? totals.margem : null;
+  return { totalFaturado, vencidoNaoRecebido, inadimplencia, dso, dpo, ticketMedio, margem };
+}
+
+/* --- Indicadores (KPIs) --- */
+// Métricas que nenhum outro relatório dá isolado: margem já existe no DRE,
+// mas inadimplência e prazo médio (de receber/pagar) exigem cruzar
+// vencimento com a data em que a baixa de fato aconteceu — só faz sentido
+// num relatório próprio.
+function KPIReport({ year, payables, receivables, totals }) {
+  const { totalFaturado, inadimplencia, dso, dpo, ticketMedio } = computeIndicadores(year, payables, receivables, totals);
 
   const fmtDias = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(0)} dia(s)`);
 
@@ -10818,6 +11007,27 @@ function RotinaView({
 
 const NIVEL_BADGE_TONE = { "Básico": "green", "Intermediário": "amber", "Avançado": "gold" };
 const NIVEL_ORDEM = { "Avançado": 0, "Intermediário": 1, "Básico": 2 };
+
+// Quais campos de quais skills dá pra pré-preencher com dado real da
+// empresa selecionada (ver skillAutoFillBlocks em FinanceiroApp). Fica
+// separado do cadastro da skill no banco de propósito: a skill guarda o
+// método (o prompt), não o dado — este mapa é só uma conveniência do
+// front, então uma skill nova sempre funciona (campo em branco pra
+// preencher na mão) mesmo sem entrada aqui; só ganha o preenchimento
+// automático quando alguém adicionar a entrada correspondente.
+const SKILL_AUTOFILL_MAP = {
+  I15: { indicadores_do_mes: "indicadoresDoMes", comparativo_periodo_anterior: "comparativoPeriodoAnterior", pendencias_em_aberto: "pendenciasEmAberto" },
+  I1: { dre_do_periodo: "dreAtual", dre_comparativo: "comparativoPeriodoAnterior" },
+  I8: { numeros_do_mes: "indicadoresDoMes", comparativos: "comparativoPeriodoAnterior", riscos_identificados: "pendenciasEmAberto" },
+  I11: { saldo_atual: "saldoAtual", entradas_previstas: "entradasPrevistas", saidas_previstas: "saidasPrevistas" },
+  B5: { lista_de_pendencias: "pendenciasEmAberto", contas_envolvidas: "contasEnvolvidas" },
+  B8: { extrato_do_periodo: "extratoDoPeriodo" },
+  I2: { carteira_por_cliente: "carteiraPorCliente" },
+  I7: { contas_atuais: "contasAtuais" },
+  I9: { prazos_de_recebimento_pagamento_estoque: "prazosRecebimentoPagamentoEstoque", volume_de_operacao: "volumeDeOperacao" },
+  I10: { historico_por_centro_de_custo: "historicoPorCentroCusto" },
+  B3: { numeros_do_periodo: "numerosDoPeriodo" },
+};
 const humanizeCampo = (campo) => {
   const s = (campo || "").replace(/_/g, " ");
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -10896,8 +11106,11 @@ function SkillModal({ initial, onClose, onSubmit }) {
   );
 }
 
-function RunSkillModal({ skill, onClose, onRun }) {
-  const [valores, setValores] = useState({});
+function RunSkillModal({ skill, sugestoesCampos, onClose, onRun }) {
+  // Campos com dado automático nascem preenchidos, mas continuam sendo o
+  // mesmo <textarea> editável de sempre — o gestor pode apagar, completar
+  // ou corrigir antes de mandar pra IA, nunca é travado.
+  const [valores, setValores] = useState(() => ({ ...(sugestoesCampos || {}) }));
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [resultado, setResultado] = useState(null);
@@ -10932,18 +11145,37 @@ function RunSkillModal({ skill, onClose, onRun }) {
             {(skill.tags || []).map((t) => <Badge key={t} tone="neutral">{t}</Badge>)}
           </div>
           <p className="text-sm" style={{ color: COLORS.inkSoft }}>{skill.resumo}</p>
-          {(skill.campos || []).map((campo) => (
-            <Field key={campo} label={humanizeCampo(campo)}>
-              <textarea
-                value={valores[campo] || ""}
-                onChange={(e) => setValores((v) => ({ ...v, [campo]: e.target.value }))}
-                rows={3}
-                className={inputCls}
-                style={inputStyle}
-                placeholder="Cole ou digite os dados aqui"
-              />
-            </Field>
-          ))}
+          {(skill.campos || []).map((campo) => {
+            const autoPreenchido = Boolean(sugestoesCampos && sugestoesCampos[campo]);
+            return (
+              <Field
+                key={campo}
+                label={
+                  <span className="flex items-center gap-1.5">
+                    {humanizeCampo(campo)}
+                    {autoPreenchido && (
+                      <span
+                        className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                        style={{ background: COLORS.goldSoft, color: COLORS.gold }}
+                        title="Pré-preenchido com dado real desta empresa — revise e edite antes de gerar"
+                      >
+                        <Zap size={10} /> dado automático
+                      </span>
+                    )}
+                  </span>
+                }
+              >
+                <textarea
+                  value={valores[campo] || ""}
+                  onChange={(e) => setValores((v) => ({ ...v, [campo]: e.target.value }))}
+                  rows={autoPreenchido ? 6 : 3}
+                  className={inputCls}
+                  style={inputStyle}
+                  placeholder="Cole ou digite os dados aqui"
+                />
+              </Field>
+            );
+          })}
           {error && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
               <AlertTriangle size={15} /> {error}
@@ -10972,12 +11204,25 @@ function RunSkillModal({ skill, onClose, onRun }) {
   );
 }
 
-function HubSkillsView({ skills, runs, empresaId, userEmail, onSaveSkills, onSaveRuns }) {
+function HubSkillsView({ skills, runs, empresaId, userEmail, autoFillBlocks, onSaveSkills, onSaveRuns }) {
   const [nivelFiltro, setNivelFiltro] = useState("");
   const [busca, setBusca] = useState("");
   const [skillModal, setSkillModal] = useState(null); // null | {} | skill
   const [runModal, setRunModal] = useState(null); // skill
   const [viewRun, setViewRun] = useState(null); // run sendo visualizada
+
+  // Quais campos desta skill têm dado automático pra esta empresa — SKILL_
+  // AUTOFILL_MAP define "qual bloco", autoFillBlocks (vindo do FinanceiroApp,
+  // já calculado pra empresa/ano selecionados) tem o texto de cada bloco.
+  const sugestoesPara = (skill) => {
+    const mapa = SKILL_AUTOFILL_MAP[skill.codigo];
+    if (!mapa || !autoFillBlocks) return null;
+    const sugestoes = {};
+    Object.entries(mapa).forEach(([campo, blockKey]) => {
+      if (autoFillBlocks[blockKey]) sugestoes[campo] = autoFillBlocks[blockKey];
+    });
+    return Object.keys(sugestoes).length > 0 ? sugestoes : null;
+  };
 
   const skillsFiltradas = skills
     .filter((s) => !nivelFiltro || s.nivel === nivelFiltro)
@@ -10987,6 +11232,12 @@ function HubSkillsView({ skills, runs, empresaId, userEmail, onSaveSkills, onSav
       return alvo.includes(busca.trim().toLowerCase());
     })
     .sort((a, b) => {
+      // Skill com dado automático sobe pro início da grade — além do badge,
+      // é a própria posição no grid que chama atenção pra quem já está
+      // pronta pra rodar sem digitar nada antes.
+      const autoA = SKILL_AUTOFILL_MAP[a.codigo] ? 0 : 1;
+      const autoB = SKILL_AUTOFILL_MAP[b.codigo] ? 0 : 1;
+      if (autoA !== autoB) return autoA - autoB;
       const ordem = (NIVEL_ORDEM[a.nivel] ?? 99) - (NIVEL_ORDEM[b.nivel] ?? 99);
       return ordem !== 0 ? ordem : (a.codigo || "").localeCompare(b.codigo || "");
     });
@@ -11050,26 +11301,42 @@ function HubSkillsView({ skills, runs, empresaId, userEmail, onSaveSkills, onSav
         <EmptyState icon={Sparkles} title="Nenhuma skill encontrada" subtitle="Ajuste o filtro ou cadastre uma nova skill." />
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {skillsFiltradas.map((s) => (
-            <Card key={s.id} className="p-4 flex flex-col gap-2">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-xs font-mono" style={{ color: COLORS.inkSoft }}>{s.codigo}</p>
-                  <p className="font-medium text-sm" style={{ color: COLORS.ink }}>{s.titulo}</p>
+          {skillsFiltradas.map((s) => {
+            const temAutoFill = Boolean(SKILL_AUTOFILL_MAP[s.codigo]);
+            return (
+              <Card
+                key={s.id}
+                className="p-4 flex flex-col gap-2"
+                style={temAutoFill ? { borderColor: COLORS.gold, borderWidth: 1.5 } : undefined}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-mono" style={{ color: COLORS.inkSoft }}>{s.codigo}</p>
+                    <p className="font-medium text-sm" style={{ color: COLORS.ink }}>{s.titulo}</p>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button title="Editar" onClick={() => setSkillModal(s)}><Pencil size={14} color={COLORS.inkSoft} /></button>
+                    <button title="Excluir" onClick={() => deleteSkill(s)}><Trash2 size={14} color={COLORS.red} /></button>
+                  </div>
                 </div>
-                <div className="flex gap-1 shrink-0">
-                  <button title="Editar" onClick={() => setSkillModal(s)}><Pencil size={14} color={COLORS.inkSoft} /></button>
-                  <button title="Excluir" onClick={() => deleteSkill(s)}><Trash2 size={14} color={COLORS.red} /></button>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Badge tone={NIVEL_BADGE_TONE[s.nivel] || "neutral"}>{s.nivel}</Badge>
+                  {temAutoFill && (
+                    <span
+                      className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                      style={{ background: COLORS.goldSoft, color: COLORS.gold }}
+                      title="Esta skill já vem com parte dos campos sugeridos a partir dos dados reais da empresa selecionada"
+                    >
+                      <Zap size={10} /> Dados automáticos
+                    </span>
+                  )}
+                  {(s.tags || []).slice(0, 3).map((t) => <Badge key={t} tone="neutral">{t}</Badge>)}
                 </div>
-              </div>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <Badge tone={NIVEL_BADGE_TONE[s.nivel] || "neutral"}>{s.nivel}</Badge>
-                {(s.tags || []).slice(0, 3).map((t) => <Badge key={t} tone="neutral">{t}</Badge>)}
-              </div>
-              <p className="text-xs flex-1" style={{ color: COLORS.inkSoft }}>{s.resumo}</p>
-              <Button onClick={() => setRunModal(s)}><Sparkles size={14} /> Usar</Button>
-            </Card>
-          ))}
+                <p className="text-xs flex-1" style={{ color: COLORS.inkSoft }}>{s.resumo}</p>
+                <Button onClick={() => setRunModal(s)}><Sparkles size={14} /> Usar</Button>
+              </Card>
+            );
+          })}
         </div>
       )}
 
@@ -11106,7 +11373,7 @@ function HubSkillsView({ skills, runs, empresaId, userEmail, onSaveSkills, onSav
         <SkillModal initial={skillModal.id ? skillModal : null} onClose={() => setSkillModal(null)} onSubmit={saveSkill} />
       )}
       {runModal && (
-        <RunSkillModal skill={runModal} onClose={() => setRunModal(null)} onRun={executarSkill} />
+        <RunSkillModal skill={runModal} sugestoesCampos={sugestoesPara(runModal)} onClose={() => setRunModal(null)} onRun={executarSkill} />
       )}
       {viewRun && (
         <Modal title={`${viewRun.skillCodigo} — ${viewRun.skillTitulo}`} onClose={() => setViewRun(null)} xwide>
