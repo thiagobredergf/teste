@@ -4003,10 +4003,12 @@ function FilterBar({ search, setSearch, status, setStatus, statusOptions, placeh
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" color={COLORS.inkSoft} />
         <TextInput value={search} onChange={(e) => setSearch(e.target.value)} placeholder={placeholder} className="pl-8" style={{ height: 38 }} />
       </div>
-      <Select value={status} onChange={(e) => setStatus(e.target.value)} style={{ height: 38, width: 176 }}>
-        <option value="">Todos os status</option>
-        {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
-      </Select>
+      {statusOptions.length > 0 && (
+        <Select value={status} onChange={(e) => setStatus(e.target.value)} style={{ height: 38, width: 176 }}>
+          <option value="">Todos os status</option>
+          {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+        </Select>
+      )}
       {setDateFrom && (
         <div
           className="flex items-center gap-1.5 rounded-lg pl-2.5 pr-1.5 shrink-0"
@@ -7721,7 +7723,11 @@ function KPIReport({ year, payables, receivables, totals }) {
 }
 
 /* --- Fluxo de Caixa Projetado --- */
+const ITEMIZADO_FLUXO_LIMITE = 10;
+
 function FluxoProjetadoReport({ payables, receivables, fiscalObligations, accounts, accountBalance }) {
+  const [tipoFiltro, setTipoFiltro] = useState(""); // "" | "Pagar" | "Receber" | "Fiscal"
+  const [verTodosItens, setVerTodosItens] = useState(false);
   const today = todayISO();
   const totalBalance = accounts.reduce((s, a) => s + accountBalance(a.id), 0);
 
@@ -7758,7 +7764,9 @@ function FluxoProjetadoReport({ payables, receivables, fiscalObligations, accoun
     ...openFiscal.map((o) => ({ ...o, __tipo: "Fiscal", __nome: o.tributo })),
   ]
     .filter((i) => daysBetween(today, i.vencimento) <= 90)
+    .filter((i) => !tipoFiltro || i.__tipo === tipoFiltro)
     .sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""));
+  const itemizedExibidos = verTodosItens ? itemized : itemized.slice(0, ITEMIZADO_FLUXO_LIMITE);
 
   return (
     <div className="space-y-4">
@@ -7792,29 +7800,45 @@ function FluxoProjetadoReport({ payables, receivables, fiscalObligations, accoun
       </ReportCard>
 
       <ReportCard title="Itens em aberto até 90 dias" subtitle="Contas a pagar e a receber que ainda não foram baixadas.">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <Select value={tipoFiltro} onChange={(e) => { setTipoFiltro(e.target.value); setVerTodosItens(false); }} style={{ width: 176 }}>
+            <option value="">Todos os tipos</option>
+            <option value="Pagar">Só a pagar</option>
+            <option value="Receber">Só a receber</option>
+            <option value="Fiscal">Só fiscal</option>
+          </Select>
+          <span className="text-xs" style={{ color: COLORS.inkSoft }}>{itemized.length} item(ns)</span>
+        </div>
         {itemized.length === 0 ? (
           <EmptyState icon={FileText} title="Nada em aberto" subtitle="Não há contas a pagar/receber pendentes nos próximos 90 dias." />
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
-                <th className="text-left font-medium px-2 py-2">Vencimento</th>
-                <th className="text-left font-medium px-2 py-2">Tipo</th>
-                <th className="text-left font-medium px-2 py-2">Descrição</th>
-                <th className="text-right font-medium px-2 py-2">Valor</th>
-              </tr>
-            </thead>
-            <tbody>
-              {itemized.map((i) => (
-                <tr key={i.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <td className="px-2 py-2" style={{ color: daysBetween(today, i.vencimento) < 0 ? COLORS.red : COLORS.ink }}>{fmtDate(i.vencimento)}</td>
-                  <td className="px-2 py-2"><Badge tone={i.__tipo === "Receber" ? "green" : "amber"}>{i.__tipo}</Badge></td>
-                  <td className="px-2 py-2" style={{ color: COLORS.ink }}>{i.__nome}</td>
-                  <td className="px-2 py-2 text-right tabular-nums" style={{ color: i.__tipo === "Receber" ? COLORS.green : COLORS.red }}>{fmtBRL(i.valor)}</td>
+          <>
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                  <th className="text-left font-medium px-2 py-2">Vencimento</th>
+                  <th className="text-left font-medium px-2 py-2">Tipo</th>
+                  <th className="text-left font-medium px-2 py-2">Descrição</th>
+                  <th className="text-right font-medium px-2 py-2">Valor</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {itemizedExibidos.map((i) => (
+                  <tr key={i.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <td className="px-2 py-2" style={{ color: daysBetween(today, i.vencimento) < 0 ? COLORS.red : COLORS.ink }}>{fmtDate(i.vencimento)}</td>
+                    <td className="px-2 py-2"><Badge tone={i.__tipo === "Receber" ? "green" : "amber"}>{i.__tipo}</Badge></td>
+                    <td className="px-2 py-2" style={{ color: COLORS.ink }}>{i.__nome}</td>
+                    <td className="px-2 py-2 text-right tabular-nums" style={{ color: i.__tipo === "Receber" ? COLORS.green : COLORS.red }}>{fmtBRL(i.valor)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!verTodosItens && itemized.length > ITEMIZADO_FLUXO_LIMITE && (
+              <button onClick={() => setVerTodosItens(true)} className="text-xs font-medium mt-2" style={{ color: COLORS.primary }}>
+                Ver mais {itemized.length - ITEMIZADO_FLUXO_LIMITE} item(ns)
+              </button>
+            )}
+          </>
         )}
       </ReportCard>
     </div>
@@ -7822,69 +7846,123 @@ function FluxoProjetadoReport({ payables, receivables, fiscalObligations, accoun
 }
 
 const PAYMENT_ORDER_STATUS = ["Agendado", "Autorizado", "Pago"];
+const ORDEM_PAGAMENTO_LIMITE = 15;
+
+// Segunda linha (descrição) de uma célula nome+descrição — borda
+// esquerda suave pra ficar claro que é um detalhe secundário daquele
+// item, não um registro à parte (mesmo tratamento em Ordem de Pagamento
+// e Relação de Cobrança).
+function SubLinha({ children }) {
+  if (!children) return null;
+  return (
+    <p className="text-xs mt-0.5 pl-2" style={{ color: COLORS.inkSoft, borderLeft: `2px solid ${COLORS.border}` }}>
+      {children}
+    </p>
+  );
+}
 
 // Relação de ordem de pagamento — a "prestação de contas" que o analista
 // mostra pro dono (o que foi proposto, o que ele já autorizou, o que já
 // foi de fato pago), despesa por despesa. Fica disponível pra consulta
 // e impressão a qualquer momento — usa o mesmo Exportar PDF de Relatórios.
 function PaymentOrderReport({ payables, accounts }) {
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [contaId, setContaId] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [verTodos, setVerTodos] = useState(false);
+
+  const dataRef = (p) => p.agendadoPara || p.dataPgto || p.vencimento || "";
+  const contaOf = (p) => (p.status === "Pago" ? p.contaPgtoId : p.contaAgendadaId);
+
   const items = payables
     .filter((p) => PAYMENT_ORDER_STATUS.includes(p.status))
-    .sort((a, b) => (b.agendadoPara || b.dataPgto || b.vencimento || "").localeCompare(a.agendadoPara || a.dataPgto || a.vencimento || ""));
+    .filter((p) => !status || p.status === status)
+    .filter((p) => !contaId || contaOf(p) === contaId)
+    .filter((p) => !search || p.fornecedor.toLowerCase().includes(search.toLowerCase()))
+    .filter((p) => !dateFrom || dataRef(p) >= dateFrom)
+    .filter((p) => !dateTo || dataRef(p) <= dateTo)
+    .sort((a, b) => dataRef(b).localeCompare(dataRef(a)));
   const total = items.reduce((s, p) => s + Number(p.valorPago || p.valor || 0), 0);
+  const itemsExibidos = verTodos ? items : items.slice(0, ORDEM_PAGAMENTO_LIMITE);
 
   return (
     <ReportCard title="Ordem de pagamento" subtitle="Pagamentos agendados, autorizados ou já pagos — despesa por despesa, pra apresentar ao dono, auditoria ou reunião.">
+      <div className="flex items-center gap-2 flex-wrap mb-3">
+        <FilterBar
+          search={search} setSearch={setSearch} placeholder="Buscar fornecedor..."
+          status={status} setStatus={(v) => { setStatus(v); setVerTodos(false); }} statusOptions={PAYMENT_ORDER_STATUS}
+          dateFrom={dateFrom} setDateFrom={(v) => { setDateFrom(v); setVerTodos(false); }}
+          dateTo={dateTo} setDateTo={(v) => { setDateTo(v); setVerTodos(false); }}
+        />
+        <Select value={contaId} onChange={(e) => { setContaId(e.target.value); setVerTodos(false); }} style={{ height: 38, width: 176 }}>
+          <option value="">Todas as contas</option>
+          {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+        </Select>
+      </div>
       {items.length === 0 ? (
         <EmptyState icon={ClipboardList} title="Nada agendado, autorizado ou pago ainda" subtitle="Assim que agendar um pagamento em Contas a Pagar, ele aparece aqui." />
       ) : (
-        <table className="w-full text-sm">
-          <thead>
-            <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
-              <th className="text-left font-medium px-2 py-2">Fornecedor</th>
-              <th className="text-left font-medium px-2 py-2">Vencimento</th>
-              <th className="text-left font-medium px-2 py-2">Data proposta/paga</th>
-              <th className="text-left font-medium px-2 py-2">Conta</th>
-              <th className="text-left font-medium px-2 py-2">Status</th>
-              <th className="text-left font-medium px-2 py-2">Autorizado por</th>
-              <th className="text-right font-medium px-2 py-2">Valor</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((p) => {
-              const contaId = p.status === "Pago" ? p.contaPgtoId : p.contaAgendadaId;
-              return (
+        <>
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                <th className="text-left font-medium px-2 py-2">Fornecedor</th>
+                <th className="text-left font-medium px-2 py-2">Vencimento</th>
+                <th className="text-left font-medium px-2 py-2">Data proposta/paga</th>
+                <th className="text-left font-medium px-2 py-2">Conta</th>
+                <th className="text-left font-medium px-2 py-2">Status</th>
+                <th className="text-left font-medium px-2 py-2">Autorizado por</th>
+                <th className="text-right font-medium px-2 py-2">Valor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {itemsExibidos.map((p) => (
                 <tr key={p.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
                   <td className="px-2 py-2" style={{ color: COLORS.ink }}>
                     <p className="font-medium">{p.fornecedor}</p>
-                    <p className="text-xs" style={{ color: COLORS.inkSoft }}>{p.descricao}</p>
+                    <SubLinha>{p.descricao}</SubLinha>
                   </td>
                   <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{fmtDate(p.vencimento)}</td>
                   <td className="px-2 py-2" style={{ color: COLORS.ink }}>{fmtDate(p.status === "Pago" ? p.dataPgto : p.agendadoPara)}</td>
-                  <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{accounts.find((a) => a.id === contaId)?.nome || "—"}</td>
+                  <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{accounts.find((a) => a.id === contaOf(p))?.nome || "—"}</td>
                   <td className="px-2 py-2"><StatusBadge status={p.status} /></td>
                   <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{p.autorizadoPor || "—"}</td>
                   <td className="px-2 py-2 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(p.valorPago || p.valor)}</td>
                 </tr>
-              );
-            })}
-          </tbody>
-          <tfoot>
-            <tr style={{ borderTop: `2px solid ${COLORS.border}` }}>
-              <td colSpan={6} className="px-2 py-2 text-right font-semibold" style={{ color: COLORS.ink }}>Total</td>
-              <td className="px-2 py-2 text-right tabular-nums font-semibold" style={{ color: COLORS.ink }}>{fmtBRL(total)}</td>
-            </tr>
-          </tfoot>
-        </table>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop: `2px solid ${COLORS.border}` }}>
+                <td colSpan={6} className="px-2 py-2 text-right font-semibold" style={{ color: COLORS.ink }}>Total ({items.length})</td>
+                <td className="px-2 py-2 text-right tabular-nums font-semibold" style={{ color: COLORS.ink }}>{fmtBRL(total)}</td>
+              </tr>
+            </tfoot>
+          </table>
+          {!verTodos && items.length > ORDEM_PAGAMENTO_LIMITE && (
+            <button onClick={() => setVerTodos(true)} className="text-xs font-medium mt-2" style={{ color: COLORS.primary }}>
+              Ver mais {items.length - ORDEM_PAGAMENTO_LIMITE} item(ns)
+            </button>
+          )}
+        </>
       )}
     </ReportCard>
   );
 }
 
+const COLLECTIONS_STATUS = ["Inadimplente", "Próximo", "A Receber", "Antecipado"];
+const COBRANCA_LIMITE = 15;
+
 // Relação de cobrança — o espelho, do lado de receber, da Ordem de
 // Pagamento: tudo que ainda está em aberto, pra acompanhar inadimplência,
 // repassar pra quem for cobrar, ou levar numa reunião com o dono.
 function CollectionsReport({ receivables, contacts }) {
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [verTodos, setVerTodos] = useState(false);
   const today = todayISO();
   const items = receivables
     .filter((r) => r.status !== "Recebido")
@@ -7894,14 +7972,27 @@ function CollectionsReport({ receivables, contacts }) {
       else if (r.status === "A Receber" && daysUntil(r.vencimento) <= 10) statusDisplay = "Próximo";
       return { ...r, statusDisplay, contato: contacts.find((c) => c.id === r.contactId)?.contato || "" };
     })
+    .filter((r) => !status || r.statusDisplay === status)
+    .filter((r) => !search || r.cliente.toLowerCase().includes(search.toLowerCase()))
+    .filter((r) => !dateFrom || (r.vencimento || "") >= dateFrom)
+    .filter((r) => !dateTo || (r.vencimento || "") <= dateTo)
     .sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""));
   const total = items.reduce((s, r) => s + Number(r.valor || 0), 0);
+  const itemsExibidos = verTodos ? items : items.slice(0, COBRANCA_LIMITE);
 
   return (
     <ReportCard title="Relação de cobrança" subtitle="Contas a receber em aberto — pra acompanhar inadimplência, repassar pra quem for cobrar, ou levar numa reunião.">
+      <FilterBar
+        search={search} setSearch={setSearch} placeholder="Buscar cliente..."
+        status={status} setStatus={(v) => { setStatus(v); setVerTodos(false); }} statusOptions={COLLECTIONS_STATUS}
+        dateFrom={dateFrom} setDateFrom={(v) => { setDateFrom(v); setVerTodos(false); }}
+        dateTo={dateTo} setDateTo={(v) => { setDateTo(v); setVerTodos(false); }}
+      />
+      <div className="mt-3">
       {items.length === 0 ? (
         <EmptyState icon={MessageCircle} title="Nada em aberto" subtitle="Todas as contas a receber estão em dia ou já recebidas." />
       ) : (
+        <>
         <table className="w-full text-sm">
           <thead>
             <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
@@ -7913,11 +8004,11 @@ function CollectionsReport({ receivables, contacts }) {
             </tr>
           </thead>
           <tbody>
-            {items.map((r) => (
+            {itemsExibidos.map((r) => (
               <tr key={r.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
                 <td className="px-2 py-2" style={{ color: COLORS.ink }}>
                   <p className="font-medium">{r.cliente}</p>
-                  <p className="text-xs" style={{ color: COLORS.inkSoft }}>{r.descricao}</p>
+                  <SubLinha>{r.descricao}</SubLinha>
                 </td>
                 <td className="px-2 py-2" style={{ color: r.statusDisplay === "Inadimplente" ? COLORS.red : COLORS.ink }}>{fmtDate(r.vencimento)}</td>
                 <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{r.contato || "—"}</td>
@@ -7928,12 +8019,19 @@ function CollectionsReport({ receivables, contacts }) {
           </tbody>
           <tfoot>
             <tr style={{ borderTop: `2px solid ${COLORS.border}` }}>
-              <td colSpan={4} className="px-2 py-2 text-right font-semibold" style={{ color: COLORS.ink }}>Total em aberto</td>
+              <td colSpan={4} className="px-2 py-2 text-right font-semibold" style={{ color: COLORS.ink }}>Total em aberto ({items.length})</td>
               <td className="px-2 py-2 text-right tabular-nums font-semibold" style={{ color: COLORS.ink }}>{fmtBRL(total)}</td>
             </tr>
           </tfoot>
         </table>
+        {!verTodos && items.length > COBRANCA_LIMITE && (
+          <button onClick={() => setVerTodos(true)} className="text-xs font-medium mt-2" style={{ color: COLORS.primary }}>
+            Ver mais {items.length - COBRANCA_LIMITE} item(ns)
+          </button>
+        )}
+        </>
       )}
+      </div>
     </ReportCard>
   );
 }
@@ -8179,12 +8277,12 @@ function FaturamentoDiaSemanaReport({ year, receivables }) {
         subtitle="Contas a receber agrupadas pelo dia da semana do vencimento — identifica dias de pico e dias fracos, pra ajudar no planejamento de pessoal e compras."
       >
         <ResponsiveContainer width="100%" height={240}>
-          <ComposedChart data={linhas}>
-            <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
-            <XAxis dataKey="nome" tickFormatter={(d) => d.slice(0, 3)} tick={{ fontSize: 11 }} />
-            <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => fmtBRL(v)} width={70} />
-            <Tooltip formatter={(v) => fmtBRL(v)} labelFormatter={(d) => d} />
-            <Bar dataKey="total" name="Faturamento" fill={COLORS.primary} />
+          <ComposedChart data={linhas} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} vertical={false} />
+            <XAxis dataKey="nome" tickFormatter={(d) => d.slice(0, 3)} tick={{ fontSize: 11, fill: COLORS.inkSoft }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
+            <YAxis tick={{ fontSize: 11, fill: COLORS.inkSoft }} axisLine={false} tickLine={false} tickFormatter={(v) => fmtBRL(v)} width={70} />
+            <Tooltip formatter={(v) => fmtBRL(v)} labelFormatter={(d) => d} contentStyle={{ borderRadius: 8, border: `1px solid ${COLORS.border}`, fontSize: 12 }} />
+            <Bar dataKey="total" name="Faturamento" fill="#BFDBC9" radius={[3, 3, 0, 0]} maxBarSize={48} />
           </ComposedChart>
         </ResponsiveContainer>
         <div className="overflow-x-auto mt-3">
@@ -8303,8 +8401,14 @@ function ComparativoReport({ empresaBreakdown }) {
 }
 
 /* --- Extrato de Conta --- */
+const EXTRATO_LIMITE = 20;
+
 function ExtratoContaReport({ accounts, payables, receivables, bankEntries, transfers, fiscalObligations, accountBalance }) {
   const [contaId, setContaId] = useState(accounts[0]?.id || "");
+  const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [verTodos, setVerTodos] = useState(false);
   useEffect(() => {
     if (!accounts.find((a) => a.id === contaId)) setContaId(accounts[0]?.id || "");
   }, [accounts]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -8342,6 +8446,16 @@ function ExtratoContaReport({ accounts, payables, receivables, bankEntries, tran
   });
   const saldoAtual = conta ? accountBalance(conta.id) : 0;
 
+  // Filtro é só de exibição — o saldo corrente de cada linha vem sempre
+  // da lista completa (withRunning), nunca recalculado em cima do
+  // recorte filtrado, senão o "Saldo" mostrado deixaria de bater com o
+  // extrato de verdade.
+  const filtered = withRunning
+    .filter((m) => !search || m.descricao.toLowerCase().includes(search.toLowerCase()))
+    .filter((m) => !dateFrom || m.data >= dateFrom)
+    .filter((m) => !dateTo || m.data <= dateTo);
+  const filteredExibidos = verTodos ? filtered : filtered.slice(-EXTRATO_LIMITE);
+
   return (
     <ReportCard title="Extrato de conta" subtitle="Todos os movimentos que afetam o saldo da conta selecionada.">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -8355,8 +8469,17 @@ function ExtratoContaReport({ accounts, payables, receivables, bankEntries, tran
           <p className="text-base font-semibold tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(saldoAtual)}</p>
         </div>
       </div>
+      <FilterBar
+        search={search} setSearch={setSearch} placeholder="Buscar na descrição..."
+        status="" setStatus={() => {}} statusOptions={[]}
+        dateFrom={dateFrom} setDateFrom={(v) => { setDateFrom(v); setVerTodos(false); }}
+        dateTo={dateTo} setDateTo={(v) => { setDateTo(v); setVerTodos(false); }}
+      />
+      <div className="mt-3">
       {withRunning.length === 0 ? (
         <EmptyState icon={Wallet} title="Sem movimentos" subtitle="Essa conta ainda não tem lançamentos, baixas ou transferências." />
+      ) : filtered.length === 0 ? (
+        <EmptyState icon={Wallet} title="Nada encontrado" subtitle="Nenhum movimento bate com a busca/período escolhido." />
       ) : (
         <table className="w-full text-sm">
           <thead>
@@ -8368,13 +8491,15 @@ function ExtratoContaReport({ accounts, payables, receivables, bankEntries, tran
             </tr>
           </thead>
           <tbody>
-            <tr style={{ borderTop: `1px solid ${COLORS.border}` }}>
-              <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{fmtDate(conta?.dataInicial)}</td>
-              <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>Saldo inicial</td>
-              <td className="px-2 py-2 text-right tabular-nums" style={{ color: COLORS.inkSoft }}>—</td>
-              <td className="px-2 py-2 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(conta?.saldoInicial || 0)}</td>
-            </tr>
-            {withRunning.map((m) => (
+            {filteredExibidos.length === withRunning.length && (
+              <tr style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{fmtDate(conta?.dataInicial)}</td>
+                <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>Saldo inicial</td>
+                <td className="px-2 py-2 text-right tabular-nums" style={{ color: COLORS.inkSoft }}>—</td>
+                <td className="px-2 py-2 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>{fmtBRL(conta?.saldoInicial || 0)}</td>
+              </tr>
+            )}
+            {filteredExibidos.map((m) => (
               <tr key={m.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
                 <td className="px-2 py-2" style={{ color: COLORS.ink }}>{fmtDate(m.data)}</td>
                 <td className="px-2 py-2" style={{ color: COLORS.inkSoft }}>{m.descricao}</td>
@@ -8387,6 +8512,12 @@ function ExtratoContaReport({ accounts, payables, receivables, bankEntries, tran
           </tbody>
         </table>
       )}
+      {!verTodos && filtered.length > EXTRATO_LIMITE && (
+        <button onClick={() => setVerTodos(true)} className="text-xs font-medium mt-2" style={{ color: COLORS.primary }}>
+          Ver {filtered.length - EXTRATO_LIMITE} movimento(s) mais antigo(s)
+        </button>
+      )}
+      </div>
     </ReportCard>
   );
 }
