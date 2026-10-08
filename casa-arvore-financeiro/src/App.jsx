@@ -1938,6 +1938,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
             {view === "reconciliation" && (
               <ReconciliationView
                 accounts={accountsF}
+                accountBalance={accountBalance}
                 payables={payables}
                 receivables={receivables}
                 bankEntries={bankEntries}
@@ -9021,7 +9022,15 @@ function parseOFX(text) {
       lines.push({ data, valor: Math.abs(valor), tipo: valor >= 0 ? "Entrada" : "Saída", descricao });
     }
   });
-  return lines;
+  // OFX quase sempre traz o saldo que o banco considera correto pra conta
+  // (<LEDGERBAL><BALAMT>) — serve de conferência cruzada: se o saldo do
+  // sistema + o líquido deste extrato não bater com esse valor, teve algo
+  // de errado na importação ou na conciliação. CSV não tem campo
+  // equivalente, então essa conferência só é possível em OFX.
+  const ledgerMatch = text.match(/<LEDGERBAL>[\s\S]*?<BALAMT>\s*([^<\r\n]+)/i);
+  const saldoFinalRaw = ledgerMatch ? parseMoneyLoose(ledgerMatch[1]) : NaN;
+  const saldoFinal = Number.isNaN(saldoFinalRaw) ? null : saldoFinalRaw;
+  return { lines, saldoFinal };
 }
 
 function parseCSV(text) {
@@ -9056,7 +9065,9 @@ function parseCSV(text) {
       lines.push({ data, valor: Math.abs(valor), tipo: valor >= 0 ? "Entrada" : "Saída", descricao });
     }
   });
-  return lines;
+  // CSV de internet banking não tem um campo padronizado de saldo final —
+  // diferente do OFX, aqui não dá pra conferir contra o banco.
+  return { lines, saldoFinal: null };
 }
 
 function parseStatementFile(filename, text) {
@@ -9170,6 +9181,12 @@ const ACQUIRER_PLATFORM_NAMES = [
   "iFood", "Rappi", "Uber Eats", "99Food", "Aiqfome",
 ];
 
+// Acima disso, a diferença de valor já não é "a mesma transação com um
+// desvio pequeno" (taxa, contestação de pedido, arredondamento) — é
+// provavelmente duas transações diferentes, e tratar como divergência
+// esconderia um erro de verdade.
+const VALUE_TOLERANCE_PCT = 0.05;
+
 function matchStatement(systemMovs, statementLines, toleranceDays = 3) {
   const usedSys = new Set();
   const usedStmt = new Set();
@@ -9193,10 +9210,41 @@ function matchStatement(systemMovs, statementLines, toleranceDays = 3) {
       matches.push({ sys: systemMovs[best], stmt: sl });
     }
   });
+
+  // Segunda passada: valor não bate em cheio, mas é parecido (dentro da
+  // tolerância) e tipo/data combinam — mais provável ser a MESMA transação
+  // com uma diferença real (taxa, contestação, arredondamento) do que duas
+  // transações sem relação nenhuma. Isola numa categoria própria em vez de
+  // jogar os dois lados pra "sem correspondência", onde a pista se perde.
+  const divergent = [];
+  statementLines.forEach((sl, si) => {
+    if (usedStmt.has(si)) return;
+    let best = -1;
+    let bestDiff = Infinity;
+    systemMovs.forEach((sm, mi) => {
+      if (usedSys.has(mi) || sm.conciliado) return;
+      if (sm.tipo !== sl.tipo) return;
+      const valorDiff = Math.abs(sm.valor - sl.valor);
+      if (valorDiff <= 0.01) return; // já teria batido na 1ª passada
+      const maiorValor = Math.max(sm.valor, sl.valor) || 1;
+      if (valorDiff / maiorValor > VALUE_TOLERANCE_PCT) return;
+      const diasDiff = Math.abs(daysBetween(sm.data, sl.data));
+      if (diasDiff <= toleranceDays && diasDiff < bestDiff) {
+        bestDiff = diasDiff;
+        best = mi;
+      }
+    });
+    if (best >= 0) {
+      usedSys.add(best);
+      usedStmt.add(si);
+      divergent.push({ sys: systemMovs[best], stmt: sl, diffValor: sl.valor - systemMovs[best].valor });
+    }
+  });
+
   const alreadyOk = systemMovs.filter((sm) => sm.conciliado);
   const sysOnly = systemMovs.filter((_, mi) => !usedSys.has(mi) && !systemMovs[mi].conciliado);
   const stmtOnly = statementLines.filter((_, si) => !usedStmt.has(si));
-  return { matches, sysOnly, stmtOnly, alreadyOk };
+  return { matches, divergent, sysOnly, stmtOnly, alreadyOk };
 }
 
 // Detecta se uma linha do extrato que sobrou ("só no extrato") é, na
@@ -9255,16 +9303,18 @@ function detectTransferSuggestion(line, contaId, accounts, payables, receivables
   return null;
 }
 
-function ReconciliationView({ accounts, payables, receivables, bankEntries, transfers, categories, despesaCategorias, receitaCategorias, contacts, onSaveContacts, onSavePayables, onSaveReceivables, onSaveBankEntries, onSaveTransfers }) {
+function ReconciliationView({ accounts, accountBalance, payables, receivables, bankEntries, transfers, categories, despesaCategorias, receitaCategorias, contacts, onSaveContacts, onSavePayables, onSaveReceivables, onSaveBankEntries, onSaveTransfers }) {
   const [contaId, setContaId] = useState(accounts[0]?.id || "");
   const [draftModal, setDraftModal] = useState(null); // { line, idx, suggestion }
   const [transferDraft, setTransferDraft] = useState(null); // { line, idx, suggestion }
+  const [statusFiltro, setStatusFiltro] = useState("todos"); // "todos" | "matches" | "divergent" | "stmtOnly"
   useEffect(() => {
     if (!accounts.find((a) => a.id === contaId)) setContaId(accounts[0]?.id || "");
   }, [accounts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [fileName, setFileName] = useState("");
   const [statementLines, setStatementLines] = useState(null);
+  const [extratoSaldoFinal, setExtratoSaldoFinal] = useState(null);
   const [parseError, setParseError] = useState("");
   const [extracting, setExtracting] = useState(false);
   const [lancarModal, setLancarModal] = useState(null); // { tipo: "payable"|"receivable", line, idx }
@@ -9278,6 +9328,8 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
     if (!file) return;
     setParseError("");
     setFileName(file.name);
+    setExtratoSaldoFinal(null);
+    setStatusFiltro("todos");
     const isPdfOrImage = /\.(pdf|jpe?g|png|webp)$/i.test(file.name) || /^(application\/pdf|image\/)/.test(file.type || "");
     if (isPdfOrImage) {
       setStatementLines(null);
@@ -9295,6 +9347,9 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
           } else if (ex._truncated) {
             setParseError(`Arquivo grande — a IA só conseguiu ler ${lines.length} lançamento(s) de uma vez (parou no meio do documento). Confira se falta alguma linha do fim do período; pra pegar o resto, importe separado (ex.: por quinzena) ou use CSV/OFX se o banco exportar.`);
           }
+          // IA lê a tabela de movimentos, mas não há campo de saldo final
+          // confiável nesse caminho — a conferência de saldo fica reservada
+          // pro OFX, que traz esse número padronizado do próprio banco.
           setStatementLines(lines);
         } catch (err) {
           setParseError(err?.message || "Erro ao ler o arquivo com IA.");
@@ -9308,9 +9363,10 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const lines = parseStatementFile(file.name, String(reader.result));
-        if (lines.length === 0) setParseError("Não consegui reconhecer nenhuma linha de movimento nesse arquivo.");
-        setStatementLines(lines);
+        const parsed = parseStatementFile(file.name, String(reader.result));
+        if (parsed.lines.length === 0) setParseError("Não consegui reconhecer nenhuma linha de movimento nesse arquivo.");
+        setStatementLines(parsed.lines);
+        setExtratoSaldoFinal(parsed.saldoFinal);
       } catch (err) {
         setParseError("Erro lendo o arquivo. Confira se é um CSV ou OFX exportado do internet banking.");
         setStatementLines(null);
@@ -9419,7 +9475,7 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
       <Card className="p-4 space-y-3">
         <div className="flex items-end gap-3 flex-wrap">
           <Field label="Conta">
-            <Select value={contaId} onChange={(e) => { setContaId(e.target.value); setStatementLines(null); }}>
+            <Select value={contaId} onChange={(e) => { setContaId(e.target.value); setStatementLines(null); setExtratoSaldoFinal(null); setStatusFiltro("todos"); }}>
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
             </Select>
           </Field>
@@ -9433,7 +9489,7 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
             </label>
           </Field>
           {result && (
-            <Button variant="ghost" onClick={() => { setStatementLines(null); setFileName(""); }}>
+            <Button variant="ghost" onClick={() => { setStatementLines(null); setFileName(""); setExtratoSaldoFinal(null); setStatusFiltro("todos"); }}>
               <X size={15} /> Limpar
             </Button>
           )}
@@ -9458,21 +9514,69 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
 
       {result && (
         <>
+          {(() => {
+            const saldoAtual = accountBalance(contaId);
+            // Saldo atual do sistema já inclui tudo que bateu automaticamente
+            // e tudo que só existe no sistema — somar o líquido do extrato
+            // INTEIRO em cima disso contaria essas linhas em dobro. O que
+            // ainda falta refletir é só o que sobrou do lado do extrato:
+            // "sem correspondência" e "divergência" (esse último pelo valor
+            // que o BANCO informou, não pelo que o sistema já tinha).
+            const pendentes = [...result.stmtOnly, ...result.divergent.map((d) => d.stmt)];
+            const entradasPendentes = pendentes.reduce((s, l) => s + (l.tipo === "Entrada" ? l.valor : 0), 0);
+            const saidasPendentes = pendentes.reduce((s, l) => s + (l.tipo === "Saída" ? l.valor : 0), 0);
+            const saldoAposAceitar = saldoAtual + entradasPendentes - saidasPendentes;
+            const bateComBanco = extratoSaldoFinal != null && Math.abs(saldoAposAceitar - extratoSaldoFinal) < 0.01;
+            const temDivergenciaDeSaldo = extratoSaldoFinal != null && !bateComBanco;
+            return (
+              <div
+                className="flex flex-wrap items-start gap-2 px-4 py-3 rounded-xl text-sm"
+                style={temDivergenciaDeSaldo ? { background: COLORS.redSoft, color: COLORS.red } : { background: COLORS.greenSoft, color: COLORS.green }}
+              >
+                {temDivergenciaDeSaldo ? <AlertTriangle size={16} className="shrink-0 mt-0.5" /> : <CheckCircle2 size={16} className="shrink-0 mt-0.5" />}
+                <span>
+                  Saldo atual em contas {fmtBRL(saldoAtual)}
+                  {entradasPendentes > 0 && <> + entradas novas {fmtBRL(entradasPendentes)}</>}
+                  {saidasPendentes > 0 && <> − saídas novas {fmtBRL(saidasPendentes)}</>}
+                  {" "}= {fmtBRL(saldoAposAceitar)} se aceitar tudo que ainda está pendente deste extrato.
+                  {extratoSaldoFinal == null ? (
+                    " Este arquivo não traz o saldo final do banco pra conferir (só OFX traz)."
+                  ) : bateComBanco ? (
+                    ` Confere com o saldo final informado pelo banco (${fmtBRL(extratoSaldoFinal)}).`
+                  ) : (
+                    ` Não bate com o saldo final informado pelo banco (${fmtBRL(extratoSaldoFinal)}) — diferença de ${fmtBRL(saldoAposAceitar - extratoSaldoFinal)}. Confira antes de aceitar tudo.`
+                  )}
+                </span>
+              </div>
+            );
+          })()}
+
           <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-            <Card className="p-3 text-center">
-              <p className="text-xs" style={{ color: COLORS.inkSoft }}>Bateram automaticamente</p>
-              <p className="text-xl font-semibold" style={{ color: COLORS.green }}>{result.matches.length}</p>
-            </Card>
+            <div role="button" tabIndex={0} className="cursor-pointer" onClick={() => setStatusFiltro((f) => (f === "matches" ? "todos" : "matches"))}>
+              <Card className="p-3 text-center" style={statusFiltro === "matches" ? { borderColor: COLORS.green, borderWidth: 1.5 } : undefined}>
+                <p className="text-xs" style={{ color: COLORS.inkSoft }}>Bateram automaticamente</p>
+                <p className="text-xl font-semibold" style={{ color: COLORS.green }}>{result.matches.length}</p>
+              </Card>
+            </div>
+            <div role="button" tabIndex={0} className="cursor-pointer" onClick={() => setStatusFiltro((f) => (f === "divergent" ? "todos" : "divergent"))}>
+              <Card className="p-3 text-center" style={statusFiltro === "divergent" ? { borderColor: COLORS.amber, borderWidth: 1.5 } : undefined}>
+                <p className="text-xs" style={{ color: COLORS.inkSoft }}>Divergência de valor</p>
+                <p className="text-xl font-semibold" style={{ color: COLORS.amber }}>{result.divergent.length}</p>
+              </Card>
+            </div>
             <Card className="p-3 text-center">
               <p className="text-xs" style={{ color: COLORS.inkSoft }}>Só no sistema</p>
               <p className="text-xl font-semibold" style={{ color: COLORS.amber }}>{result.sysOnly.length}</p>
             </Card>
-            <Card className="p-3 text-center">
-              <p className="text-xs" style={{ color: COLORS.inkSoft }}>Só no extrato</p>
-              <p className="text-xl font-semibold" style={{ color: COLORS.red }}>{result.stmtOnly.length}</p>
-            </Card>
+            <div role="button" tabIndex={0} className="cursor-pointer" onClick={() => setStatusFiltro((f) => (f === "stmtOnly" ? "todos" : "stmtOnly"))}>
+              <Card className="p-3 text-center" style={statusFiltro === "stmtOnly" ? { borderColor: COLORS.red, borderWidth: 1.5 } : undefined}>
+                <p className="text-xs" style={{ color: COLORS.inkSoft }}>Só no extrato</p>
+                <p className="text-xl font-semibold" style={{ color: COLORS.red }}>{result.stmtOnly.length}</p>
+              </Card>
+            </div>
           </div>
 
+          {(statusFiltro === "todos" || statusFiltro === "matches") && (
           <ReportCard title="Bateram automaticamente" subtitle="Mesmo valor e data próxima (até 3 dias) entre extrato e sistema.">
             {result.matches.length === 0 ? (
               <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhum lançamento bateu automaticamente.</p>
@@ -9510,6 +9614,48 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
               </>
             )}
           </ReportCard>
+          )}
+
+          {(statusFiltro === "todos" || statusFiltro === "divergent") && (
+          <ReportCard title="Divergência de valor" subtitle={`Mesmo tipo e data próxima, mas o valor difere (até ${(VALUE_TOLERANCE_PCT * 100).toFixed(0)}%) — provavelmente a mesma transação, com uma diferença real (taxa, contestação, arredondamento).`}>
+            {result.divergent.length === 0 ? (
+              <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma divergência de valor encontrada.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                    <th className="text-left font-medium px-2 py-1.5">Data (sistema / extrato)</th>
+                    <th className="text-left font-medium px-2 py-1.5">Descrição no sistema</th>
+                    <th className="text-right font-medium px-2 py-1.5">Valor sistema</th>
+                    <th className="text-right font-medium px-2 py-1.5">Valor extrato</th>
+                    <th className="text-right font-medium px-2 py-1.5">Diferença</th>
+                    <th className="text-right font-medium px-2 py-1.5">Ação</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.divergent.map(({ sys, stmt, diffValor }) => (
+                    <tr key={sys.key} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{fmtDate(sys.data)} / {fmtDate(stmt.data)}</td>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.inkSoft }}>{sys.descricao}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: sys.tipo === "Entrada" ? COLORS.green : COLORS.red }}>
+                        {sys.tipo === "Entrada" ? "+" : "−"}{fmtBRL(sys.valor)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: stmt.tipo === "Entrada" ? COLORS.green : COLORS.red }}>
+                        {stmt.tipo === "Entrada" ? "+" : "−"}{fmtBRL(stmt.valor)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums font-medium" style={{ color: COLORS.amber }}>{fmtBRL(diffValor)}</td>
+                      <td className="px-2 py-1.5 text-right">
+                        <button onClick={() => confirmOneMatch(sys, stmt)} className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
+                          <Check size={12} /> Conciliar mesmo assim
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </ReportCard>
+          )}
 
           <ReportCard title="Só no sistema" subtitle="Lançados no sistema, mas não encontrados no extrato importado — podem ainda não ter sido compensados pelo banco, ou serem duplicados.">
             {result.sysOnly.length === 0 ? (
@@ -9544,6 +9690,7 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
             )}
           </ReportCard>
 
+          {(statusFiltro === "todos" || statusFiltro === "stmtOnly") && (
           <ReportCard title="Só no extrato" subtitle="Vieram do banco mas não existem no sistema — provavelmente falta lançar.">
             {result.stmtOnly.length === 0 ? (
               <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nada sobrando.</p>
@@ -9615,6 +9762,7 @@ function ReconciliationView({ accounts, payables, receivables, bankEntries, tran
               </table>
             )}
           </ReportCard>
+          )}
         </>
       )}
 
