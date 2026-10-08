@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square, Download, Loader2, Boxes
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square, Download, Loader2, Boxes, Megaphone
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -576,6 +576,7 @@ const STORE_KEYS = {
   remessasCnab: "remessasCnab",
   onboardingItems: "onboardingItems",
   costCenters: "costCenters",
+  systemUpdates: "systemUpdates",
   selectedEmpresa: "selectedEmpresa",
 };
 
@@ -817,10 +818,14 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [remessasCnab, setRemessasCnab] = useState([]);
   const [onboardingItems, setOnboardingItems] = useState([]);
   const [costCenters, setCostCenters] = useState([]);
+  const [systemUpdates, setSystemUpdates] = useState([]);
+  const [userId, setUserId] = useState(null);
+  const [lastSeenUpdatesAt, setLastSeenUpdatesAt] = useState(null);
   const [year, setYear] = useState(new Date().getFullYear());
   const [saveError, setSaveError] = useState(null);
   const [navQuery, setNavQuery] = useState("");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [novidadesOpen, setNovidadesOpen] = useState(false);
   const [pendingImport, setPendingImport] = useState(null); // { id, context, fileBase64, mediaType }
   const [inboxError, setInboxError] = useState("");
 
@@ -834,6 +839,15 @@ function FinanceiroApp({ userEmail, onLogout }) {
         .maybeSingle();
       const myRole = profile?.role || "owner";
       setRole(myRole);
+      setUserId(userData?.user?.id || null);
+      if (userData?.user?.id) {
+        const { data: readRow } = await supabase
+          .from("system_update_reads")
+          .select("last_seen_at")
+          .eq("user_id", userData.user.id)
+          .maybeSingle();
+        setLastSeenUpdatesAt(readRow?.last_seen_at || null);
+      }
 
       const data = await loadAll();
       setEmpresas(data.empresas || []);
@@ -855,6 +869,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setRemessasCnab(data.remessasCnab || []);
       setOnboardingItems(data.onboardingItems || []);
       setCostCenters(data.costCenters || []);
+      setSystemUpdates(data.systemUpdates || []);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
       // cards de todas), pra escolher com qual vai trabalhar.
@@ -1091,6 +1106,22 @@ function FinanceiroApp({ userEmail, onLogout }) {
   // na tela de gestão (abaixo do Plano de Contas) quanto no dropdown de
   // "Centro de Custo" dos formulários de Contas a Pagar/Receber.
   const costCentersF = useMemo(() => costCenters.filter(inScope), [costCenters, inScope]);
+
+  // "Novidades do sistema" — changelog interno pro time do BPO, não é
+  // por empresa (é global, mudança de sistema vale pra todo mundo).
+  // Lido/não-lido é só "até quando esse usuário abriu a lista" (uma linha
+  // por usuário em system_update_reads), não um controle por item.
+  const unreadUpdatesCount = useMemo(
+    () => systemUpdates.filter((u) => !lastSeenUpdatesAt || u.created_at > lastSeenUpdatesAt).length,
+    [systemUpdates, lastSeenUpdatesAt]
+  );
+  const marcarNovidadesVistas = useCallback(async () => {
+    if (!userId) return;
+    const agora = new Date().toISOString();
+    await supabase.from("system_update_reads").upsert({ user_id: userId, last_seen_at: agora });
+    setLastSeenUpdatesAt(agora);
+    logAudit(null, "system_update", "todas", "visualizar", "Abriu Novidades do sistema", userEmail);
+  }, [userId, userEmail]);
 
   /* ------------------------- derived calculations ---------------------- */
   const accountBalance = useCallback(
@@ -1695,6 +1726,61 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
               </span>
             )}
           </button>
+          {role !== "owner" && (
+            <div className="relative">
+              <button
+                onClick={() => {
+                  const abrindo = !novidadesOpen;
+                  setNovidadesOpen(abrindo);
+                  if (abrindo && unreadUpdatesCount > 0) marcarNovidadesVistas();
+                }}
+                className="relative w-9 h-9 rounded-lg flex items-center justify-center"
+                style={{ background: COLORS.bg }}
+                title="Novidades do sistema"
+              >
+                <Megaphone size={16} color={COLORS.inkSoft} />
+                {unreadUpdatesCount > 0 && (
+                  <span
+                    className="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-semibold text-white"
+                    style={{ background: COLORS.gold }}
+                  >
+                    {unreadUpdatesCount > 9 ? "9+" : unreadUpdatesCount}
+                  </span>
+                )}
+              </button>
+              {novidadesOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setNovidadesOpen(false)} />
+                  <div
+                    className="absolute right-0 top-11 z-20 w-[22rem] max-h-[70vh] overflow-y-auto rounded-xl"
+                    style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, boxShadow: "0 8px 24px rgba(20,24,22,0.12)" }}
+                  >
+                    <p className="px-3.5 py-3 text-sm font-semibold" style={{ color: COLORS.ink, borderBottom: `1px solid ${COLORS.border}` }}>
+                      Novidades do sistema
+                    </p>
+                    {systemUpdates.length === 0 ? (
+                      <p className="px-3.5 py-4 text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma novidade registrada ainda.</p>
+                    ) : (
+                      [...systemUpdates]
+                        .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))
+                        .map((u) => (
+                          <div key={u.id} className="px-3.5 py-3" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="text-sm font-medium" style={{ color: COLORS.ink }}>{u.titulo}</p>
+                              {(!lastSeenUpdatesAt || u.created_at > lastSeenUpdatesAt) && (
+                                <span className="shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ background: COLORS.goldSoft, color: COLORS.gold }}>novo</span>
+                              )}
+                            </div>
+                            <p className="text-xs mb-1.5" style={{ color: COLORS.inkSoft }}>{fmtDateTime(u.created_at)}</p>
+                            <SkillMarkdown text={u.descricao} />
+                          </div>
+                        ))
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <div className="relative">
             <button onClick={() => setUserMenuOpen((v) => !v)} title="Menu do usuário" className="flex items-center gap-2">
               <span
@@ -2025,7 +2111,15 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
               />
             )}
 
-            {view === "adm" && <AdmView role={role} empresas={empresasAtivas} userEmail={userEmail} />}
+            {view === "adm" && (
+              <AdmView
+                role={role}
+                empresas={empresasAtivas}
+                userEmail={userEmail}
+                systemUpdates={systemUpdates}
+                onSaveSystemUpdates={(v) => persist("systemUpdates", v, setSystemUpdates)}
+              />
+            )}
 
             {view === "produtividade" && <ProdutividadeView role={role} empresas={empresasAtivas} timeSessions={timeSessions} />}
 
@@ -2841,7 +2935,66 @@ function NovoUsuarioModal({ onClose, onSubmit, busy }) {
   );
 }
 
-function AdmView({ role, empresas = [], userEmail }) {
+// Changelog interno — só gestor publica (RLS exige is_gestor pra
+// insert/update/delete), mas is_staff lê (gestor + operador veem o sino
+// no topbar). Não precisa editar depois de publicado — só adicionar ou
+// remover (um erro de digitação vira "remove e publica de novo").
+function SystemUpdatesManager({ updates, onSave }) {
+  const [titulo, setTitulo] = useState("");
+  const [descricao, setDescricao] = useState("");
+
+  const ordenadas = [...updates].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+
+  const adicionar = () => {
+    if (!titulo.trim() || !descricao.trim()) return;
+    onSave([...updates, { id: uid(), titulo: titulo.trim(), descricao: descricao.trim() }]);
+    setTitulo("");
+    setDescricao("");
+  };
+
+  const remover = (u) => {
+    if (!confirmDelete(`Remover a novidade "${u.titulo}"? Ela some do sino de todo mundo.`)) return;
+    onSave(updates.filter((x) => x.id !== u.id));
+  };
+
+  return (
+    <Card className="p-4 space-y-3">
+      <p className="text-sm font-medium" style={{ color: COLORS.ink }}>Novidades do sistema</p>
+      <p className="text-xs" style={{ color: COLORS.inkSoft }}>
+        Aviso interno pra equipe (gestor e operador) sobre o que mudou — o dono não vê isso. Vale registrar só funcionalidades novas daqui pra frente, não é preciso documentar o que já existia.
+      </p>
+      <div className="grid gap-2">
+        <TextInput value={titulo} onChange={(e) => setTitulo(e.target.value)} placeholder="Título (ex.: Auto-preenchimento no Hub de Skills)" />
+        <textarea
+          value={descricao}
+          onChange={(e) => setDescricao(e.target.value)}
+          rows={4}
+          className={inputCls}
+          style={inputStyle}
+          placeholder="Descrição — o que mudou e por quê"
+        />
+        <div className="flex justify-end">
+          <Button onClick={adicionar} disabled={!titulo.trim() || !descricao.trim()}><Plus size={14} /> Publicar novidade</Button>
+        </div>
+      </div>
+      {ordenadas.length > 0 && (
+        <div className="space-y-2 pt-2" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+          {ordenadas.map((u) => (
+            <div key={u.id} className="flex items-start justify-between gap-2 py-1.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium" style={{ color: COLORS.ink }}>{u.titulo}</p>
+                <p className="text-xs" style={{ color: COLORS.inkSoft }}>{fmtDateTime(u.created_at)}</p>
+              </div>
+              <button title="Remover" onClick={() => remover(u)}><Trash2 size={14} color={COLORS.red} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function AdmView({ role, empresas = [], userEmail, systemUpdates = [], onSaveSystemUpdates }) {
   const [users, setUsers] = useState(null);
   const [empresasByOwner, setEmpresasByOwner] = useState({});
   const [staffAccess, setStaffAccess] = useState({}); // { userId: Set(empresaId) }
@@ -3090,6 +3243,8 @@ function AdmView({ role, empresas = [], userEmail }) {
           </table>
         )}
       </Card>
+
+      <SystemUpdatesManager updates={systemUpdates} onSave={onSaveSystemUpdates} />
 
       <AuditLogReport empresas={empresas} users={users || []} />
 
