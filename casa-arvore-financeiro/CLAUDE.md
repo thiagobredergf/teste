@@ -41,13 +41,19 @@ dá a lista completa), cada um seguido do nome da área: "Contas a Pagar",
 "Contas a Receber", "Lançamentos Bancários", "Relatórios", "Rotina",
 "Documentos Recebidos", etc.
 
-`src/lib/` tem só três arquivos:
+`src/lib/` tem poucos arquivos:
 - `storage.js` — camada de persistência genérica (ver abaixo).
 - `supabaseClient.js` — cliente Supabase.
 - `cnab240.js` — gerador de arquivo de remessa bancária CNAB240 (formato
   fixo de 240 caracteres por linha; `montarLinha()` lança erro se o
   tamanho não fechar exato — mantenha esse padrão em qualquer novo
   registro CNAB).
+- `cnab240Retorno.js` — leitor do arquivo de retorno de cobrança (Contas
+  a Receber, fase 33). Como o layout do retorno vem do banco (não é o
+  ESEK que monta), o pareamento com a conta a receber é por busca de
+  trecho do "Nosso Número" numa janela ampla da linha, nunca por coluna
+  exata nem por valor/data — mantenha esse padrão de "sugestão revisável
+  + linha bruta visível" em qualquer leitura de arquivo externo.
 
 ### Persistência: `persist(key, value, setter)` + `storageGet/storageSet`
 
@@ -116,9 +122,5 @@ Produção em Vercel, deploy automático a cada push na branch `master`
 
 ## Backlog conhecido (adiado deliberadamente)
 
-- **CNAB240 retorno de cobrança** (Contas a Receber): só a remessa (envio)
-  foi implementada; o arquivo de retorno do banco (baixa automática de
-  boletos pagos) ainda é conferido manualmente. Adiado por
-  custo/complexidade — o layout do retorno varia por banco, ao contrário
-  da remessa que é mais padronizada. Retomar quando o volume de boletos
-  justificar automatizar.
+(nenhum item pendente no momento — ver fase 33 em `supabase/` pra leitura
+de retorno CNAB240 de cobrança, que fechou o único item que estava aqui)
