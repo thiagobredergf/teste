@@ -32,6 +32,7 @@ const TABLE_NAMES = {
   onboardingItems: "onboarding_items",
   costCenters: "cost_centers",
   systemUpdates: "system_updates",
+  retornosCnab: "retornos_cnab",
 };
 
 // selectedEmpresa é só preferência de navegação de quem está olhando a

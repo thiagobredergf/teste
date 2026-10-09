@@ -14,6 +14,7 @@ import JSZip from "jszip";
 import { storageGet, storageSet } from "./lib/storage";
 import { supabase } from "./lib/supabaseClient";
 import { buildCnab240Remessa, validarItensCnab } from "./lib/cnab240";
+import { parseRetornoCnab240, casarComRecebiveis } from "./lib/cnab240Retorno";
 
 /* ---------------------------------------------------------------------- */
 /*  Design tokens                                                         */
@@ -577,6 +578,7 @@ const STORE_KEYS = {
   onboardingItems: "onboardingItems",
   costCenters: "costCenters",
   systemUpdates: "systemUpdates",
+  retornosCnab: "retornosCnab",
   selectedEmpresa: "selectedEmpresa",
 };
 
@@ -819,6 +821,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [onboardingItems, setOnboardingItems] = useState([]);
   const [costCenters, setCostCenters] = useState([]);
   const [systemUpdates, setSystemUpdates] = useState([]);
+  const [retornosCnab, setRetornosCnab] = useState([]);
   const [userId, setUserId] = useState(null);
   const [lastSeenUpdatesAt, setLastSeenUpdatesAt] = useState(null);
   const [year, setYear] = useState(new Date().getFullYear());
@@ -870,6 +873,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setOnboardingItems(data.onboardingItems || []);
       setCostCenters(data.costCenters || []);
       setSystemUpdates(data.systemUpdates || []);
+      setRetornosCnab(data.retornosCnab || []);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
       // cards de todas), pra escolher com qual vai trabalhar.
@@ -1961,6 +1965,8 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                 onImportProcessed={handleImportProcessed}
                 userEmail={userEmail}
                 canEdit={role !== "owner"}
+                retornosCnab={retornosCnab}
+                onSaveRetornosCnab={(v) => persist("retornosCnab", v, setRetornosCnab)}
               />
             )}
 
@@ -5908,6 +5914,7 @@ function BatchSettleModal({ title, items, nameField, valueLabel, dateLabel, acco
 function ReceivablesView({
   receivables, accounts, empresas = [], selectedEmpresa, categories, costCenters = [], contacts, onSaveContacts, onSave,
   pendingImport, onImportProcessed, userEmail, canEdit = true,
+  retornosCnab = [], onSaveRetornosCnab,
 }) {
   const [modal, setModal] = useState(null);
   const [recModal, setRecModal] = useState(null);
@@ -5924,6 +5931,7 @@ function ReceivablesView({
   const [previewDoc, setPreviewDoc] = useState(null);
   const [cobrancas, setCobrancas] = useState({}); // { receivableId: created_at da última cobrança enviada }
   const [anticipateModal, setAnticipateModal] = useState(null);
+  const [retornoModal, setRetornoModal] = useState(false);
 
   // Régua de cobrança: quando cada conta a receber foi cobrada por
   // último — não guarda estado próprio, só lê do mesmo log de auditoria
@@ -6112,6 +6120,34 @@ function ReceivablesView({
     items.forEach((i) => logAudit(selectedEmpresa, "receivable", i.id, "baixa", `Dar baixa em lote — ${refs.get(i.id)}${fmtBRL(i.valor)} em ${fmtDate(dataReceb)}`, userEmail));
     setBatchSettleModal(false);
   };
+
+  // Baixa em lote a partir do retorno CNAB240 — cada item já veio
+  // casado pelo Nosso Número e revisado na tela (ver RetornoCnabModal);
+  // aqui só grava o que o gestor confirmou, igual a qualquer outra
+  // baixa em lote, mais o rastro de qual arquivo gerou cada uma.
+  const confirmRetornoCnab = ({ contaId, fileName, selecionados, totalLinhasArquivo }) => {
+    const retornoId = uid();
+    onSaveRetornosCnab([...retornosCnab, {
+      id: retornoId, empresaId: selectedEmpresa, contaId, nomeArquivo: fileName,
+      processadoEm: new Date().toISOString(), processadoPor: userEmail,
+      quantidadeLinhas: totalLinhasArquivo, quantidadeBaixas: selecionados.length,
+    }]);
+    const porId = new Map(selecionados.map((s) => [s.receivable.id, s]));
+    onSave(receivables.map((r) => {
+      const s = porId.get(r.id);
+      if (!s) return r;
+      return {
+        ...r, status: "Recebido", dataReceb: s.dataReceb, valorRecebido: s.valorPago,
+        contaRecebId: contaId, juros: s.juros || 0, desconto: s.desconto || 0,
+        retornoCnabId: retornoId,
+      };
+    }));
+    selecionados.forEach((s) => {
+      const ref = refReceivable(s.receivable.id);
+      logAudit(selectedEmpresa, "receivable", s.receivable.id, "baixa", `Dar baixa via retorno CNAB240 — ${ref}${fmtBRL(s.valorPago)} em ${fmtDate(s.dataReceb)} (${s.ocorrenciaLabel})`, userEmail);
+    });
+    setRetornoModal(false);
+  };
   const cancelReceipt = (r) => {
     const revertStatus = r.agendadoPara ? "Antecipado" : "A Receber";
     if (!confirmDelete(`Cancelar o recebimento de "${r.cliente}"? Ele volta pra "${revertStatus}".`)) return;
@@ -6148,6 +6184,9 @@ function ReceivablesView({
             </label>
             <Button variant="ghost" onClick={() => setBatchSettleModal(true)}>
               <CheckCheck size={15} /> Dar baixa em lote
+            </Button>
+            <Button variant="ghost" onClick={() => setRetornoModal(true)} title="Lê o arquivo de retorno do banco (CNAB240) e sugere baixas pras contas a receber que tiverem o mesmo Nosso Número cadastrado — nada é confirmado sem revisão na tela">
+              <FileUp size={15} /> Processar retorno CNAB240
             </Button>
             <Button onClick={() => { setAiNote(""); setModal({ empresaId: selectedEmpresa }); }}>
               <Plus size={15} /> Novo lançamento
@@ -6326,6 +6365,14 @@ function ReceivablesView({
           onConfirm={confirmBatchReceipt}
         />
       )}
+      {retornoModal && (
+        <RetornoCnabModal
+          accounts={accounts.filter((a) => a.empresaId === selectedEmpresa)}
+          receivablesAbertos={receivables.filter((r) => r.empresaId === selectedEmpresa && !r.deletedAt && r.status !== "Recebido")}
+          onClose={() => setRetornoModal(false)}
+          onConfirm={confirmRetornoCnab}
+        />
+      )}
     </div>
     {reciboAlvo && (
       <div className="hidden print:block">
@@ -6333,6 +6380,181 @@ function ReceivablesView({
       </div>
     )}
     </>
+  );
+}
+
+// Tela de revisão do retorno CNAB240: sobe o arquivo, mostra cada título
+// casado (ou não) pelo Nosso Número cadastrado, com a linha bruta
+// disponível pra conferir, e só marca pra baixa automática quando o
+// código de ocorrência indicar liquidação E o pareamento não for
+// ambíguo — o gestor pode marcar/desmarcar e ajustar valor/data de
+// qualquer linha antes de confirmar.
+function RetornoCnabModal({ accounts, receivablesAbertos, onClose, onConfirm }) {
+  const [contaId, setContaId] = useState(accounts[0]?.id || "");
+  const [fileName, setFileName] = useState("");
+  const [totalLinhasArquivo, setTotalLinhasArquivo] = useState(0);
+  const [casados, setCasados] = useState([]);
+  const [erro, setErro] = useState("");
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setErro("");
+    try {
+      const texto = await file.text();
+      const resultado = parseRetornoCnab240(texto);
+      if (resultado.linhas.length === 0) {
+        setErro("Nenhum registro de título (Segmento T) foi encontrado neste arquivo — confira se é o arquivo de retorno certo.");
+        setCasados([]);
+        return;
+      }
+      const casadosResult = casarComRecebiveis(resultado.linhas, receivablesAbertos);
+      setFileName(file.name);
+      setTotalLinhasArquivo(resultado.totalLinhasArquivo);
+      setCasados(casadosResult.map((c) => ({
+        ...c,
+        dataReceb: c.dataOcorrencia || todayISO(),
+        valorPago: c.valorPago ?? 0,
+        checked: !!(c.provavelLiquidacao && c.receivable && !c.ambiguo),
+      })));
+    } catch {
+      setErro("Não foi possível ler este arquivo — confira se é um arquivo-texto (.ret/.txt) de retorno CNAB240.");
+      setCasados([]);
+    }
+  };
+
+  const update = (idx, patch) => setCasados((list) => list.map((c, i) => (i === idx ? { ...c, ...patch } : c)));
+
+  const casaveis = casados.filter((c) => c.receivable && !c.ambiguo);
+  const selecionados = casados.filter((c) => c.checked && c.receivable && !c.ambiguo);
+  const totalSelecionado = selecionados.reduce((s, c) => s + Number(c.valorPago || 0), 0);
+
+  return (
+    <Modal title="Processar retorno CNAB240 — Contas a Receber" onClose={onClose} wide>
+      <div className="grid gap-3">
+        <p className="text-xs -mt-1 px-3 py-2 rounded-lg" style={{ background: COLORS.goldSoft, color: COLORS.gold }}>
+          Lê o arquivo de retorno do banco e sugere baixas pras contas a receber com "Nosso Número" cadastrado. O pareamento é só por esse número — nada é confirmado automaticamente, revise cada linha (a linha original do arquivo fica disponível pra conferir) antes de confirmar.
+        </p>
+        <Field label="Conta que recebeu os pagamentos">
+          <Select value={contaId} onChange={(e) => setContaId(e.target.value)}>
+            <option value="">Selecione uma conta</option>
+            {accounts.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+          </Select>
+        </Field>
+
+        <label
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors w-fit"
+          style={{ background: "transparent", color: COLORS.primary, border: `1px solid ${COLORS.border}` }}
+        >
+          <Upload size={15} /> {fileName || "Selecionar arquivo de retorno (.ret/.txt)"}
+          <input type="file" accept=".ret,.txt,.rem" className="hidden" onChange={handleFile} />
+        </label>
+
+        {erro && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
+            <AlertTriangle size={15} /> {erro}
+          </div>
+        )}
+
+        {casados.length > 0 && (
+          <>
+            <p className="text-xs" style={{ color: COLORS.inkSoft }}>
+              {totalLinhasArquivo} linha(s) no arquivo · {casados.length} título(s) identificado(s) · {casaveis.length} casado(s) por Nosso Número
+            </p>
+            <div className="rounded-lg border max-h-96 overflow-y-auto" style={{ borderColor: COLORS.border }}>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}`, background: "#FAFAF7" }}>
+                    <th className="text-left font-medium px-3 py-2"></th>
+                    <th className="text-left font-medium px-3 py-2">Cliente / correspondência</th>
+                    <th className="text-left font-medium px-3 py-2">Ocorrência</th>
+                    <th className="text-left font-medium px-3 py-2">Data</th>
+                    <th className="text-right font-medium px-3 py-2">Valor pago</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {casados.map((c, idx) => (
+                    <tr key={idx} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                      <td className="px-3 py-2 align-top">
+                        <input
+                          type="checkbox"
+                          checked={!!c.checked}
+                          disabled={!c.receivable || c.ambiguo}
+                          onChange={() => update(idx, { checked: !c.checked })}
+                        />
+                      </td>
+                      <td className="px-3 py-2 align-top" style={{ color: COLORS.ink }}>
+                        {c.receivable ? (
+                          <p className="font-medium">{c.receivable.cliente}</p>
+                        ) : c.ambiguo ? (
+                          <p className="font-medium" style={{ color: COLORS.red }}>Nosso Número ambíguo — mais de uma conta bate</p>
+                        ) : (
+                          <p style={{ color: COLORS.inkSoft }}>Sem correspondência</p>
+                        )}
+                        <details className="text-[11px] mt-1" style={{ color: COLORS.inkSoft }}>
+                          <summary className="cursor-pointer">Ver linha original</summary>
+                          <p className="font-mono break-all mt-1">{c.linhaT}</p>
+                        </details>
+                      </td>
+                      <td className="px-3 py-2 align-top" style={{ color: c.provavelLiquidacao ? COLORS.ink : COLORS.inkSoft }}>
+                        {c.ocorrenciaLabel}
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <input
+                          type="date"
+                          value={c.dataReceb}
+                          onChange={(e) => update(idx, { dataReceb: e.target.value })}
+                          className="text-sm rounded-md border px-2 py-1"
+                          style={{ borderColor: COLORS.border }}
+                        />
+                      </td>
+                      <td className="px-3 py-2 align-top text-right">
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={c.valorPago}
+                          onChange={(e) => update(idx, { valorPago: e.target.value })}
+                          className="text-sm rounded-md border px-2 py-1 text-right w-28"
+                          style={{ borderColor: COLORS.border }}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        <div className="flex items-center justify-between pt-1">
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>
+            {selecionados.length} selecionado(s) · <span className="font-semibold" style={{ color: COLORS.ink }}>{fmtBRL(totalSelecionado)}</span>
+          </p>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+            <Button
+              onClick={() => onConfirm({
+                contaId,
+                fileName,
+                totalLinhasArquivo,
+                selecionados: selecionados.map((c) => ({
+                  receivable: c.receivable,
+                  dataReceb: c.dataReceb,
+                  valorPago: Number(c.valorPago) || 0,
+                  juros: Number(c.juros) || 0,
+                  desconto: Number(c.desconto) || 0,
+                  ocorrenciaLabel: c.ocorrenciaLabel,
+                })),
+              })}
+              disabled={!contaId || selecionados.length === 0}
+            >
+              <CheckCheck size={15} /> Confirmar baixas {selecionados.length > 0 ? `(${selecionados.length})` : ""}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -6406,6 +6628,15 @@ function ReceivableModal({ initial, categories, costCenters = [], contacts = [],
               <option>PIX</option><option>Boleto</option><option>TED</option><option>Dinheiro</option><option>Cartão</option>
             </Select>
           </Field>
+          {form.formaReceb === "Boleto" && (
+            <Field label="Nosso Número">
+              <TextInput
+                value={form.nossoNumero || ""}
+                onChange={(e) => setForm({ ...form, nossoNumero: e.target.value })}
+                placeholder="Número que o banco atribuiu ao registrar o boleto"
+              />
+            </Field>
+          )}
           <Field label="CPF/CNPJ do cliente">
             <TextInput value={form.documento} onChange={(e) => setForm({ ...form, documento: e.target.value })} placeholder="Opcional — usado pra cobrança futura" />
           </Field>
