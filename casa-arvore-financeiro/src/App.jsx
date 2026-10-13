@@ -5666,10 +5666,12 @@ function PayableModal({ initial, categories, costCenters = [], contacts = [], ac
     centroCusto: "", projeto: "", confirmarAutomaticamente: false, contaPadraoId: "", ...initial,
   });
   const valid = form.fornecedor.trim() && Number(form.valor) > 0 && form.empresaId;
-  // Sugere só quem está classificado como fornecedor (ou sem classificação
-  // ainda) — um sócio ou funcionário cadastrado nos Contatos não deve
-  // aparecer aqui, mesmo que também receba pagamentos eventualmente.
-  const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId && (!c.tipoContato || c.tipoContato === "fornecedor"));
+  // "Fornecedor" aqui é genérico — é o campo de "pra quem eu tô pagando",
+  // e isso inclui sócio (pró-labore) e funcionário (salário) junto com
+  // fornecedor de verdade. Por isso a lista não filtra por tipoContato;
+  // só mostra a classificação ao lado do nome, pra ajudar a identificar
+  // sem esconder ninguém que precise ser pago por aqui.
+  const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId);
   const handleFornecedor = (nome) => {
     const nomeTrim = nome.trim().toLowerCase();
     const match = contactOptions.find((c) => c.nome.toLowerCase() === nomeTrim)
@@ -5693,7 +5695,7 @@ function PayableModal({ initial, categories, costCenters = [], contacts = [], ac
           <Field label="Fornecedor">
             <TextInput list="contatos-fornecedor" value={form.fornecedor} onChange={(e) => handleFornecedor(e.target.value)} />
             <datalist id="contatos-fornecedor">
-              {contactOptions.map((c) => <option key={c.id} value={c.nome} />)}
+              {contactOptions.map((c) => <option key={c.id} value={c.nome} label={c.tipoContato ? TIPO_CONTATO_LABELS[c.tipoContato] : undefined} />)}
             </datalist>
           </Field>
           <Field label="Categoria">
@@ -6946,9 +6948,11 @@ function ReceivableModal({ initial, categories, costCenters = [], contacts = [],
     centroCusto: "", projeto: "", confirmarAutomaticamente: false, contaPadraoId: "", ...initial,
   });
   const valid = form.cliente.trim() && Number(form.valor) > 0 && form.empresaId;
-  // Sugere só quem está classificado como cliente (ou sem classificação
-  // ainda) — mesmo raciocínio do PayableModal, pro lado de quem recebe.
-  const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId && (!c.tipoContato || c.tipoContato === "cliente"));
+  // Mesmo raciocínio do PayableModal: "Cliente" aqui é só "de quem eu tô
+  // recebendo" — não filtra por tipoContato pra não esconder quem
+  // eventualmente também paga a empresa (reembolso de sócio/funcionário,
+  // por exemplo). A classificação aparece ao lado do nome na sugestão.
+  const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId);
   const handleCliente = (nome) => {
     const nomeTrim = nome.trim().toLowerCase();
     const match = contactOptions.find((c) => c.nome.toLowerCase() === nomeTrim)
@@ -6972,7 +6976,7 @@ function ReceivableModal({ initial, categories, costCenters = [], contacts = [],
           <Field label="Cliente">
             <TextInput list="contatos-cliente" value={form.cliente} onChange={(e) => handleCliente(e.target.value)} />
             <datalist id="contatos-cliente">
-              {contactOptions.map((c) => <option key={c.id} value={c.nome} />)}
+              {contactOptions.map((c) => <option key={c.id} value={c.nome} label={c.tipoContato ? TIPO_CONTATO_LABELS[c.tipoContato] : undefined} />)}
             </datalist>
           </Field>
           <Field label="Categoria">
