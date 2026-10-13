@@ -616,6 +616,42 @@ const PERIOD_DATE_FIELD = {
   fiscalObligations: (r) => r.vencimento,
 };
 
+// Dar baixa (ou cancelar baixa, agendar, antecipar, renegociar...) num
+// lançamento antigo, de um mês já fechado, não é reescrever aquele mês —
+// é registrar um FATO de hoje (o cliente pagou agora, o fornecedor foi
+// pago agora) sobre um lançamento que só por acaso nasceu lá atrás. Travar
+// isso forçaria reabrir o mês fechado só pra uma baixa datada de hoje,
+// arriscando esquecer de fechar de novo. Por isso, quando a mudança mexe
+// SÓ nesses campos de "evento" (nunca em valor/vencimento/categoria/
+// cliente — isso continua bloqueado normalmente), o fechamento do mês do
+// LANÇAMENTO original não entra na conta; só a data do evento em si (ex.:
+// dataPgto/dataReceb) é checada — pra não deixar lançar o pagamento
+// retroativo DENTRO de um mês fechado por engano.
+const EVENT_ONLY_FIELDS = {
+  payables: new Set([
+    "status", "dataPgto", "valorPago", "contaPgtoId", "juros", "multa", "desconto",
+    "agendadoPara", "contaAgendadaId", "autorizadoPor", "autorizadoEm",
+    "remessaCnabId", "remessaCnabEm", "conciliado",
+  ]),
+  receivables: new Set([
+    "status", "dataReceb", "valorRecebido", "contaRecebId", "juros", "multa", "desconto",
+    "agendadoPara", "contaAgendadaId", "renegociadoPara", "valorRenegociado", "obsRenegociacao",
+    "retornoCnabId", "conciliado",
+  ]),
+};
+const EVENT_DATE_FIELD = {
+  payables: (r) => r.dataPgto,
+  receivables: (r) => r.dataReceb,
+};
+function isEventOnlyChange(whitelist, oldRow, newRow) {
+  const keys = new Set([...Object.keys(oldRow), ...Object.keys(newRow)]);
+  for (const k of keys) {
+    if (whitelist.has(k)) continue;
+    if (JSON.stringify(oldRow[k]) !== JSON.stringify(newRow[k])) return false;
+  }
+  return true;
+}
+
 const competenciaOf = (dateStr) => (dateStr || "").slice(0, 7);
 
 // Telas que contam como "trabalho de rotina numa empresa" pro cronômetro
@@ -644,10 +680,23 @@ function findLockedViolation(key, oldArray, newArray, periodLocks) {
   );
   if (lockedSet.size === 0) return null;
 
+  const eventWhitelist = EVENT_ONLY_FIELDS[key];
+  const eventDateFn = EVENT_DATE_FIELD[key];
+
   const oldById = new Map(oldArray.map((r) => [r.id, r]));
   for (const row of newArray) {
     const old = oldById.get(row.id);
     if (old && JSON.stringify(old) === JSON.stringify(row)) continue;
+
+    if (old && eventWhitelist && isEventOnlyChange(eventWhitelist, old, row)) {
+      const eventDate = eventDateFn ? eventDateFn(row) : null;
+      if (eventDate) {
+        const comp = competenciaOf(eventDate);
+        if (comp && lockedSet.has(`${row.empresaId}|${comp}`)) return { competencia: comp };
+      }
+      continue;
+    }
+
     const datesToCheck = old ? [dateFn(old), dateFn(row)] : [dateFn(row)];
     for (const d of datesToCheck) {
       const comp = competenciaOf(d);
