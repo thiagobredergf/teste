@@ -5624,6 +5624,7 @@ function InstallmentFields({ form, setForm }) {
           type="number" min="1" value={form.parcelas ?? 1} disabled={!!form.recorrente}
           onChange={(e) => setForm({ ...form, parcelas: e.target.value })}
         />
+        <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Divide o valor acima em N partes (ex.: compra de R$ 1.200 em 3x de R$ 400).</p>
       </Field>
       <div className="flex flex-col gap-1 text-sm">
         <span className="font-medium" style={{ color: COLORS.inkSoft }}>Recorrente</span>
@@ -5641,6 +5642,7 @@ function InstallmentFields({ form, setForm }) {
           />
           <span style={{ color: COLORS.inkSoft }}>meses</span>
         </div>
+        <p className="text-xs mt-1" style={{ color: COLORS.inkSoft }}>Repete o mesmo valor todo mês, sem dividir (ex.: aluguel de R$ 1.500 por 12 meses). Use isso ou Parcelas, nunca os dois juntos.</p>
       </div>
     </div>
   );
@@ -5664,7 +5666,10 @@ function PayableModal({ initial, categories, costCenters = [], contacts = [], ac
     centroCusto: "", projeto: "", confirmarAutomaticamente: false, contaPadraoId: "", ...initial,
   });
   const valid = form.fornecedor.trim() && Number(form.valor) > 0 && form.empresaId;
-  const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId);
+  // Sugere só quem está classificado como fornecedor (ou sem classificação
+  // ainda) — um sócio ou funcionário cadastrado nos Contatos não deve
+  // aparecer aqui, mesmo que também receba pagamentos eventualmente.
+  const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId && (!c.tipoContato || c.tipoContato === "fornecedor"));
   const handleFornecedor = (nome) => {
     const nomeTrim = nome.trim().toLowerCase();
     const match = contactOptions.find((c) => c.nome.toLowerCase() === nomeTrim)
@@ -6941,7 +6946,9 @@ function ReceivableModal({ initial, categories, costCenters = [], contacts = [],
     centroCusto: "", projeto: "", confirmarAutomaticamente: false, contaPadraoId: "", ...initial,
   });
   const valid = form.cliente.trim() && Number(form.valor) > 0 && form.empresaId;
-  const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId);
+  // Sugere só quem está classificado como cliente (ou sem classificação
+  // ainda) — mesmo raciocínio do PayableModal, pro lado de quem recebe.
+  const contactOptions = contacts.filter((c) => !c.deletedAt && c.empresaId === form.empresaId && (!c.tipoContato || c.tipoContato === "cliente"));
   const handleCliente = (nome) => {
     const nomeTrim = nome.trim().toLowerCase();
     const match = contactOptions.find((c) => c.nome.toLowerCase() === nomeTrim)
