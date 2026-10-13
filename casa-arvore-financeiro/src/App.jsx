@@ -943,13 +943,14 @@ function FinanceiroApp({ userEmail, onLogout }) {
       const violation = findLockedViolation(key, currentArray, value, periodLocks);
       if (violation) {
         setSaveError(`Não foi possível salvar: o mês ${violation.competencia} está fechado para esta empresa. Reabra o fechamento em "Rotina" antes de editar esse lançamento.`);
-        return;
+        return false;
       }
     }
     setter(value);
     const ok = await saveKey(key, value);
     if (!ok) setSaveError("Não foi possível salvar agora. Suas alterações podem não persistir — tente novamente em instantes.");
     else setSaveError(null);
+    return ok;
   }, [payables, receivables, bankEntries, transfers, fiscalObligations, periodLocks]);
 
   // Confirmação automática na data prevista: contas marcadas com
@@ -1006,10 +1007,17 @@ function FinanceiroApp({ userEmail, onLogout }) {
   // (ver PLANO_CONTAS_TEMPLATES) — sem isso a empresa ficaria sem
   // categoria nenhuma pra classificar lançamento até alguém cadastrar
   // uma por uma na mão.
-  const saveEmpresas = useCallback((novasEmpresas) => {
+  // categories/onboardingItems têm FK pra empresas — por isso o insert da
+  // empresa precisa ser aguardado (e confirmado) antes de gravar os
+  // filhos. Sem esse await, as duas gravações saem juntas e, se a de
+  // categories/onboardingItems chegar no Postgres antes da de empresas
+  // terminar de commitar, a FK rejeita o lote inteiro (silenciosamente,
+  // já que o modal fecha antes de alguém notar o aviso de erro) e a
+  // empresa nasce sem plano de contas nenhum.
+  const saveEmpresas = useCallback(async (novasEmpresas) => {
     const empresaCriada = novasEmpresas.find((e) => !empresas.some((old) => old.id === e.id));
-    persist("empresas", novasEmpresas, setEmpresas);
-    if (empresaCriada) {
+    const ok = await persist("empresas", novasEmpresas, setEmpresas);
+    if (empresaCriada && ok !== false) {
       const template = categoriaTemplateDoSegmento(empresaCriada.segmento);
       const novasCategorias = template.map((t) => ({
         id: `${empresaCriada.id}-${t.codigo}`,
@@ -1019,8 +1027,8 @@ function FinanceiroApp({ userEmail, onLogout }) {
         nome: t.nome,
         natureza: t.natureza,
       }));
-      persist("categories", [...categories, ...novasCategorias], setCategories);
-      persist("onboardingItems", [...onboardingItems, ...buildOnboardingChecklistRows(empresaCriada.id)], setOnboardingItems);
+      await persist("categories", [...categories, ...novasCategorias], setCategories);
+      await persist("onboardingItems", [...onboardingItems, ...buildOnboardingChecklistRows(empresaCriada.id)], setOnboardingItems);
     }
   }, [empresas, categories, onboardingItems, persist]);
 
