@@ -1360,9 +1360,15 @@ function FinanceiroApp({ userEmail, onLogout }) {
   // obtidos de fornecedor são ganho financeiro. Fica de fora do
   // categoryBreakdown/receivableBreakdown de propósito (ver acima), pra
   // aparecer como linha própria no DRE, igual um contador faria.
+  //
+  // Igual a receitas/despesas do DRE regime de caixa, isola só o que foi
+  // baixado no ANO selecionado (yearOf(dataPgto/dataReceb) === year) —
+  // sem esse filtro, a baixa de qualquer ano entrava sempre, mesmo
+  // olhando o DRE de um ano anterior (ex.: juros de uma renegociação
+  // baixada agora, em 2026, aparecia também no DRE de 2024).
   const financialAdjustments = useMemo(() => {
-    const paidPayables = payablesF.filter((p) => p.status === "Pago");
-    const receivedReceivables = receivablesF.filter((r) => r.status === "Recebido");
+    const paidPayables = payablesF.filter((p) => p.status === "Pago" && yearOf(p.dataPgto) === year);
+    const receivedReceivables = receivablesF.filter((r) => r.status === "Recebido" && yearOf(r.dataReceb) === year);
     const despesas =
       paidPayables.reduce((s, p) => s + Number(p.juros || 0) + Number(p.multa || 0), 0) +
       receivedReceivables.reduce((s, r) => s + Number(r.desconto || 0), 0);
@@ -1370,7 +1376,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       receivedReceivables.reduce((s, r) => s + Number(r.juros || 0) + Number(r.multa || 0), 0) +
       paidPayables.reduce((s, p) => s + Number(p.desconto || 0), 0);
     return { despesas, receitas, resultado: receitas - despesas };
-  }, [payablesF, receivablesF]);
+  }, [payablesF, receivablesF, year]);
 
   const upcomingPayables = useMemo(
     () =>
