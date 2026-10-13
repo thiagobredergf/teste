@@ -4090,6 +4090,45 @@ function ContactsView({ contacts, selectedEmpresa, onSave }) {
 // importa é exatidão do dado cadastral, não velocidade — errar CPF de
 // um cliente pro outro é pior que gastar 30 segundos conferindo o
 // mapeamento antes de confirmar.
+// Normalizações pra importar colunas de CSV que vêm com texto livre (o
+// outro sistema exporta "Física"/"Jurídica", "Sócio"/"Cliente"/..., nome
+// do banco com código entre parênteses, "nº-dígito" combinado) pro
+// formato interno que o cadastro de Contatos espera.
+function normTipoPessoa(v) {
+  const s = (v || "").toLowerCase();
+  if (/f[ií]sic/.test(s)) return "fisica";
+  if (/jur[ií]dic/.test(s)) return "juridica";
+  return "";
+}
+function normTipoContato(v) {
+  const s = (v || "").toLowerCase();
+  if (/cliente/.test(s)) return "cliente";
+  if (/fornecedor/.test(s)) return "fornecedor";
+  if (/s[oó]cio/.test(s)) return "socio";
+  if (/funcion[aá]rio/.test(s)) return "funcionario";
+  return "";
+}
+function normBancoCnab(v) {
+  const s = v || "";
+  const porCodigo = s.match(/\((\d{3})\)/); // "Itaú (341)" -> "341"
+  if (porCodigo) return porCodigo[1];
+  const porNome = BANCOS_BRASIL.find((b) => s.toLowerCase().includes(b.nome.toLowerCase()));
+  if (porNome) return porNome.codigo;
+  return s.replace(/\D/g, "").slice(0, 3);
+}
+function normTipoContaCnab(v) {
+  return /poup/i.test(v || "") ? "CP" : "CC";
+}
+// "56789-0" (número e dígito combinados, formato mais comum de exportação)
+// vira { contaCnab: "56789", contaCnabDigito: "0" } — só separa se houver
+// hífen; sem hífen, assume que o valor inteiro é o número da conta.
+function splitContaCnab(v) {
+  const s = (v || "").trim();
+  const idx = s.lastIndexOf("-");
+  if (idx === -1) return { contaCnab: s, contaCnabDigito: "" };
+  return { contaCnab: s.slice(0, idx), contaCnabDigito: s.slice(idx + 1) };
+}
+
 function ImportContactsModal({ empresaId, contacts, onClose, onImport }) {
   const [rows, setRows] = useState(null);
   const [headers, setHeaders] = useState([]);
@@ -4100,8 +4139,15 @@ function ImportContactsModal({ empresaId, contacts, onClose, onImport }) {
   const CAMPOS = [
     { key: "nome", label: "Nome", required: true, guess: /nome|raz[aã]o.?social|cliente|fornecedor|paciente/i },
     { key: "documento", label: "CPF/CNPJ", guess: /cpf|cnpj|documento/i },
+    { key: "tipoPessoa", label: "Tipo de pessoa (PF/PJ)", guess: /tipo.*pessoa|tipo.*personagem/i },
+    { key: "tipoContato", label: "Classificação", guess: /classifica|tipo.*contato|papel/i },
     { key: "contato", label: "Telefone", guess: /telefone|celular|fone|whats|contato/i },
     { key: "email", label: "E-mail", guess: /e-?mail/i },
+    { key: "bancoCnab", label: "Banco", guess: /^banco$/i },
+    { key: "tipoContaCnab", label: "Tipo de conta", guess: /tipo.*conta/i },
+    { key: "agenciaCnab", label: "Agência", guess: /ag[eê]ncia/i },
+    { key: "contaCnab", label: "Conta (nº ou nº-dígito)", guess: /^conta$|n[úu]mero.*conta/i },
+    { key: "contaCnabDigito", label: "Dígito da conta (se vier em coluna separada)", guess: /d[íi]gito/i },
   ];
 
   const handleFile = async (e) => {
@@ -4146,14 +4192,27 @@ function ImportContactsModal({ empresaId, contacts, onClose, onImport }) {
   const duplicados = prontos.length - novos.length;
 
   const confirmar = () => {
-    const criados = novos.map((r) => ({
-      id: uid(),
-      empresaId,
-      nome: (r[mapping.nome] || "").trim(),
-      documento: mapping.documento ? (r[mapping.documento] || "").trim() : "",
-      contato: mapping.contato ? (r[mapping.contato] || "").trim() : "",
-      email: mapping.email ? (r[mapping.email] || "").trim() : "",
-    }));
+    const criados = novos.map((r) => {
+      const contaInfo = mapping.contaCnab
+        ? (mapping.contaCnabDigito
+          ? { contaCnab: (r[mapping.contaCnab] || "").trim(), contaCnabDigito: (r[mapping.contaCnabDigito] || "").trim() }
+          : splitContaCnab(r[mapping.contaCnab]))
+        : { contaCnab: "", contaCnabDigito: "" };
+      return {
+        id: uid(),
+        empresaId,
+        nome: (r[mapping.nome] || "").trim(),
+        documento: mapping.documento ? (r[mapping.documento] || "").trim() : "",
+        contato: mapping.contato ? (r[mapping.contato] || "").trim() : "",
+        email: mapping.email ? (r[mapping.email] || "").trim() : "",
+        tipoPessoa: mapping.tipoPessoa ? normTipoPessoa(r[mapping.tipoPessoa]) : "",
+        tipoContato: mapping.tipoContato ? normTipoContato(r[mapping.tipoContato]) : "",
+        bancoCnab: mapping.bancoCnab ? normBancoCnab(r[mapping.bancoCnab]) : "",
+        tipoContaCnab: mapping.tipoContaCnab ? normTipoContaCnab(r[mapping.tipoContaCnab]) : "CC",
+        agenciaCnab: mapping.agenciaCnab ? (r[mapping.agenciaCnab] || "").trim() : "",
+        ...contaInfo,
+      };
+    });
     onImport(criados);
   };
 
@@ -4191,19 +4250,34 @@ function ImportContactsModal({ empresaId, contacts, onClose, onImport }) {
                       <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}`, background: "#FAFAF7" }}>
                         <th className="text-left font-medium px-3 py-2">Nome</th>
                         <th className="text-left font-medium px-3 py-2">CPF/CNPJ</th>
+                        <th className="text-left font-medium px-3 py-2">Tipo</th>
                         <th className="text-left font-medium px-3 py-2">Contato</th>
                         <th className="text-left font-medium px-3 py-2">E-mail</th>
+                        <th className="text-left font-medium px-3 py-2">Dados bancários</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {prontos.slice(0, 8).map((r, i) => (
-                        <tr key={i} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                          <td className="px-3 py-2" style={{ color: COLORS.ink }}>{r[mapping.nome]}</td>
-                          <td className="px-3 py-2" style={{ color: COLORS.inkSoft }}>{mapping.documento ? r[mapping.documento] : "—"}</td>
-                          <td className="px-3 py-2" style={{ color: COLORS.inkSoft }}>{mapping.contato ? r[mapping.contato] : "—"}</td>
-                          <td className="px-3 py-2" style={{ color: COLORS.inkSoft }}>{mapping.email ? r[mapping.email] : "—"}</td>
-                        </tr>
-                      ))}
+                      {prontos.slice(0, 8).map((r, i) => {
+                        const tipoPessoa = mapping.tipoPessoa ? normTipoPessoa(r[mapping.tipoPessoa]) : "";
+                        const tipoContato = mapping.tipoContato ? normTipoContato(r[mapping.tipoContato]) : "";
+                        const tipoLabel = [
+                          tipoPessoa ? (tipoPessoa === "fisica" ? "PF" : "PJ") : null,
+                          tipoContato ? TIPO_CONTATO_LABELS[tipoContato] : null,
+                        ].filter(Boolean).join(" · ");
+                        const banco = mapping.bancoCnab ? normBancoCnab(r[mapping.bancoCnab]) : "";
+                        const agencia = mapping.agenciaCnab ? (r[mapping.agenciaCnab] || "").trim() : "";
+                        const bancoLabel = banco ? `${banco}${agencia ? ` · ag. ${agencia}` : ""}` : "";
+                        return (
+                          <tr key={i} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                            <td className="px-3 py-2" style={{ color: COLORS.ink }}>{r[mapping.nome]}</td>
+                            <td className="px-3 py-2" style={{ color: COLORS.inkSoft }}>{mapping.documento ? r[mapping.documento] : "—"}</td>
+                            <td className="px-3 py-2" style={{ color: COLORS.inkSoft }}>{tipoLabel || "—"}</td>
+                            <td className="px-3 py-2" style={{ color: COLORS.inkSoft }}>{mapping.contato ? r[mapping.contato] : "—"}</td>
+                            <td className="px-3 py-2" style={{ color: COLORS.inkSoft }}>{mapping.email ? r[mapping.email] : "—"}</td>
+                            <td className="px-3 py-2" style={{ color: COLORS.inkSoft }}>{bancoLabel || "—"}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                   {prontos.length > 8 && <p className="text-xs px-3 py-1.5" style={{ color: COLORS.inkSoft }}>+ {prontos.length - 8} linha(s)…</p>}
