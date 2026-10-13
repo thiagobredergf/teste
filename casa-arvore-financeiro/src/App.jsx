@@ -1001,21 +1001,34 @@ function FinanceiroApp({ userEmail, onLogout }) {
     // busca) esquece a competência que estava em análise — evitar que uma
     // visita futura, direta, a Pendências reapareça presa num mês antigo.
     if (id !== "fechamento" && id !== "pendencias") setClosingCompetencia(null);
-    // Mesma lógica pro filtro de status que o Resumo pode empurrar pra
-    // Contas a Pagar (ver payablesInitialStatusGroup/goToPayablesAgendados
-    // abaixo) — só sobrevive se o destino for mesmo Contas a Pagar.
-    if (id !== "payables") setPayablesInitialStatusGroup(null);
+    // Mesma lógica pros filtros que outras telas (Resumo, painel de
+    // Pendências, Relatórios) podem empurrar pra Contas a Pagar/Receber/
+    // Lançamentos Bancários (ver goToViewFiltered abaixo) — só sobrevivem
+    // se o destino for mesmo aquela tela.
+    if (id !== "payables") setPayablesInitialFilter(null);
+    if (id !== "receivables") setReceivablesInitialFilter(null);
+    if (id !== "bank") setBankInitialFilter(null);
   }, []);
 
-  // "Disponível após agendamentos" (Resumo) desconta Contas a Pagar
-  // Agendado+Autorizado do saldo — esse link leva direto pra lá já
-  // filtrado nesses dois status, em vez de deixar o usuário procurar à
-  // mão qual lançamento está "segurando" o saldo.
-  const [payablesInitialStatusGroup, setPayablesInitialStatusGroup] = useState(null);
-  const goToPayablesAgendados = useCallback(() => {
-    setPayablesInitialStatusGroup(["Agendado", "Autorizado"]);
-    goToView("payables");
+  // Conexão entre telas: um resumo/indicador/pendência calculado a partir
+  // de outra tela pode levar direto pra lá já filtrado no recorte que
+  // originou aquele número — em vez de só abrir a tela e deixar o
+  // usuário procurar à mão qual lançamento é. Cada tela de destino lê seu
+  // filtro (ver initialFilter em PayablesView/ReceivablesView/
+  // BankEntriesView) e mostra um aviso explicando o recorte, com opção
+  // de "Ver todos".
+  const [payablesInitialFilter, setPayablesInitialFilter] = useState(null); // { statusGroup?, semCategoria?, dateFrom?, dateTo? }
+  const [receivablesInitialFilter, setReceivablesInitialFilter] = useState(null);
+  const [bankInitialFilter, setBankInitialFilter] = useState(null); // { semCategoria? }
+  const goToViewFiltered = useCallback((id, filter) => {
+    if (id === "payables") setPayablesInitialFilter(filter);
+    else if (id === "receivables") setReceivablesInitialFilter(filter);
+    else if (id === "bank") setBankInitialFilter(filter);
+    goToView(id);
   }, [goToView]);
+  const goToPayablesAgendados = useCallback(() => {
+    goToViewFiltered("payables", { statusGroup: ["Agendado", "Autorizado"] });
+  }, [goToViewFiltered]);
 
   // Fechamento mensal: "Fechar mês" (em Análise → Fechamento) não trava
   // de cara — leva pra Análise → Pendências, recortada pra essa
@@ -1962,7 +1975,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                 remessasCnab={remessasCnab}
                 onSaveAccounts={(v) => persist("accounts", v, setAccounts)}
                 onSaveRemessasCnab={(v) => persist("remessasCnab", v, setRemessasCnab)}
-                initialStatusGroup={payablesInitialStatusGroup}
+                initialFilter={payablesInitialFilter}
               />
             )}
 
@@ -1983,6 +1996,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                 canEdit={role !== "owner"}
                 retornosCnab={retornosCnab}
                 onSaveRetornosCnab={(v) => persist("retornosCnab", v, setRetornosCnab)}
+                initialFilter={receivablesInitialFilter}
               />
             )}
 
@@ -1997,6 +2011,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                 pendingImport={pendingImport?.context === "bankEntry" ? pendingImport : null}
                 onImportProcessed={handleImportProcessed}
                 canEdit={role !== "owner"}
+                initialFilter={bankInitialFilter}
               />
             )}
 
@@ -2164,6 +2179,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                 accountBalance={accountBalance}
                 totals={totals}
                 monthlyFlow={monthlyFlow}
+                goToViewFiltered={goToViewFiltered}
               />
             )}
 
@@ -2217,7 +2233,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                   <div className="space-y-1.5">
                     {pendingPayablesVencidos > 0 && (
                       <button
-                        onClick={() => goToView("payables")}
+                        onClick={() => goToViewFiltered("payables", { statusGroup: ["Atrasado"] })}
                         className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
                       >
                         <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.redSoft, color: COLORS.red }}>
@@ -2233,7 +2249,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                     )}
                     {pendingReceivablesVencidos > 0 && (
                       <button
-                        onClick={() => goToView("receivables")}
+                        onClick={() => goToViewFiltered("receivables", { statusGroup: ["Inadimplente"] })}
                         className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
                       >
                         <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.redSoft, color: COLORS.red }}>
@@ -2265,7 +2281,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                     )}
                     {pendingBankSemCategoria > 0 && (
                       <button
-                        onClick={() => goToView("bank")}
+                        onClick={() => goToViewFiltered("bank", { semCategoria: true })}
                         className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
                       >
                         <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
@@ -2281,7 +2297,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                     )}
                     {pendingPayablesSemCategoria > 0 && (
                       <button
-                        onClick={() => goToView("payables")}
+                        onClick={() => goToViewFiltered("payables", { semCategoria: true })}
                         className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
                       >
                         <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
@@ -2297,7 +2313,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                     )}
                     {pendingReceivablesSemCategoria > 0 && (
                       <button
-                        onClick={() => goToView("receivables")}
+                        onClick={() => goToViewFiltered("receivables", { semCategoria: true })}
                         className="w-full flex items-center gap-2.5 p-2 -mx-2 rounded-lg text-left hover:bg-black/5"
                       >
                         <span className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ background: COLORS.amberSoft, color: COLORS.amber }}>
@@ -4548,7 +4564,7 @@ function PayablesKanban({ payables, accounts, onDrop, onEdit }) {
 function PayablesView({
   payables, accounts, empresas, selectedEmpresa, categories, costCenters = [], contacts, onSaveContacts, onSave,
   pendingImport, onImportProcessed, userEmail, canEdit = true, role,
-  remessasCnab = [], onSaveAccounts, onSaveRemessasCnab, initialStatusGroup = null,
+  remessasCnab = [], onSaveAccounts, onSaveRemessasCnab, initialFilter = null,
 }) {
   const [modal, setModal] = useState(null);
   const [modoPayables, setModoPayables] = useState("lista"); // "lista" | "quadro"
@@ -4560,15 +4576,22 @@ function PayablesView({
   const [reciboAlvo, setReciboAlvo] = useState(null);
   const [search, setSearch] = useState("");
   const [status, setStatusRaw] = useState("");
-  // Filtro vindo de fora (ex.: link "Ver lançamentos" do Resumo, junto do
-  // "Disponível após agendamentos") — mostra só os status indicados, sem
-  // aparecer no dropdown da FilterBar. Some assim que o usuário escolher
-  // outro status no dropdown (ou clicar em "Ver todos" no aviso abaixo),
-  // pra não prender a tela num recorte que ele não escolheu mais.
-  const [statusGroup, setStatusGroup] = useState(initialStatusGroup);
-  const setStatus = (v) => { setStatusRaw(v); setStatusGroup(null); };
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  // Filtro vindo de fora (ex.: painel de Pendências, Resumo, Relatórios)
+  // — mostra só o recorte indicado, sem aparecer no dropdown da
+  // FilterBar. Some assim que o usuário escolher outro status no
+  // dropdown (ou clicar em "Ver todos" no aviso abaixo), pra não prender
+  // a tela num recorte que ele não escolheu mais.
+  const [statusGroup, setStatusGroup] = useState(initialFilter?.statusGroup || null);
+  const [semCategoriaFilter, setSemCategoriaFilter] = useState(!!initialFilter?.semCategoria);
+  const [dateFilterFromLink, setDateFilterFromLink] = useState(!!(initialFilter?.dateFrom || initialFilter?.dateTo));
+  const setStatus = (v) => { setStatusRaw(v); setStatusGroup(null); setSemCategoriaFilter(false); };
+  const clearExternalFilter = () => {
+    setStatusGroup(null);
+    setSemCategoriaFilter(false);
+    if (dateFilterFromLink) { setDateFrom(""); setDateTo(""); setDateFilterFromLink(false); }
+  };
+  const [dateFrom, setDateFrom] = useState(initialFilter?.dateFrom || "");
+  const [dateTo, setDateTo] = useState(initialFilter?.dateTo || "");
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState("");
   const [aiNote, setAiNote] = useState("");
@@ -4673,6 +4696,7 @@ function PayablesView({
 
   const filtered = withDerived.filter((p) => {
     if (statusGroup && !statusGroup.includes(p.statusDisplay)) return false;
+    if (semCategoriaFilter && p.categoria) return false;
     if (status && p.statusDisplay !== status) return false;
     if (search && !`${p.fornecedor} ${p.descricao} ${p.categoria}`.toLowerCase().includes(search.toLowerCase())) return false;
     if (dateFrom && (p.vencimento || "") < dateFrom) return false;
@@ -4952,10 +4976,17 @@ function PayablesView({
           </>
         )}
       </Header>
-      {statusGroup && (
+      {(statusGroup || semCategoriaFilter || dateFilterFromLink) && (
         <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.goldSoft, color: COLORS.gold }}>
-          <span>Mostrando só {statusGroup.join(" + ")} — os lançamentos descontados no "Disponível após agendamentos" do Resumo.</span>
-          <button type="button" onClick={() => setStatusGroup(null)} className="underline-offset-2 hover:underline shrink-0">Ver todos</button>
+          <span>
+            {statusGroup
+              ? `Mostrando só os lançamentos "${statusGroup.join('" + "')}"`
+              : semCategoriaFilter
+              ? "Mostrando só os lançamentos sem categoria"
+              : "Mostrando só os lançamentos do período selecionado"}
+            {" "}— veio de outra tela (Resumo, Pendências ou Relatórios).
+          </span>
+          <button type="button" onClick={clearExternalFilter} className="underline-offset-2 hover:underline shrink-0">Ver todos</button>
         </div>
       )}
       {importError && (
@@ -5944,16 +5975,29 @@ function BatchSettleModal({ title, items, nameField, valueLabel, dateLabel, acco
 function ReceivablesView({
   receivables, accounts, empresas = [], selectedEmpresa, categories, costCenters = [], contacts, onSaveContacts, onSave,
   pendingImport, onImportProcessed, userEmail, canEdit = true,
-  retornosCnab = [], onSaveRetornosCnab,
+  retornosCnab = [], onSaveRetornosCnab, initialFilter = null,
 }) {
   const [modal, setModal] = useState(null);
   const [recModal, setRecModal] = useState(null);
   const [batchSettleModal, setBatchSettleModal] = useState(false);
   const [reciboAlvo, setReciboAlvo] = useState(null);
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const [status, setStatusRaw] = useState("");
+  // Mesmo mecanismo de PayablesView: um filtro vindo de fora (painel de
+  // Pendências, Resumo, Relatórios) mostra só o recorte indicado, sem
+  // aparecer no dropdown da FilterBar — some assim que o usuário escolher
+  // outro status ou clicar em "Ver todos" no aviso abaixo.
+  const [statusGroup, setStatusGroup] = useState(initialFilter?.statusGroup || null);
+  const [semCategoriaFilter, setSemCategoriaFilter] = useState(!!initialFilter?.semCategoria);
+  const [dateFilterFromLink, setDateFilterFromLink] = useState(!!(initialFilter?.dateFrom || initialFilter?.dateTo));
+  const setStatus = (v) => { setStatusRaw(v); setStatusGroup(null); setSemCategoriaFilter(false); };
+  const clearExternalFilter = () => {
+    setStatusGroup(null);
+    setSemCategoriaFilter(false);
+    if (dateFilterFromLink) { setDateFrom(""); setDateTo(""); setDateFilterFromLink(false); }
+  };
+  const [dateFrom, setDateFrom] = useState(initialFilter?.dateFrom || "");
+  const [dateTo, setDateTo] = useState(initialFilter?.dateTo || "");
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState("");
   const [aiNote, setAiNote] = useState("");
@@ -6082,6 +6126,8 @@ function ReceivablesView({
     });
 
   const filtered = withDerived.filter((r) => {
+    if (statusGroup && !statusGroup.includes(r.statusDisplay)) return false;
+    if (semCategoriaFilter && r.categoria) return false;
     if (status && r.statusDisplay !== status) return false;
     if (search && !`${r.cliente} ${r.descricao} ${r.categoria}`.toLowerCase().includes(search.toLowerCase())) return false;
     if (dateFrom && (r.vencimento || "") < dateFrom) return false;
@@ -6224,6 +6270,19 @@ function ReceivablesView({
           </>
         )}
       </Header>
+      {(statusGroup || semCategoriaFilter || dateFilterFromLink) && (
+        <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.goldSoft, color: COLORS.gold }}>
+          <span>
+            {statusGroup
+              ? `Mostrando só os lançamentos "${statusGroup.join('" + "')}"`
+              : semCategoriaFilter
+              ? "Mostrando só os lançamentos sem categoria"
+              : "Mostrando só os lançamentos do período selecionado"}
+            {" "}— veio de outra tela (Resumo, Pendências ou Relatórios).
+          </span>
+          <button type="button" onClick={clearExternalFilter} className="underline-offset-2 hover:underline shrink-0">Ver todos</button>
+        </div>
+      )}
       {importError && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
           <AlertTriangle size={15} /> {importError}
@@ -6894,7 +6953,7 @@ function guessCategoria(descricao, entries, empresaId) {
 /* ---------------------------------------------------------------------- */
 /*  Lançamentos Bancários                                                  */
 /* ---------------------------------------------------------------------- */
-function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSave, pendingImport, onImportProcessed, canEdit = true }) {
+function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSave, pendingImport, onImportProcessed, canEdit = true, initialFilter = null }) {
   const [modal, setModal] = useState(null);
   const [aiNote, setAiNote] = useState("");
   const [importing, setImporting] = useState(false);
@@ -6903,6 +6962,10 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
   const [statementImporting, setStatementImporting] = useState(false);
   const [statementError, setStatementError] = useState("");
   const [importReview, setImportReview] = useState(null);
+  // Filtro vindo de fora (painel de Pendências) — essa tela não tem
+  // FilterBar própria, então o único jeito de sair do recorte é o aviso
+  // abaixo ("Ver todos").
+  const [semCategoriaFilter, setSemCategoriaFilter] = useState(!!initialFilter?.semCategoria);
   const scopedAccounts = accounts.filter((a) => a.empresaId === selectedEmpresa);
   const submit = async (formOrList) => {
     const list = Array.isArray(formOrList) ? formOrList : [formOrList];
@@ -6963,6 +7026,7 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
   };
   const sorted = [...entries]
     .filter((e) => !e.deletedAt && e.empresaId === selectedEmpresa)
+    .filter((e) => !semCategoriaFilter || !e.categoria || e.categoria === "A classificar")
     .sort((a, b) => (b.data || "").localeCompare(a.data || ""));
 
   const processExtractedDocument = async (fileBase64, mediaType) => {
@@ -7041,6 +7105,12 @@ function BankEntriesView({ entries, accounts, selectedEmpresa, categories, onSav
       </Header>
       {scopedAccounts.length === 0 && (
         <p className="text-sm px-1" style={{ color: COLORS.inkSoft }}>Cadastre uma conta antes de lançar movimentos bancários.</p>
+      )}
+      {semCategoriaFilter && (
+        <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.goldSoft, color: COLORS.gold }}>
+          <span>Mostrando só os lançamentos sem categoria — veio do painel de Pendências.</span>
+          <button type="button" onClick={() => setSemCategoriaFilter(false)} className="underline-offset-2 hover:underline shrink-0">Ver todos</button>
+        </div>
       )}
       {importError && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
@@ -8386,14 +8456,14 @@ function computeIndicadores(ano, payables, receivables, totals) {
 // mas inadimplência e prazo médio (de receber/pagar) exigem cruzar
 // vencimento com a data em que a baixa de fato aconteceu — só faz sentido
 // num relatório próprio.
-function KPIReport({ year, payables, receivables, totals }) {
+function KPIReport({ year, payables, receivables, totals, goToViewFiltered }) {
   const { totalFaturado, inadimplencia, dso, dpo, ticketMedio } = computeIndicadores(year, payables, receivables, totals);
 
   const fmtDias = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(0)} dia(s)`);
 
   const cards = [
     { label: "Margem operacional (caixa)", value: totals.totalEntradas > 0 ? `${(totals.margem * 100).toFixed(1)}%` : "—", icon: TrendingUp, tone: totals.margem >= 0 ? "green" : "red", nota: "Saldo do ano ÷ entradas do ano, regime de caixa." },
-    { label: "Taxa de inadimplência", value: `${inadimplencia.toFixed(1)}%`, icon: AlertTriangle, tone: inadimplencia > 10 ? "red" : inadimplencia > 0 ? "gold" : "green", nota: "Valor vencido e ainda não recebido ÷ total faturado no ano." },
+    { label: "Taxa de inadimplência", value: `${inadimplencia.toFixed(1)}%`, icon: AlertTriangle, tone: inadimplencia > 10 ? "red" : inadimplencia > 0 ? "gold" : "green", nota: "Valor vencido e ainda não recebido ÷ total faturado no ano.", onVer: goToViewFiltered ? () => goToViewFiltered("receivables", { statusGroup: ["Inadimplente"] }) : null, verLabel: "Ver em Contas a Receber" },
     { label: "Prazo médio de recebimento", value: fmtDias(dso), icon: CalendarClock, tone: dso == null ? "gold" : dso > 0 ? "red" : "green", nota: "Média de dias entre o vencimento e o recebimento — positivo é atraso." },
     { label: "Prazo médio de pagamento", value: fmtDias(dpo), icon: CalendarClock, tone: "gold", nota: "Média de dias entre o vencimento e a baixa de contas a pagar." },
     { label: "Ticket médio recebido", value: fmtBRL(ticketMedio), icon: CircleDollarSign, tone: "gold", nota: "Valor médio por conta a receber já recebida no ano." },
@@ -8415,6 +8485,11 @@ function KPIReport({ year, payables, receivables, totals }) {
                 </div>
                 <p className="text-lg font-semibold tabular-nums" style={{ color: toneColor }}>{k.value}</p>
                 <p className="text-[11px] mt-1" style={{ color: COLORS.inkSoft }}>{k.nota}</p>
+                {k.onVer && (
+                  <button type="button" onClick={k.onVer} className="text-[11px] font-medium mt-1.5 print:hidden" style={{ color: COLORS.primary }}>
+                    {k.verLabel}
+                  </button>
+                )}
               </Card>
             );
           })}
@@ -8427,7 +8502,7 @@ function KPIReport({ year, payables, receivables, totals }) {
 /* --- Fluxo de Caixa Projetado --- */
 const ITEMIZADO_FLUXO_LIMITE = 10;
 
-function FluxoProjetadoReport({ payables, receivables, fiscalObligations, accounts, accountBalance }) {
+function FluxoProjetadoReport({ payables, receivables, fiscalObligations, accounts, accountBalance, goToViewFiltered }) {
   const [tipoFiltro, setTipoFiltro] = useState(""); // "" | "Pagar" | "Receber" | "Fiscal"
   const [verTodosItens, setVerTodosItens] = useState(false);
   const today = todayISO();
@@ -8439,13 +8514,17 @@ function FluxoProjetadoReport({ payables, receivables, fiscalObligations, accoun
   // projeção até virar uma obrigação de verdade.
   const openFiscal = fiscalObligations.filter((o) => o.status !== "Pago" && o.status !== "Sugerido");
 
+  // minOffset/maxOffset (em dias, a partir de hoje) refazem o mesmo
+  // recorte do "test" acima, mas como data de início/fim — é o que o
+  // link "Ver a pagar/receber" de cada linha usa pra abrir a tela certa
+  // já filtrada no mesmo período (dateFrom/dateTo da FilterBar de lá).
   const buckets = [
-    { label: "Vencidos", test: (d) => d < 0 },
-    { label: "Próximos 7 dias", test: (d) => d >= 0 && d <= 7 },
-    { label: "8–15 dias", test: (d) => d > 7 && d <= 15 },
-    { label: "16–30 dias", test: (d) => d > 15 && d <= 30 },
-    { label: "31–60 dias", test: (d) => d > 30 && d <= 60 },
-    { label: "61–90 dias", test: (d) => d > 60 && d <= 90 },
+    { label: "Vencidos", test: (d) => d < 0, minOffset: null, maxOffset: -1 },
+    { label: "Próximos 7 dias", test: (d) => d >= 0 && d <= 7, minOffset: 0, maxOffset: 7 },
+    { label: "8–15 dias", test: (d) => d > 7 && d <= 15, minOffset: 8, maxOffset: 15 },
+    { label: "16–30 dias", test: (d) => d > 15 && d <= 30, minOffset: 16, maxOffset: 30 },
+    { label: "31–60 dias", test: (d) => d > 30 && d <= 60, minOffset: 31, maxOffset: 60 },
+    { label: "61–90 dias", test: (d) => d > 60 && d <= 90, minOffset: 61, maxOffset: 90 },
   ];
 
   let saldoAcumulado = totalBalance;
@@ -8457,7 +8536,9 @@ function FluxoProjetadoReport({ payables, receivables, fiscalObligations, accoun
       .filter((p) => b.test(daysBetween(today, p.vencimento)))
       .reduce((s, p) => s + Number(p.valor || 0), 0);
     if (b.label !== "Vencidos") saldoAcumulado += entradas - saidas;
-    return { label: b.label, entradas, saidas, saldoAcumulado, vencidos: b.label === "Vencidos" };
+    const dateFrom = b.minOffset == null ? "" : addDaysISO(today, b.minOffset);
+    const dateTo = addDaysISO(today, b.maxOffset);
+    return { label: b.label, entradas, saidas, saldoAcumulado, vencidos: b.label === "Vencidos", dateFrom, dateTo };
   });
 
   const itemized = [
@@ -8484,6 +8565,7 @@ function FluxoProjetadoReport({ payables, receivables, fiscalObligations, accoun
               <th className="text-right font-medium px-2 py-2">Entradas previstas</th>
               <th className="text-right font-medium px-2 py-2">Saídas previstas</th>
               <th className="text-right font-medium px-2 py-2">Saldo projetado</th>
+              {goToViewFiltered && <th className="text-right font-medium px-2 py-2 print:hidden">Ver lançamentos</th>}
             </tr>
           </thead>
           <tbody>
@@ -8495,6 +8577,32 @@ function FluxoProjetadoReport({ payables, receivables, fiscalObligations, accoun
                 <td className="px-2 py-2 text-right tabular-nums font-medium" style={{ color: r.vencidos ? COLORS.inkSoft : COLORS.ink }}>
                   {r.vencidos ? "—" : fmtBRL(r.saldoAcumulado)}
                 </td>
+                {goToViewFiltered && (
+                  <td className="px-2 py-2 text-right print:hidden">
+                    <div className="flex items-center justify-end gap-2">
+                      {r.saidas > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => goToViewFiltered("payables", { dateFrom: r.dateFrom, dateTo: r.dateTo })}
+                          className="text-xs font-medium"
+                          style={{ color: COLORS.primary }}
+                        >
+                          A pagar
+                        </button>
+                      )}
+                      {r.entradas > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => goToViewFiltered("receivables", { dateFrom: r.dateFrom, dateTo: r.dateTo })}
+                          className="text-xs font-medium"
+                          style={{ color: COLORS.primary }}
+                        >
+                          A receber
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
