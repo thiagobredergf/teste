@@ -1001,7 +1001,21 @@ function FinanceiroApp({ userEmail, onLogout }) {
     // busca) esquece a competência que estava em análise — evitar que uma
     // visita futura, direta, a Pendências reapareça presa num mês antigo.
     if (id !== "fechamento" && id !== "pendencias") setClosingCompetencia(null);
+    // Mesma lógica pro filtro de status que o Resumo pode empurrar pra
+    // Contas a Pagar (ver payablesInitialStatusGroup/goToPayablesAgendados
+    // abaixo) — só sobrevive se o destino for mesmo Contas a Pagar.
+    if (id !== "payables") setPayablesInitialStatusGroup(null);
   }, []);
+
+  // "Disponível após agendamentos" (Resumo) desconta Contas a Pagar
+  // Agendado+Autorizado do saldo — esse link leva direto pra lá já
+  // filtrado nesses dois status, em vez de deixar o usuário procurar à
+  // mão qual lançamento está "segurando" o saldo.
+  const [payablesInitialStatusGroup, setPayablesInitialStatusGroup] = useState(null);
+  const goToPayablesAgendados = useCallback(() => {
+    setPayablesInitialStatusGroup(["Agendado", "Autorizado"]);
+    goToView("payables");
+  }, [goToView]);
 
   // Fechamento mensal: "Fechar mês" (em Análise → Fechamento) não trava
   // de cara — leva pra Análise → Pendências, recortada pra essa
@@ -1876,6 +1890,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                 accountAvailableBalance={accountAvailableBalance}
                 totalAvailableBalance={totalAvailableBalance}
                 goToView={goToView}
+                onVerAgendamentos={goToPayablesAgendados}
               />
             )}
 
@@ -1947,6 +1962,7 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                 remessasCnab={remessasCnab}
                 onSaveAccounts={(v) => persist("accounts", v, setAccounts)}
                 onSaveRemessasCnab={(v) => persist("remessasCnab", v, setRemessasCnab)}
+                initialStatusGroup={payablesInitialStatusGroup}
               />
             )}
 
@@ -4532,7 +4548,7 @@ function PayablesKanban({ payables, accounts, onDrop, onEdit }) {
 function PayablesView({
   payables, accounts, empresas, selectedEmpresa, categories, costCenters = [], contacts, onSaveContacts, onSave,
   pendingImport, onImportProcessed, userEmail, canEdit = true, role,
-  remessasCnab = [], onSaveAccounts, onSaveRemessasCnab,
+  remessasCnab = [], onSaveAccounts, onSaveRemessasCnab, initialStatusGroup = null,
 }) {
   const [modal, setModal] = useState(null);
   const [modoPayables, setModoPayables] = useState("lista"); // "lista" | "quadro"
@@ -4543,7 +4559,14 @@ function PayablesView({
   const [remessasModal, setRemessasModal] = useState(false);
   const [reciboAlvo, setReciboAlvo] = useState(null);
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("");
+  const [status, setStatusRaw] = useState("");
+  // Filtro vindo de fora (ex.: link "Ver lançamentos" do Resumo, junto do
+  // "Disponível após agendamentos") — mostra só os status indicados, sem
+  // aparecer no dropdown da FilterBar. Some assim que o usuário escolher
+  // outro status no dropdown (ou clicar em "Ver todos" no aviso abaixo),
+  // pra não prender a tela num recorte que ele não escolheu mais.
+  const [statusGroup, setStatusGroup] = useState(initialStatusGroup);
+  const setStatus = (v) => { setStatusRaw(v); setStatusGroup(null); };
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [importing, setImporting] = useState(false);
@@ -4649,6 +4672,7 @@ function PayablesView({
     });
 
   const filtered = withDerived.filter((p) => {
+    if (statusGroup && !statusGroup.includes(p.statusDisplay)) return false;
     if (status && p.statusDisplay !== status) return false;
     if (search && !`${p.fornecedor} ${p.descricao} ${p.categoria}`.toLowerCase().includes(search.toLowerCase())) return false;
     if (dateFrom && (p.vencimento || "") < dateFrom) return false;
@@ -4928,6 +4952,12 @@ function PayablesView({
           </>
         )}
       </Header>
+      {statusGroup && (
+        <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.goldSoft, color: COLORS.gold }}>
+          <span>Mostrando só {statusGroup.join(" + ")} — os lançamentos descontados no "Disponível após agendamentos" do Resumo.</span>
+          <button type="button" onClick={() => setStatusGroup(null)} className="underline-offset-2 hover:underline shrink-0">Ver todos</button>
+        </div>
+      )}
       {importError && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.redSoft, color: COLORS.red }}>
           <AlertTriangle size={15} /> {importError}
@@ -12731,7 +12761,7 @@ function ExposureCard({ title, items, nameField, tipo }) {
   );
 }
 
-function ResumoView({ accounts, payables, receivables, bankEntries, transfers, accountBalance, totalBalance, accountAvailableBalance, totalAvailableBalance, goToView }) {
+function ResumoView({ accounts, payables, receivables, bankEntries, transfers, accountBalance, totalBalance, accountAvailableBalance, totalAvailableBalance, goToView, onVerAgendamentos }) {
   const { pontos, passados, futuros, diagnostico } = useMemo(
     () => dailyCashFlow(payables, receivables, bankEntries, totalBalance),
     [payables, receivables, bankEntries, totalBalance]
@@ -12763,9 +12793,22 @@ function ResumoView({ accounts, payables, receivables, bankEntries, transfers, a
           <p className="text-lg font-semibold tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(totalBalance)}</p>
         </div>
         {totalAvailableBalance !== totalBalance && (
-          <p className="text-xs mb-2" style={{ color: COLORS.inkSoft }}>
-            Disponível após agendamentos: <span className="font-medium">{fmtBRL(totalAvailableBalance)}</span>
-          </p>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <p className="text-xs" style={{ color: COLORS.inkSoft }}>
+              Disponível após agendamentos: <span className="font-medium">{fmtBRL(totalAvailableBalance)}</span>
+            </p>
+            {onVerAgendamentos && (
+              <button
+                type="button"
+                onClick={onVerAgendamentos}
+                className="text-xs font-medium underline-offset-2 hover:underline shrink-0"
+                style={{ color: COLORS.primary }}
+                title="Abre Contas a Pagar filtrado pelos lançamentos Agendado/Autorizado que estão descontados desse saldo disponível"
+              >
+                Ver lançamentos
+              </button>
+            )}
+          </div>
         )}
         {accounts.length === 0 ? (
           <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma conta cadastrada.</p>
