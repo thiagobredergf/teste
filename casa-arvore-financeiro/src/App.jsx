@@ -5063,14 +5063,14 @@ function PayablesView({
             <tbody>
               {filtered.map((p) => (
                 <tr key={p.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{fmtDate(p.dataLanc)}</td>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{fmtDate(p.vencimento)}</td>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>
+                  <td className="px-4 py-2.5 align-top" style={{ color: COLORS.inkSoft }}>{fmtDate(p.dataLanc)}</td>
+                  <td className="px-4 py-2.5 align-top" style={{ color: COLORS.ink }}>{fmtDate(p.vencimento)}</td>
+                  <td className="px-4 py-2.5 align-top" style={{ color: COLORS.ink }}>
                     <p className="font-medium">{p.fornecedor}</p>
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>{p.descricao}</p>
                   </td>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{p.categoria}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>
+                  <td className="px-4 py-2.5 align-top" style={{ color: COLORS.inkSoft }}>{p.categoria}</td>
+                  <td className="px-4 py-2.5 align-top text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>
                     {fmtBRL(p.valor)}
                     {p.status === "Pago" && (p.juros || p.multa || p.desconto) ? (
                       <p className="text-[11px] font-normal" style={{ color: COLORS.inkSoft }}>
@@ -5078,7 +5078,7 @@ function PayablesView({
                       </p>
                     ) : null}
                   </td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2.5 align-top">
                     <StatusBadge status={p.statusDisplay} />
                     {(p.status === "Agendado" || p.status === "Autorizado") && (
                       <p className="text-[11px] mt-0.5" style={{ color: COLORS.inkSoft }}>
@@ -5086,8 +5086,8 @@ function PayablesView({
                       </p>
                     )}
                   </td>
-                  <td className="px-4 py-2.5">
-                    <div className="flex justify-end gap-1">
+                  <td className="px-4 py-2.5 align-top">
+                    <div className="flex justify-end flex-wrap gap-1">
                       {p.status === "Pago" && (
                         <button onClick={() => { setReciboAlvo(p); setTimeout(() => window.print(), 50); }} title="Imprimir recibo" className="p-1.5 rounded-md hover:bg-black/5"><Printer size={14} color={COLORS.inkSoft} /></button>
                       )}
@@ -6422,14 +6422,14 @@ function ReceivablesView({
             <tbody>
               {filtered.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{fmtDate(r.dataLanc)}</td>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>{fmtDate(r.vencimento)}</td>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.ink }}>
+                  <td className="px-4 py-2.5 align-top" style={{ color: COLORS.inkSoft }}>{fmtDate(r.dataLanc)}</td>
+                  <td className="px-4 py-2.5 align-top" style={{ color: COLORS.ink }}>{fmtDate(r.vencimento)}</td>
+                  <td className="px-4 py-2.5 align-top" style={{ color: COLORS.ink }}>
                     <p className="font-medium">{r.cliente}</p>
                     <p className="text-xs" style={{ color: COLORS.inkSoft }}>{r.descricao}</p>
                   </td>
-                  <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{r.categoria}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>
+                  <td className="px-4 py-2.5 align-top" style={{ color: COLORS.inkSoft }}>{r.categoria}</td>
+                  <td className="px-4 py-2.5 align-top text-right tabular-nums font-medium" style={{ color: COLORS.ink }}>
                     {fmtBRL(r.valor)}
                     {r.status === "Recebido" && (r.juros || r.multa || r.desconto) ? (
                       <p className="text-[11px] font-normal" style={{ color: COLORS.inkSoft }}>
@@ -6437,7 +6437,7 @@ function ReceivablesView({
                       </p>
                     ) : null}
                   </td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2.5 align-top">
                     <StatusBadge status={r.statusDisplay} />
                     {r.status === "Antecipado" && (
                       <p className="text-[11px] mt-0.5" style={{ color: COLORS.inkSoft }}>
@@ -6453,8 +6453,8 @@ function ReceivablesView({
                       <p className="text-[11px] mt-0.5" style={{ color: COLORS.inkSoft }}>Cobrado {timeAgo(cobrancas[r.id])}</p>
                     )}
                   </td>
-                  <td className="px-4 py-2.5">
-                    <div className="flex justify-end gap-1">
+                  <td className="px-4 py-2.5 align-top">
+                    <div className="flex justify-end flex-wrap gap-1">
                       {r.status === "Recebido" && (
                         <button onClick={() => { setReciboAlvo(r); setTimeout(() => window.print(), 50); }} title="Imprimir recibo" className="p-1.5 rounded-md hover:bg-black/5"><Printer size={14} color={COLORS.inkSoft} /></button>
                       )}
