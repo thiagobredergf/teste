@@ -3618,6 +3618,32 @@ function formatCPF(digits) {
     .replace(/\.(\d{3})(\d{1,2})$/, ".$1-$2");
 }
 
+// Busca de CNPJ (brasilapi.com.br, gratuita) — usada tanto no cadastro de
+// Empresas quanto no de Contatos. O erro genérico "Falha ao consultar."
+// (sem dizer o quê) já apareceu pra CNPJ válido de verdade: a brasilapi
+// espelha o site da Receita Federal, que falha intermitentemente (não é
+// sempre "não encontrado"). Por isso aqui sempre tenta ler o corpo da
+// resposta de erro antes de desistir, e trata status típico de
+// sobrecarga (429/500+) com a mesma mensagem de "tente de novo" que já
+// usávamos pro "Failed to fetch" do navegador — motivo mais provável
+// quando o CNPJ é válido e mesmo assim falha.
+async function fetchCnpjData(digits) {
+  const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`);
+  if (res.ok) return res.json();
+  if (res.status === 404) throw new Error("CNPJ não encontrado.");
+  if (res.status === 429 || res.status >= 500) {
+    throw new Error("Não consegui buscar agora — o serviço de consulta de CNPJ pode estar temporariamente sobrecarregado. Tente de novo em alguns instantes, ou preencha os campos manualmente.");
+  }
+  let detalhe = "";
+  try {
+    const body = await res.json();
+    detalhe = body?.message || body?.name || "";
+  } catch {
+    // corpo não é JSON — segue sem detalhe extra
+  }
+  throw new Error(`Falha ao consultar (HTTP ${res.status})${detalhe ? ` — ${detalhe}` : ""}. Tente de novo ou preencha os campos manualmente.`);
+}
+
 function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
   const [form, setForm] = useState({ nome: "", cor: EMPRESA_CORES[existingCount % EMPRESA_CORES.length], ...initial });
   const [logoError, setLogoError] = useState("");
@@ -3633,9 +3659,7 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
     setCnpjStatus("loading");
     setCnpjError("");
     try {
-      const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`);
-      if (!res.ok) throw new Error(res.status === 404 ? "CNPJ não encontrado." : "Falha ao consultar.");
-      const data = await res.json();
+      const data = await fetchCnpjData(digits);
       const endereco = [
         data.logradouro && `${data.logradouro}${data.numero ? `, ${data.numero}` : ""}`,
         data.bairro,
@@ -4240,9 +4264,7 @@ function ContactModal({ initial, contacts = [], onClose, onSubmit }) {
     setCnpjStatus("loading");
     setCnpjError("");
     try {
-      const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`);
-      if (!res.ok) throw new Error(res.status === 404 ? "CNPJ não encontrado." : "Falha ao consultar.");
-      const data = await res.json();
+      const data = await fetchCnpjData(digits);
       setForm((f) => ({ ...f, nome: f.nome.trim() ? f.nome : (data.nome_fantasia || data.razao_social || f.nome) }));
       setCnpjStatus("");
     } catch (err) {
