@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square, Download, Loader2, Boxes, Megaphone
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square, Download, Loader2, Boxes, Megaphone, Handshake
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -5479,7 +5479,7 @@ function StatusBadge({ status }) {
   if (status === "Atrasado" || status === "Inadimplente") return <Badge tone="red">{status}</Badge>;
   if (status === "Próximo") return <Badge tone="amber">{status}</Badge>;
   if (status === "Agendado" || status === "Antecipado") return <Badge tone="gold">{status}</Badge>;
-  if (status === "Autorizado") return <Badge tone="blue">{status}</Badge>;
+  if (status === "Autorizado" || status === "Renegociado") return <Badge tone="blue">{status}</Badge>;
   return <Badge tone="neutral">{status}</Badge>;
 }
 
@@ -5867,6 +5867,38 @@ function AnticipateModal({ item, accounts, onClose, onConfirm }) {
   );
 }
 
+// Renegociação (só pra Inadimplente): diferente de antecipar, aqui o
+// vencimento ORIGINAL fica intacto (é histórico — a conta já estava
+// vencida) e o novo acordo (data, valor, condição) vai pra campos à
+// parte, consultados na tela via "Novo venc." embaixo do badge.
+function RenegotiateModal({ item, onClose, onConfirm }) {
+  const [data, setData] = useState(item.renegociadoPara || addDaysISO(todayISO(), 30));
+  const [valor, setValor] = useState(item.valorRenegociado != null ? String(item.valorRenegociado) : String(item.valor ?? ""));
+  const [obs, setObs] = useState(item.obsRenegociacao || "");
+  return (
+    <Modal title={`Renegociar recebível — ${item.cliente}`} onClose={onClose}>
+      <div className="grid gap-3">
+        <p className="text-xs px-3 py-2 rounded-lg" style={{ background: COLORS.blueSoft, color: COLORS.blue }}>
+          Isso não é baixa — registra que cliente e empresa combinaram novos termos pra essa cobrança em atraso. O vencimento original (já vencido) fica guardado pro histórico; dê baixa quando o valor combinado realmente entrar.
+        </p>
+        <Field label="Novo vencimento combinado">
+          <TextInput type="date" value={data} onChange={(e) => setData(e.target.value)} />
+        </Field>
+        <Field label="Novo valor (ajuste se mudou com juros/parcelamento)">
+          <TextInput type="number" step="0.01" value={valor} onChange={(e) => setValor(e.target.value)} />
+        </Field>
+        <Field label="Observação (opcional)">
+          <TextInput value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ex.: parcelado em 3x, desconto de 10% à vista..." />
+        </Field>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => onConfirm(data, Number(valor) || item.valor, obs)} disabled={!data}>Marcar como renegociado</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // Dar baixa em vários lançamentos de uma vez — conta e data são únicas pro
 // lote (dá pra ajustar o valor linha a linha antes de confirmar), mas fica
 // de fora daqui o que precisa de juros/multa/desconto: pra isso, baixa
@@ -6005,6 +6037,7 @@ function ReceivablesView({
   const [previewDoc, setPreviewDoc] = useState(null);
   const [cobrancas, setCobrancas] = useState({}); // { receivableId: created_at da última cobrança enviada }
   const [anticipateModal, setAnticipateModal] = useState(null);
+  const [renegotiateModal, setRenegotiateModal] = useState(null);
   const [retornoModal, setRetornoModal] = useState(false);
 
   // Régua de cobrança: quando cada conta a receber foi cobrada por
@@ -6241,6 +6274,22 @@ function ReceivablesView({
     onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: "A Receber", agendadoPara: null, contaAgendadaId: null } : x)));
     logAudit(selectedEmpresa, "receivable", r.id, "cancelar_antecipacao", `Cancelou antecipação de ${fmtBRL(r.valor)}`, userEmail);
   };
+  // Renegociação: existe só pra quem já está Inadimplente (diferente de
+  // antecipar, que é mexer numa data que ainda nem venceu) — guarda o
+  // vencimento original intacto e anota o novo acordo em campos à parte,
+  // pra "cancelar renegociação" só precisar limpar esses campos (volta a
+  // aparecer como Inadimplente pelo vencimento de sempre).
+  const renegotiateReceivable = (novoVencimento, novoValor, obs) => {
+    const r = renegotiateModal;
+    onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: "Renegociado", renegociadoPara: novoVencimento, valorRenegociado: novoValor, obsRenegociacao: obs } : x)));
+    logAudit(selectedEmpresa, "receivable", r.id, "renegociar", `Renegociado — novo vencimento ${fmtDate(novoVencimento)}${novoValor !== r.valor ? `, novo valor ${fmtBRL(novoValor)}` : ""}${obs ? ` (${obs})` : ""}`, userEmail);
+    setRenegotiateModal(null);
+  };
+  const cancelRenegotiation = (r) => {
+    if (!confirmDelete(`Cancelar a renegociação de "${r.cliente}"? Ele volta pro vencimento original.`)) return;
+    onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: "A Receber", renegociadoPara: null, valorRenegociado: null, obsRenegociacao: null } : x)));
+    logAudit(selectedEmpresa, "receivable", r.id, "cancelar_renegociacao", `Cancelou renegociação de ${fmtBRL(r.valor)}`, userEmail);
+  };
 
   const total = filtered.reduce((s, r) => s + Number(r.valor || 0), 0);
   const empresa = empresas.find((e) => e.id === selectedEmpresa);
@@ -6292,11 +6341,12 @@ function ReceivablesView({
         { key: "Inadimplente", label: "Inadimplente", tone: "red" },
         { key: "Próximo", label: "Próximo (10 dias)", tone: "amber" },
         { key: "Antecipado", label: "Antecipado", tone: "gold" },
+        { key: "Renegociado", label: "Renegociado", tone: "blue" },
         { key: "A Receber", label: "A receber", tone: "neutral" },
         { key: "Recebido", label: "Recebido", tone: "green" },
       ]} />
       <FilterBar search={search} setSearch={setSearch} status={status} setStatus={setStatus}
-        statusOptions={["Inadimplente", "Próximo", "Antecipado", "A Receber", "Recebido"]} placeholder="Buscar cliente, descrição..."
+        statusOptions={["Inadimplente", "Próximo", "Antecipado", "Renegociado", "A Receber", "Recebido"]} placeholder="Buscar cliente, descrição..."
         dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} />
 
       <Card className="overflow-x-auto">
@@ -6340,6 +6390,11 @@ function ReceivablesView({
                         {fmtDate(r.agendadoPara)} · {accounts.find((a) => a.id === r.contaAgendadaId)?.nome || "—"}
                       </p>
                     )}
+                    {r.status === "Renegociado" && (
+                      <p className="text-[11px] mt-0.5" style={{ color: COLORS.inkSoft }}>
+                        Novo venc. {fmtDate(r.renegociadoPara)}{r.valorRenegociado != null && Number(r.valorRenegociado) !== Number(r.valor) ? ` · ${fmtBRL(r.valorRenegociado)}` : ""}
+                      </p>
+                    )}
                     {cobrancas[r.id] && r.status === "A Receber" && (
                       <p className="text-[11px] mt-0.5" style={{ color: COLORS.inkSoft }}>Cobrado {timeAgo(cobrancas[r.id])}</p>
                     )}
@@ -6356,11 +6411,20 @@ function ReceivablesView({
                           <Button variant="subtle" onClick={() => setRecModal(r)}><Check size={13} /> Dar baixa</Button>
                           <button onClick={() => cancelAnticipation(r)} title="Cancelar antecipação (volta pra A Receber)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
                         </>
+                      ) : r.status === "Renegociado" ? (
+                        <>
+                          <Button variant="subtle" onClick={() => setRecModal(r)}><Check size={13} /> Dar baixa</Button>
+                          <button onClick={() => cancelRenegotiation(r)} title="Cancelar renegociação (volta pro vencimento original)" className="p-1.5 rounded-md hover:bg-black/5"><RotateCcw size={14} color={COLORS.amber} /></button>
+                        </>
                       ) : (
                         <>
                           <Button variant="subtle" onClick={() => setRecModal(r)}><Check size={13} /> Dar baixa</Button>
                           <button onClick={() => notifyClient(r)} title="Cobrar cliente via WhatsApp" className="p-1.5 rounded-md hover:bg-black/5"><MessageCircle size={14} color={COLORS.primary} /></button>
-                          <button onClick={() => setAnticipateModal(r)} title="Marcar como em processo de antecipação" className="p-1.5 rounded-md hover:bg-black/5"><Zap size={14} color={COLORS.gold} /></button>
+                          {r.statusDisplay === "Inadimplente" ? (
+                            <button onClick={() => setRenegotiateModal(r)} title="Marcar como em renegociação" className="p-1.5 rounded-md hover:bg-black/5"><Handshake size={14} color={COLORS.blue} /></button>
+                          ) : (
+                            <button onClick={() => setAnticipateModal(r)} title="Marcar como em processo de antecipação" className="p-1.5 rounded-md hover:bg-black/5"><Zap size={14} color={COLORS.gold} /></button>
+                          )}
                         </>
                       ))}
                       {r.documentoArquivoPath && (
@@ -6439,6 +6503,13 @@ function ReceivablesView({
           accounts={accounts.filter((a) => a.empresaId === anticipateModal.empresaId)}
           onClose={() => setAnticipateModal(null)}
           onConfirm={anticipateReceivable}
+        />
+      )}
+      {renegotiateModal && (
+        <RenegotiateModal
+          item={renegotiateModal}
+          onClose={() => setRenegotiateModal(null)}
+          onConfirm={renegotiateReceivable}
         />
       )}
       {batchSettleModal && (
@@ -8761,7 +8832,7 @@ function PaymentOrderReport({ payables, accounts }) {
   );
 }
 
-const COLLECTIONS_STATUS = ["Inadimplente", "Próximo", "A Receber", "Antecipado"];
+const COLLECTIONS_STATUS = ["Inadimplente", "Próximo", "A Receber", "Antecipado", "Renegociado"];
 const COBRANCA_LIMITE = 15;
 
 // Relação de cobrança — o espelho, do lado de receber, da Ordem de
