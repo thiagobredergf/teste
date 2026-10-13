@@ -3655,6 +3655,17 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
             {REGIMES_TRIBUTARIOS.map((r) => <option key={r} value={r}>{r}</option>)}
           </Select>
         </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Juros de mora (% ao mês, opcional)">
+            <TextInput type="number" step="0.01" value={form.jurosMoraMensal ?? ""} onChange={(e) => setForm({ ...form, jurosMoraMensal: e.target.value })} placeholder="Ex.: 1,00" />
+          </Field>
+          <Field label="Multa por atraso (%, opcional)">
+            <TextInput type="number" step="0.01" value={form.multaAtraso ?? ""} onChange={(e) => setForm({ ...form, multaAtraso: e.target.value })} placeholder="Ex.: 2,00" />
+          </Field>
+        </div>
+        <p className="text-xs -mt-1" style={{ color: COLORS.inkSoft }}>
+          Se preenchido, pré-calcula uma sugestão de juros/multa ao renegociar uma conta a receber inadimplente (em Contas a Receber) — sempre editável na hora. Deixe em branco se essa empresa não cobra isso (ex.: restaurante).
+        </p>
         <div className="grid grid-cols-3 gap-3">
           <Field label="Proprietário">
             <TextInput value={form.proprietario || ""} onChange={(e) => setForm({ ...form, proprietario: e.target.value })} placeholder="Nome do(a) proprietário(a)" />
@@ -3761,6 +3772,8 @@ function EmpresaModal({ initial, existingCount, onClose, onSubmit }) {
             onClick={() => form.nome.trim() && onSubmit({
               ...form,
               contratoValorMensal: form.contratoValorMensal === "" || form.contratoValorMensal == null ? null : Number(form.contratoValorMensal),
+              jurosMoraMensal: form.jurosMoraMensal === "" || form.jurosMoraMensal == null ? null : Number(form.jurosMoraMensal),
+              multaAtraso: form.multaAtraso === "" || form.multaAtraso == null ? null : Number(form.multaAtraso),
             })}
             disabled={!form.nome.trim()}
           >
@@ -5688,7 +5701,12 @@ function SettleModal({ title, label, dateLabel, accountLabel, item, accounts, sh
   // da data/conta propostas — desde que a data não seja futura, já que
   // baixa nunca pode ser.
   const [data, setData] = useState(item.agendadoPara && item.agendadoPara <= todayISO() ? item.agendadoPara : todayISO());
-  const [valor, setValor] = useState(item.valor);
+  // Quando o item já chega com juros/multa/desconto preenchidos (ex.:
+  // renegociação de inadimplente, que pré-calcula isso), "valor" parte já
+  // somado — senão a tela mostraria os 3 campos de ajuste com números,
+  // mas o valor a receber/pagar continuaria mostrando só o original até
+  // o usuário mexer em algum dos campos.
+  const [valor, setValor] = useState(String(Number(item.valor || 0) + Number(item.juros || 0) + Number(item.multa || 0) - Number(item.desconto || 0)));
   const [contaId, setContaId] = useState(item.contaAgendadaId || accounts[0]?.id || "");
   const [juros, setJuros] = useState(item.juros || "");
   const [multa, setMulta] = useState(item.multa || "");
@@ -5871,28 +5889,64 @@ function AnticipateModal({ item, accounts, onClose, onConfirm }) {
 // vencimento ORIGINAL fica intacto (é histórico — a conta já estava
 // vencida) e o novo acordo (data, valor, condição) vai pra campos à
 // parte, consultados na tela via "Novo venc." embaixo do badge.
-function RenegotiateModal({ item, onClose, onConfirm }) {
+// Quando a empresa tem taxa de juros/multa cadastrada (Cadastros →
+// Empresas → fase 36), pré-calcula a sugestão com base nos dias de
+// atraso — sempre editável, nunca travada (mesmo padrão de toda
+// sugestão automática do sistema). Os valores vão pros mesmos campos
+// "juros"/"multa" que a baixa (SettleModal) já lê como estado inicial
+// — é assim que a renegociação "já entra nos relatórios": na baixa,
+// esses números viram parte do valorRecebido normal, sem código novo
+// nos relatórios.
+function RenegotiateModal({ item, empresa, onClose, onConfirm }) {
+  const diasAtraso = Math.max(0, daysBetween(item.vencimento, todayISO()));
+  const taxaJuros = Number(empresa?.jurosMoraMensal) || 0;
+  const taxaMulta = Number(empresa?.multaAtraso) || 0;
+  const temTaxas = taxaJuros > 0 || taxaMulta > 0;
+  const jurosSugerido = taxaJuros > 0 ? (Number(item.valor || 0) * (taxaJuros / 100) * (diasAtraso / 30)) : 0;
+  const multaSugerida = taxaMulta > 0 ? (Number(item.valor || 0) * (taxaMulta / 100)) : 0;
+
   const [data, setData] = useState(item.renegociadoPara || addDaysISO(todayISO(), 30));
-  const [valor, setValor] = useState(item.valorRenegociado != null ? String(item.valorRenegociado) : String(item.valor ?? ""));
+  const [juros, setJuros] = useState(item.juros != null && item.juros !== 0 ? String(item.juros) : (jurosSugerido ? jurosSugerido.toFixed(2) : ""));
+  const [multa, setMulta] = useState(item.multa != null && item.multa !== 0 ? String(item.multa) : (multaSugerida ? multaSugerida.toFixed(2) : ""));
   const [obs, setObs] = useState(item.obsRenegociacao || "");
+
+  const novoValor = Number(item.valor || 0) + (Number(juros) || 0) + (Number(multa) || 0);
+
   return (
     <Modal title={`Renegociar recebível — ${item.cliente}`} onClose={onClose}>
       <div className="grid gap-3">
         <p className="text-xs px-3 py-2 rounded-lg" style={{ background: COLORS.blueSoft, color: COLORS.blue }}>
-          Isso não é baixa — registra que cliente e empresa combinaram novos termos pra essa cobrança em atraso. O vencimento original (já vencido) fica guardado pro histórico; dê baixa quando o valor combinado realmente entrar.
+          Isso não é baixa — registra que cliente e empresa combinaram novos termos pra essa cobrança, em atraso há {diasAtraso} dia(s). O vencimento original fica guardado pro histórico; dê baixa quando o valor combinado realmente entrar (juros/multa daqui já vêm prontos na hora da baixa).
         </p>
         <Field label="Novo vencimento combinado">
           <TextInput type="date" value={data} onChange={(e) => setData(e.target.value)} />
         </Field>
-        <Field label="Novo valor (ajuste se mudou com juros/parcelamento)">
-          <TextInput type="number" step="0.01" value={valor} onChange={(e) => setValor(e.target.value)} />
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="Juros">
+            <TextInput type="number" step="0.01" value={juros} onChange={(e) => setJuros(e.target.value)} placeholder="0,00" />
+          </Field>
+          <Field label="Multa">
+            <TextInput type="number" step="0.01" value={multa} onChange={(e) => setMulta(e.target.value)} placeholder="0,00" />
+          </Field>
+        </div>
+        {temTaxas ? (
+          <p className="text-xs -mt-1" style={{ color: COLORS.inkSoft }}>
+            Sugestão calculada com as taxas da empresa ({taxaJuros}% a.m. de juros, {taxaMulta}% de multa) — ajuste se a negociação real foi diferente.
+          </p>
+        ) : (
+          <p className="text-xs -mt-1" style={{ color: COLORS.inkSoft }}>
+            Essa empresa não tem taxa de juros/multa cadastrada (Cadastros → Empresas) — preencha à mão se for o caso.
+          </p>
+        )}
+        <Field label="Novo valor total">
+          <p className="text-sm font-semibold py-1.5" style={{ color: COLORS.ink }}>{fmtBRL(novoValor)}</p>
         </Field>
         <Field label="Observação (opcional)">
-          <TextInput value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ex.: parcelado em 3x, desconto de 10% à vista..." />
+          <TextInput value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ex.: parcelado em 3x..." />
         </Field>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => onConfirm(data, Number(valor) || item.valor, obs)} disabled={!data}>Marcar como renegociado</Button>
+          <Button onClick={() => onConfirm(data, Number(juros) || 0, Number(multa) || 0, novoValor, obs)} disabled={!data}>Marcar como renegociado</Button>
         </div>
       </div>
     </Modal>
@@ -6258,7 +6312,7 @@ function ReceivablesView({
     setRetornoModal(false);
   };
   const cancelReceipt = (r) => {
-    const revertStatus = r.agendadoPara ? "Antecipado" : "A Receber";
+    const revertStatus = r.renegociadoPara ? "Renegociado" : r.agendadoPara ? "Antecipado" : "A Receber";
     if (!confirmDelete(`Cancelar o recebimento de "${r.cliente}"? Ele volta pra "${revertStatus}".`)) return;
     onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: revertStatus, dataReceb: null, valorRecebido: null, contaRecebId: null } : x)));
     logAudit(selectedEmpresa, "receivable", r.id, "cancelar_baixa", `Cancelou recebimento de ${r.cliente}${r.numeroDocumento ? ` · doc. ${r.numeroDocumento}` : ""} — ${fmtBRL(r.valorRecebido || r.valor)}`, userEmail);
@@ -6279,15 +6333,15 @@ function ReceivablesView({
   // vencimento original intacto e anota o novo acordo em campos à parte,
   // pra "cancelar renegociação" só precisar limpar esses campos (volta a
   // aparecer como Inadimplente pelo vencimento de sempre).
-  const renegotiateReceivable = (novoVencimento, novoValor, obs) => {
+  const renegotiateReceivable = (novoVencimento, juros, multa, novoValor, obs) => {
     const r = renegotiateModal;
-    onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: "Renegociado", renegociadoPara: novoVencimento, valorRenegociado: novoValor, obsRenegociacao: obs } : x)));
-    logAudit(selectedEmpresa, "receivable", r.id, "renegociar", `Renegociado — novo vencimento ${fmtDate(novoVencimento)}${novoValor !== r.valor ? `, novo valor ${fmtBRL(novoValor)}` : ""}${obs ? ` (${obs})` : ""}`, userEmail);
+    onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: "Renegociado", renegociadoPara: novoVencimento, valorRenegociado: novoValor, juros, multa, obsRenegociacao: obs } : x)));
+    logAudit(selectedEmpresa, "receivable", r.id, "renegociar", `Renegociado — novo vencimento ${fmtDate(novoVencimento)}, novo valor ${fmtBRL(novoValor)}${(juros || multa) ? ` (juros ${fmtBRL(juros)}, multa ${fmtBRL(multa)})` : ""}${obs ? ` — ${obs}` : ""}`, userEmail);
     setRenegotiateModal(null);
   };
   const cancelRenegotiation = (r) => {
     if (!confirmDelete(`Cancelar a renegociação de "${r.cliente}"? Ele volta pro vencimento original.`)) return;
-    onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: "A Receber", renegociadoPara: null, valorRenegociado: null, obsRenegociacao: null } : x)));
+    onSave(receivables.map((x) => (x.id === r.id ? { ...x, status: "A Receber", renegociadoPara: null, valorRenegociado: null, juros: null, multa: null, obsRenegociacao: null } : x)));
     logAudit(selectedEmpresa, "receivable", r.id, "cancelar_renegociacao", `Cancelou renegociação de ${fmtBRL(r.valor)}`, userEmail);
   };
 
@@ -6508,6 +6562,7 @@ function ReceivablesView({
       {renegotiateModal && (
         <RenegotiateModal
           item={renegotiateModal}
+          empresa={empresa}
           onClose={() => setRenegotiateModal(null)}
           onConfirm={renegotiateReceivable}
         />
