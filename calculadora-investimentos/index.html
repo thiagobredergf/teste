@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calculadora de Investimentos</title>
+  <meta name="description" content="Simule a evolução do seu patrimônio com juros compostos e aportes mensais.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="top">
+      <h1>Calculadora de Investimentos</h1>
+      <p>Juros compostos com aportes mensais. O resultado muda enquanto você digita.</p>
+    </header>
+
+    <div class="layout">
+      <!-- ============ Formulário ============ -->
+      <form class="panel controls" id="form" novalidate autocomplete="off">
+        <h2>Sua simulação</h2>
+
+        <div class="field" data-field="initial">
+          <label for="initial">Valor inicial</label>
+          <div class="input-wrap">
+            <span class="adorn" aria-hidden="true">R$</span>
+            <input id="initial" name="initial" type="text" inputmode="decimal" aria-describedby="initial-msg" placeholder="0,00">
+          </div>
+          <p class="msg" id="initial-msg" aria-live="polite"></p>
+        </div>
+
+        <div class="field" data-field="monthly">
+          <label for="monthly">Aporte mensal</label>
+          <div class="input-wrap">
+            <span class="adorn" aria-hidden="true">R$</span>
+            <input id="monthly" name="monthly" type="text" inputmode="decimal" aria-describedby="monthly-msg" placeholder="0,00">
+          </div>
+          <p class="msg" id="monthly-msg" aria-live="polite"></p>
+        </div>
+
+        <div class="field" data-field="years">
+          <label for="years">Prazo</label>
+          <div class="input-wrap">
+            <input id="years" name="years" type="text" inputmode="numeric" aria-describedby="years-msg" placeholder="10">
+            <span class="adorn end" aria-hidden="true">anos</span>
+          </div>
+          <input class="range" id="years-range" type="range" min="1" max="50" step="1" aria-label="Prazo em anos (controle deslizante)">
+          <p class="msg" id="years-msg" aria-live="polite"></p>
+        </div>
+
+        <div class="field" data-field="rate">
+          <label for="rate">Rendimento</label>
+          <div class="rate-row">
+            <div class="input-wrap">
+              <input id="rate" name="rate" type="text" inputmode="decimal" aria-describedby="rate-msg" placeholder="10,00">
+              <span class="adorn end" aria-hidden="true">%</span>
+            </div>
+            <select id="basis" name="basis" aria-label="Período da taxa de rendimento">
+              <option value="year">ao ano</option>
+              <option value="month">ao mês</option>
+            </select>
+          </div>
+          <p class="msg" id="rate-msg" aria-live="polite"></p>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="btn primary" id="btn-reset">Restaurar exemplo</button>
+          <button type="button" class="btn" id="btn-clear">Limpar campos</button>
+        </div>
+
+        <p class="fine">
+          Aportes feitos no fim de cada mês. A taxa anual é convertida para a taxa mensal equivalente.
+          Valores nominais, sem impostos, taxas ou inflação. Simulação ilustrativa, não é recomendação de investimento.
+        </p>
+      </form>
+
+      <!-- ============ Dashboard ============ -->
+      <main class="dash" id="dash" data-state="ok">
+        <div class="empty panel" id="empty" hidden>
+          <h2 id="empty-title">Preencha a simulação</h2>
+          <p id="empty-text">Informe valor inicial ou aporte mensal, prazo e rendimento para ver o resultado.</p>
+        </div>
+
+        <div id="results">
+          <section class="kpis" aria-label="Indicadores">
+            <article class="panel hero">
+              <h2>Patrimônio final</h2>
+              <p class="hero-value" id="k-final">–</p>
+              <p class="hero-sub" id="k-final-sub">–</p>
+            </article>
+            <article class="panel kpi">
+              <h2><i class="sw sw-inv"></i>Total investido</h2>
+              <p class="kpi-value" id="k-invested">–</p>
+              <p class="kpi-sub" id="k-invested-sub">–</p>
+            </article>
+            <article class="panel kpi">
+              <h2><i class="sw sw-gain"></i>Ganho em rendimentos</h2>
+              <p class="kpi-value" id="k-gain">–</p>
+              <p class="kpi-sub" id="k-gain-sub">–</p>
+            </article>
+            <article class="panel kpi">
+              <h2>Patrimônio vindo de rendimentos</h2>
+              <p class="kpi-value" id="k-share">–</p>
+              <div class="split" id="k-split" role="img" aria-label="Divisão do patrimônio">
+                <span class="seg inv"></span><span class="seg gain"></span>
+              </div>
+              <p class="kpi-sub" id="k-split-sub">–</p>
+            </article>
+          </section>
+
+          <section class="panel chart-card" aria-labelledby="c1-title">
+            <div class="chart-head">
+              <h2 id="c1-title">Evolução do patrimônio</h2>
+              <ul class="legend" aria-label="Legenda">
+                <li><i class="sw sw-total"></i>Patrimônio</li>
+                <li><i class="sw sw-inv"></i>Total investido</li>
+                <li><i class="sw sw-gain"></i>Rendimentos</li>
+              </ul>
+            </div>
+            <div class="chart" id="chart-line"></div>
+          </section>
+
+          <section class="panel chart-card" aria-labelledby="c2-title">
+            <div class="chart-head">
+              <h2 id="c2-title">Valor investido x rendimentos, ano a ano</h2>
+              <ul class="legend" aria-label="Legenda">
+                <li><i class="sw sw-inv"></i>Total investido</li>
+                <li><i class="sw sw-gain"></i>Rendimentos acumulados</li>
+              </ul>
+            </div>
+            <div class="chart" id="chart-bars"></div>
+          </section>
+
+          <section class="panel table-card" aria-labelledby="t-title">
+            <h2 id="t-title">Resumo por ano</h2>
+            <div class="table-scroll" tabindex="0" role="region" aria-labelledby="t-title">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Ano</th>
+                    <th scope="col">Total investido</th>
+                    <th scope="col">Rendimento no ano</th>
+                    <th scope="col">Rendimentos acumulados</th>
+                    <th scope="col">Patrimônio</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
