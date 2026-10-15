@@ -4,7 +4,7 @@ import {
   ArrowLeftRight, ListTree, Plus, X, Check, Trash2, Pencil, AlertTriangle,
   TrendingUp, TrendingDown, CircleDollarSign, ChevronDown, Search, Building2, FileText, Printer,
   CheckCircle2, Upload, HelpCircle, Users, Image as ImageIcon, ChevronLeft, ChevronRight, CalendarClock,
-  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square, Download, Loader2, Boxes, Megaphone, Handshake
+  Calendar, Bell, LogOut, Sparkles, Contact, Inbox, Link2, Copy, RotateCcw, ShieldCheck, MessageCircle, ClipboardList, Zap, CheckCheck, FileUp, Percent, Lock, Unlock, ListChecks, Play, Square, Download, Loader2, Boxes, Megaphone, Handshake, Star
 } from "lucide-react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -1624,15 +1624,29 @@ Saiu do caixa em ${year}: ${fmtBRL(totals.totalSaidas)}
 Sobrou (ou faltou) no ano: ${fmtBRL(totals.saldo)}
 Saldo atual em contas: ${fmtBRL(totalBalance)}`;
 
+    const empresaAtual = currentEmpresa?.nome || "";
+    const dataCorteHoje = fmtDate(todayISO());
+
+    const payablesAberto = payablesF.filter((p) => p.status !== "Pago").sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""));
+    const contasAPagarAnexo = payablesAberto.length === 0
+      ? "nenhuma conta a pagar em aberto"
+      : listaLimitada(payablesAberto, 60, (p) => `- ${p.fornecedor || "sem fornecedor"} · venc. ${fmtDate(p.vencimento)} · ${fmtBRL(p.valor)} · ${p.status}${p.categoria ? ` · ${p.categoria}` : ""}`);
+
+    const receivablesAberto = receivablesF.filter((r) => r.status !== "Recebido").sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || ""));
+    const contasAReceberAnexo = receivablesAberto.length === 0
+      ? "nenhuma conta a receber em aberto"
+      : listaLimitada(receivablesAberto, 60, (r) => `- ${r.cliente || "sem cliente"} · venc. ${fmtDate(r.vencimento)} · ${fmtBRL(r.valor)} · ${r.status}${r.categoria ? ` · ${r.categoria}` : ""}`);
+
     return {
       indicadoresDoMes, comparativoPeriodoAnterior, pendenciasEmAberto, dreAtual,
       saldoAtual, entradasPrevistas, saidasPrevistas, contasEnvolvidas,
       extratoDoPeriodo, carteiraPorCliente, contasAtuais,
       prazosRecebimentoPagamentoEstoque, volumeDeOperacao, historicoPorCentroCusto, numerosDoPeriodo,
+      empresaAtual, dataCorteHoje, contasAPagarAnexo, contasAReceberAnexo,
     };
   }, [
     year, payablesF, receivablesF, bankEntriesF, fiscalObligationsF, transfersF, accountsF, categoriesF,
-    receitasF, despesasF, totals, totalBalance, financialAdjustments, buildMonthlyFlow, pendingNaoConciliados,
+    receitasF, despesasF, totals, totalBalance, financialAdjustments, buildMonthlyFlow, pendingNaoConciliados, currentEmpresa,
   ]);
 
   if (!ready) {
@@ -11996,6 +12010,13 @@ const SKILL_AUTOFILL_MAP = {
   I9: { prazos_de_recebimento_pagamento_estoque: "prazosRecebimentoPagamentoEstoque", volume_de_operacao: "volumeDeOperacao" },
   I10: { historico_por_centro_de_custo: "historicoPorCentroCusto" },
   B3: { numeros_do_periodo: "numerosDoPeriodo" },
+  // Skill criada pelo usuário (não faz parte do seed original) — mapeada
+  // à mão porque o campo pediu dado que o sistema já calcula (lista de
+  // contas a pagar/receber em aberto, nome da empresa, data de hoje).
+  MV9UIO8VXXYIRG: {
+    empresa: "empresaAtual", data_corte: "dataCorteHoje",
+    contas_a_pagar_anexo: "contasAPagarAnexo", contas_a_receber_anexo: "contasAReceberAnexo",
+  },
 };
 const humanizeCampo = (campo) => {
   const s = (campo || "").replace(/_/g, " ");
@@ -12356,15 +12377,22 @@ function HubSkillsView({ skills, runs, empresaId, empresaNome, userEmail, autoFi
       return alvo.includes(busca.trim().toLowerCase());
     })
     .sort((a, b) => {
-      // Skill com dado automático sobe pro início da grade — além do badge,
-      // é a própria posição no grid que chama atenção pra quem já está
-      // pronta pra rodar sem digitar nada antes.
+      // Favoritada (escolha do próprio usuário) sobe primeiro; depois quem
+      // tem dado automático; só então o nível — a posição no grid chama
+      // atenção pra quem já está pronta pra rodar sem procurar.
+      const favA = a.favorito ? 0 : 1;
+      const favB = b.favorito ? 0 : 1;
+      if (favA !== favB) return favA - favB;
       const autoA = SKILL_AUTOFILL_MAP[a.codigo] ? 0 : 1;
       const autoB = SKILL_AUTOFILL_MAP[b.codigo] ? 0 : 1;
       if (autoA !== autoB) return autoA - autoB;
       const ordem = (NIVEL_ORDEM[a.nivel] ?? 99) - (NIVEL_ORDEM[b.nivel] ?? 99);
       return ordem !== 0 ? ordem : (a.codigo || "").localeCompare(b.codigo || "");
     });
+
+  const toggleFavorito = (s) => {
+    onSaveSkills(skills.map((x) => (x.id === s.id ? { ...x, favorito: !x.favorito } : x)));
+  };
 
   const runsEmpresa = runs
     .filter((r) => r.empresaId === empresaId)
@@ -12431,7 +12459,7 @@ function HubSkillsView({ skills, runs, empresaId, empresaNome, userEmail, autoFi
               <Card
                 key={s.id}
                 className="p-4 flex flex-col gap-2"
-                style={temAutoFill ? { borderColor: COLORS.gold, borderWidth: 1.5 } : undefined}
+                style={s.favorito ? { borderColor: COLORS.amber, borderWidth: 1.5 } : temAutoFill ? { borderColor: COLORS.gold, borderWidth: 1.5 } : undefined}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -12439,6 +12467,9 @@ function HubSkillsView({ skills, runs, empresaId, empresaNome, userEmail, autoFi
                     <p className="font-medium text-sm" style={{ color: COLORS.ink }}>{s.titulo}</p>
                   </div>
                   <div className="flex gap-1 shrink-0">
+                    <button title={s.favorito ? "Remover dos favoritos" : "Marcar como favorita"} onClick={() => toggleFavorito(s)}>
+                      <Star size={14} color={s.favorito ? COLORS.amber : COLORS.inkSoft} fill={s.favorito ? COLORS.amber : "none"} />
+                    </button>
                     <button title="Editar" onClick={() => setSkillModal(s)}><Pencil size={14} color={COLORS.inkSoft} /></button>
                     <button title="Excluir" onClick={() => deleteSkill(s)}><Trash2 size={14} color={COLORS.red} /></button>
                   </div>
