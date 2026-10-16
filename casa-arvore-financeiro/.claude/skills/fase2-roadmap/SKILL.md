@@ -59,18 +59,25 @@ relatório pode sair **sem nenhuma migração**, só:
 
 ### 3. Orçado vs. Realizado por Evento
 
-Segmento: Eventos. Hoje só existem lançamentos realizados — não tem
-conceito de valor planejado/orçado em lugar nenhum do sistema.
+**Entregue parcialmente na fase 38 — leia antes de mexer aqui de novo.**
+O que foi construído é a versão **por categoria/mês, geral pra qualquer
+segmento** (não só Eventos): tabela `budgets` (`id`, `empresaId`, `ano`,
+`mes`, `categoria` texto — mesmo nome usado em payables/receivables —,
+`valorOrcado`), editor e comparativo dentro de Relatórios → "Orçamento ×
+Realizado" (`BudgetReport`, perto de `DREReport`/`computeDRECaixa` em
+`src/App.jsx`). O realizado é calculado por `realizadoPorCategoriaMes`
+(mesma lógica de regime caixa/competência do DRE, só que filtrando por
+mês também) — nenhum upload de planilha, lê direto de payables/
+receivables já cadastrados.
 
-- **Cadastro novo, leve**: uma tabela `project_budgets` (`id`,
-  `empresaId`, `projeto` texto — mesmo valor livre usado em
-  payables/receivables —, `valorOrcado` numeric, `categoria` opcional).
-  Não precisa de tela própria: dá pra encaixar como um campo editável
-  direto dentro do relatório "Cronograma de Desembolso" (que já agrupa
-  por projeto), com um "Definir orçamento" por grupo.
-- **Relatório**: por projeto, `valorOrcado` (do cadastro novo) vs.
-  `valorRealizado` (soma de payables com aquele projeto, como já faz a
-  Rentabilidade por Projeto) — mostra sobra/estouro.
+O que ainda falta, se o usuário pedir especificamente a versão **por
+Evento/projeto** descrita originalmente aqui: abrir `budgets` por
+`projeto` em vez de (ou além de) `categoria`, e cruzar com o relatório
+"Cronograma de Desembolso" (que já agrupa por projeto) em vez do DRE por
+categoria. Pergunte antes de implementar: o usuário quer orçar por
+categoria (já existe) ou por projeto/evento individual (não existe
+ainda) — são grades diferentes, um projeto normalmente atravessa várias
+categorias.
 
 ## Backlog — não começar sem conversar o escopo primeiro
 

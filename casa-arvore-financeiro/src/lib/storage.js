@@ -33,6 +33,7 @@ const TABLE_NAMES = {
   costCenters: "cost_centers",
   systemUpdates: "system_updates",
   retornosCnab: "retornos_cnab",
+  budgets: "budgets",
 };
 
 // selectedEmpresa é só preferência de navegação de quem está olhando a

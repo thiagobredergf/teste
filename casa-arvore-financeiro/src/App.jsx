@@ -539,6 +539,7 @@ function buildOnboardingChecklistRows(empresaId) {
 
 const monthIndex = (iso) => (iso ? parseInt(iso.slice(5, 7), 10) - 1 : -1);
 const yearOf = (iso) => (iso ? parseInt(iso.slice(0, 4), 10) : null);
+const monthOf = (iso) => (iso ? parseInt(iso.slice(5, 7), 10) : null); // 1-12
 
 const timeAgo = (iso) => {
   if (!iso) return "";
@@ -579,6 +580,7 @@ const STORE_KEYS = {
   costCenters: "costCenters",
   systemUpdates: "systemUpdates",
   retornosCnab: "retornosCnab",
+  budgets: "budgets",
   selectedEmpresa: "selectedEmpresa",
 };
 
@@ -871,6 +873,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
   const [costCenters, setCostCenters] = useState([]);
   const [systemUpdates, setSystemUpdates] = useState([]);
   const [retornosCnab, setRetornosCnab] = useState([]);
+  const [budgets, setBudgets] = useState([]);
   const [userId, setUserId] = useState(null);
   const [lastSeenUpdatesAt, setLastSeenUpdatesAt] = useState(null);
   const [year, setYear] = useState(new Date().getFullYear());
@@ -923,6 +926,7 @@ function FinanceiroApp({ userEmail, onLogout }) {
       setCostCenters(data.costCenters || []);
       setSystemUpdates(data.systemUpdates || []);
       setRetornosCnab(data.retornosCnab || []);
+      setBudgets(data.budgets || []);
       // Dono não tem visão consolidada entre empresas — pousa direto no
       // Resumo da empresa dele. Gestor pousa no Cadastro de Empresas (os
       // cards de todas), pra escolher com qual vai trabalhar.
@@ -2257,6 +2261,10 @@ Saldo atual em contas: ${fmtBRL(totalBalance)}`;
                 totals={totals}
                 monthlyFlow={monthlyFlow}
                 goToViewFiltered={goToViewFiltered}
+                categories={categoriesF}
+                budgets={budgets}
+                onSaveBudgets={(v) => persist("budgets", v, setBudgets)}
+                readOnly={role !== "gestor"}
               />
             )}
 
@@ -8402,6 +8410,7 @@ const REPORT_TABS = [
   { id: "rentabilidade", label: "Rentabilidade por Centro de Custo", Comp: RentabilidadeProjetoReport },
   { id: "cronograma", label: "Cronograma de Desembolso", Comp: CronogramaDesembolsoReport },
   { id: "diaSemana", label: "Faturamento por Dia da Semana", Comp: FaturamentoDiaSemanaReport },
+  { id: "orcamento", label: "Orçamento × Realizado", Comp: BudgetReport },
   { id: "extrato", label: "Extrato de Conta", Comp: ExtratoContaReport },
 ];
 
@@ -8656,6 +8665,241 @@ function computeDRECaixa(ano, payables, receivables, financialAdjustments) {
   const resultado = resultadoOperacional + (temFinanceiro ? financialAdjustments.resultado : 0);
   const margem = totalReceitas > 0 ? resultadoOperacional / totalReceitas : 0;
   return { totalReceitas, totalDespesas, resultadoOperacional, resultado, margem };
+}
+
+/* --- Orçamento × Realizado --- */
+// Realizado por categoria num mês específico — mesma lógica de regime
+// (caixa/competência) do DREReport, só que filtrando por mês além de
+// ano, porque orçamento se define e se acompanha mês a mês. Função pura
+// porque o relatório precisa dela duas vezes (mês isolado e acumulado).
+function realizadoPorCategoriaMes(payables, receivables, ano, mes, regime) {
+  // Dois mapas separados (nunca um só combinado por nome de categoria) —
+  // mesmo cuidado do DREReport: evita que uma categoria de despesa e uma
+  // de receita com o mesmo nome se misturem.
+  const receitas = {};
+  receivables.forEach((r) => {
+    if (regime === "caixa") {
+      if (r.status !== "Recebido" || yearOf(r.dataReceb) !== ano || monthOf(r.dataReceb) !== mes) return;
+      receitas[r.categoria] = (receitas[r.categoria] || 0) + Number(r.valorRecebido ?? r.valor ?? 0) - Number(r.juros || 0) - Number(r.multa || 0) + Number(r.desconto || 0);
+    } else {
+      if (yearOf(r.vencimento) !== ano || monthOf(r.vencimento) !== mes) return;
+      receitas[r.categoria] = (receitas[r.categoria] || 0) + Number(r.valor || 0);
+    }
+  });
+  const despesas = {};
+  payables.forEach((p) => {
+    if (regime === "caixa") {
+      if (p.status !== "Pago" || yearOf(p.dataPgto) !== ano || monthOf(p.dataPgto) !== mes) return;
+      despesas[p.categoria] = (despesas[p.categoria] || 0) + Number(p.valorPago ?? p.valor ?? 0) - Number(p.juros || 0) - Number(p.multa || 0) + Number(p.desconto || 0);
+    } else {
+      if (yearOf(p.vencimento) !== ano || monthOf(p.vencimento) !== mes) return;
+      despesas[p.categoria] = (despesas[p.categoria] || 0) + Number(p.valor || 0);
+    }
+  });
+  return { receitas, despesas }; // ambos sempre positivos
+}
+
+function BudgetReport({ year, payables, receivables, categories, budgets: budgetsTodasEmpresas, onSaveBudgets, readOnly, selectedEmpresa }) {
+  const hoje = new Date();
+  const [mes, setMes] = useState(year === hoje.getFullYear() ? hoje.getMonth() + 1 : 1);
+  const [regime, setRegime] = useState("competencia"); // "caixa" | "competencia"
+  const [acumulado, setAcumulado] = useState(false);
+  const [rascunho, setRascunho] = useState(null); // { [categoria]: "valor digitado" } — só enquanto edita
+
+  // budgets vem SEM filtro de empresa (ao contrário de payables/receivables/
+  // categories, que o FinanceiroApp já escopa) porque salvar aqui precisa
+  // reconstruir o array inteiro da tabela — se filtrássemos antes, o save
+  // apagaria o orçamento de todas as OUTRAS empresas sem querer.
+  const budgets = useMemo(() => budgetsTodasEmpresas.filter((b) => b.empresaId === selectedEmpresa), [budgetsTodasEmpresas, selectedEmpresa]);
+
+  const categoriasOrdenadas = useMemo(
+    () => [...categories].sort((a, b) => (a.natureza === b.natureza ? a.codigo.localeCompare(b.codigo) : a.natureza === "receita" ? -1 : 1)),
+    [categories]
+  );
+
+  const mesesConsiderados = acumulado ? Array.from({ length: mes }, (_, i) => i + 1) : [mes];
+
+  // Soma o realizado de cada categoria nos meses considerados (só o mês,
+  // ou janeiro até o mês escolhido quando "acumulado" está marcado) — dois
+  // mapas (receita/despesa), sem misturar por nome de categoria.
+  const realizadoPorCategoria = useMemo(() => {
+    const receitas = {};
+    const despesas = {};
+    mesesConsiderados.forEach((m) => {
+      const doMes = realizadoPorCategoriaMes(payables, receivables, year, m, regime);
+      Object.entries(doMes.receitas).forEach(([cat, v]) => { receitas[cat] = (receitas[cat] || 0) + v; });
+      Object.entries(doMes.despesas).forEach(([cat, v]) => { despesas[cat] = (despesas[cat] || 0) + v; });
+    });
+    return { receitas, despesas };
+  }, [payables, receivables, year, regime, mesesConsiderados.join(",")]);
+
+  const orcadoPorCategoria = useMemo(() => {
+    const acc = {};
+    mesesConsiderados.forEach((m) => {
+      budgets.filter((b) => b.ano === year && b.mes === m).forEach((b) => {
+        acc[b.categoria] = (acc[b.categoria] || 0) + Number(b.valorOrcado || 0);
+      });
+    });
+    return acc;
+  }, [budgets, year, mesesConsiderados.join(",")]);
+
+  // O orçamento do mês exibido no editor é sempre de UM mês (não do
+  // acumulado) — faz sentido editar "orçamento de março", não "orçamento
+  // de janeiro a março somados".
+  const orcamentoDoMes = useMemo(() => {
+    const map = {};
+    budgets.filter((b) => b.ano === year && b.mes === mes).forEach((b) => { map[b.categoria] = b.valorOrcado; });
+    return map;
+  }, [budgets, year, mes]);
+
+  const valorEditor = (categoriaNome) => {
+    if (rascunho && categoriaNome in rascunho) return rascunho[categoriaNome];
+    return orcamentoDoMes[categoriaNome] != null ? String(orcamentoDoMes[categoriaNome]) : "";
+  };
+
+  const salvarOrcamento = () => {
+    if (!rascunho) return;
+    // outrasEmpresas nunca é tocado; dentroDaEmpresa exclui só o mês que
+    // está sendo salvo (o resto do orçamento desta empresa é preservado).
+    const outrasEmpresas = budgetsTodasEmpresas.filter((b) => b.empresaId !== selectedEmpresa);
+    const dentroDaEmpresaForaDoMes = budgets.filter((b) => !(b.ano === year && b.mes === mes));
+    const doMes = Object.entries(rascunho)
+      .filter(([, v]) => v !== "" && Number(v) >= 0)
+      .map(([categoria, v]) => {
+        const existente = budgets.find((b) => b.ano === year && b.mes === mes && b.categoria === categoria);
+        return { id: existente?.id || uid(), empresaId: selectedEmpresa, ano: year, mes, categoria, valorOrcado: Number(v) };
+      });
+    onSaveBudgets([...outrasEmpresas, ...dentroDaEmpresaForaDoMes, ...doMes]);
+    setRascunho(null);
+  };
+
+  const linhas = categoriasOrdenadas.map((c) => {
+    const orcado = orcadoPorCategoria[c.nome] || 0;
+    const realizado = (c.natureza === "despesa" ? realizadoPorCategoria.despesas[c.nome] : realizadoPorCategoria.receitas[c.nome]) || 0;
+    const desvio = realizado - orcado;
+    const desvioPct = orcado !== 0 ? (desvio / Math.abs(orcado)) * 100 : null;
+    const execucaoPct = orcado !== 0 ? (realizado / orcado) * 100 : null;
+    return { ...c, orcado, realizado, desvio, desvioPct, execucaoPct };
+  }).filter((l) => l.orcado !== 0 || l.realizado !== 0);
+
+  const totalOrcadoReceita = linhas.filter((l) => l.natureza === "receita").reduce((s, l) => s + l.orcado, 0);
+  const totalRealizadoReceita = linhas.filter((l) => l.natureza === "receita").reduce((s, l) => s + l.realizado, 0);
+  const totalOrcadoDespesa = linhas.filter((l) => l.natureza === "despesa").reduce((s, l) => s + l.orcado, 0);
+  const totalRealizadoDespesa = linhas.filter((l) => l.natureza === "despesa").reduce((s, l) => s + l.realizado, 0);
+  const resultadoOrcado = totalOrcadoReceita - totalOrcadoDespesa;
+  const resultadoRealizado = totalRealizadoReceita - totalRealizadoDespesa;
+
+  const fmtPct = (v) => (v == null ? "n/d" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 flex-wrap print:hidden">
+        <Field label="Mês">
+          <Select value={mes} onChange={(e) => { setMes(Number(e.target.value)); setRascunho(null); }} style={{ height: 34 }}>
+            {MESES_PT.map((nome, i) => <option key={i} value={i + 1}>{nome.charAt(0).toUpperCase() + nome.slice(1)}</option>)}
+          </Select>
+        </Field>
+        <div className="flex items-center gap-1.5">
+          {[{ id: "caixa", label: "Caixa" }, { id: "competencia", label: "Competência" }].map((opt) => (
+            <button
+              key={opt.id}
+              onClick={() => setRegime(opt.id)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+              style={{ background: regime === opt.id ? COLORS.ink : "#EFEEE8", color: regime === opt.id ? "#fff" : COLORS.ink }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <label className="flex items-center gap-1.5 text-xs" style={{ color: COLORS.inkSoft }}>
+          <input type="checkbox" checked={acumulado} onChange={(e) => setAcumulado(e.target.checked)} />
+          Acumulado no ano (janeiro até o mês escolhido)
+        </label>
+      </div>
+
+      {!readOnly && (
+        <ReportCard
+          title={`Orçamento de ${MESES_PT[mes - 1]}/${year}`}
+          subtitle="Valor planejado por categoria, pra esse mês — o comparativo abaixo usa esses números. Categoria sem orçamento definido fica fora do comparativo."
+        >
+          <div className="max-h-[40vh] overflow-y-auto -mx-1 px-1">
+            <table className="w-full text-sm">
+              <tbody>
+                {categoriasOrdenadas.map((c) => (
+                  <tr key={c.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <td className="px-2 py-1" style={{ color: COLORS.ink }}>
+                      <span className="text-xs mr-1" style={{ color: COLORS.inkSoft }}>{c.natureza === "receita" ? "Receita" : "Despesa"}</span>
+                      {c.nome}
+                    </td>
+                    <td className="px-2 py-1 w-36">
+                      <TextInput
+                        type="number" step="0.01" placeholder="0,00"
+                        value={valorEditor(c.nome)}
+                        onChange={(e) => setRascunho((r) => ({ ...(r || {}), [c.nome]: e.target.value }))}
+                        className="text-right"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex justify-end pt-3">
+            <Button onClick={salvarOrcamento} disabled={!rascunho}>Salvar orçamento do mês</Button>
+          </div>
+        </ReportCard>
+      )}
+
+      <ReportCard
+        title={`Orçado × Realizado · ${acumulado ? `jan–${MESES_PT[mes - 1]}` : MESES_PT[mes - 1]}/${year}`}
+        subtitle={`Regime de ${regime === "caixa" ? "caixa (pago/recebido)" : "competência (pelo vencimento)"}. Desvio = realizado − orçado; execução = realizado ÷ orçado.`}
+      >
+        {linhas.length === 0 ? (
+          <p className="text-sm" style={{ color: COLORS.inkSoft }}>Nenhuma categoria com orçamento definido ou valor realizado neste recorte.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[640px]">
+              <thead>
+                <tr style={{ color: COLORS.inkSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                  <th className="text-left font-medium px-2 py-1.5">Categoria</th>
+                  <th className="text-right font-medium px-2 py-1.5">Orçado</th>
+                  <th className="text-right font-medium px-2 py-1.5">Realizado</th>
+                  <th className="text-right font-medium px-2 py-1.5">Desvio (R$)</th>
+                  <th className="text-right font-medium px-2 py-1.5">Desvio (%)</th>
+                  <th className="text-right font-medium px-2 py-1.5">Execução</th>
+                </tr>
+              </thead>
+              <tbody>
+                {linhas.map((l) => {
+                  const favoravel = l.natureza === "receita" ? l.desvio >= 0 : l.desvio <= 0;
+                  return (
+                    <tr key={l.id} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{l.nome}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.inkSoft }}>{fmtBRL(l.orcado)}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: l.natureza === "receita" ? COLORS.green : COLORS.red }}>{fmtBRL(l.realizado)}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(l.desvio)}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: favoravel ? COLORS.green : COLORS.red }}>{fmtPct(l.desvioPct)}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{l.execucaoPct == null ? "n/d" : `${l.execucaoPct.toFixed(0)}%`}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr style={{ borderTop: `2px solid ${COLORS.border}` }} className="font-semibold">
+                  <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>Resultado (receitas − despesas)</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(resultadoOrcado)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: resultadoRealizado >= 0 ? COLORS.green : COLORS.red }}>{fmtBRL(resultadoRealizado)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: COLORS.ink }}>{fmtBRL(resultadoRealizado - resultadoOrcado)}</td>
+                  <td className="px-2 py-1.5"></td>
+                  <td className="px-2 py-1.5"></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </ReportCard>
+    </div>
+  );
 }
 
 /* --- DFC (Demonstrativo de Fluxo de Caixa) realizado --- */
