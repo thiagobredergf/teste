@@ -1,0 +1,9 @@
+{
+  "name": "controle-vt",
+  "private": true,
+  "type": "module",
+  "description": "Controle de Vale-Transporte: repasse complementar = direito do mês − saldo projetado do cartão",
+  "scripts": {
+    "test": "node --test \"core/*.test.mjs\""
+  }
+}

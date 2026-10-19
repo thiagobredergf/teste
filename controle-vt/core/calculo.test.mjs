@@ -1,0 +1,112 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { calcularRepasse, calcularDiasEfetivos } from './calculo.mjs';
+import { diasUteisEntre } from './datas.mjs';
+import { parseValorBR } from './dinheiro.mjs';
+import { parseSaldoCanonico } from './saldo.mjs';
+
+const regras = {
+  falta: { desconta_vt: true }, licenca_medica: { desconta_vt: true }, ferias: { desconta_vt: true }, abono: { desconta_vt: false },
+};
+const base = {
+  situacao: 'ativo', cartao: { status: 'ativo' }, beneficio: { valor_diario_centavos: 1670, dias_semana: 5 },
+  diasBase: 19, ocorrencias: [], regras, saldo: null, dataCredito: '2026-10-30', feriados: [],
+};
+
+test('dias úteis entre 14/10 e 30/10/2026 (extremos excluídos)', () => {
+  assert.equal(diasUteisEntre('2026-10-14', '2026-10-30'), 11);
+  assert.equal(diasUteisEntre('2026-10-14', '2026-10-30', ['2026-10-15']), 10);
+});
+
+test('sem saldo: repasse = direito cheio, com sinalizador', () => {
+  const r = calcularRepasse(base);
+  assert.equal(r.direito_centavos, 31730);
+  assert.equal(r.repasse_centavos, 31730);
+  assert.deepEqual(r.sinalizadores, ['SEM_SALDO']);
+});
+
+test('saldo alto cobre o direito: repasse zero', () => {
+  const r = calcularRepasse({ ...base, saldo: { valor_centavos: 57285, lido_em: '2026-10-14T18:00' } });
+  // consumo estimado 11 dias × 16,70 = 183,70; projetado 389,15 > direito 317,30
+  assert.equal(r.consumo_estimado_centavos, 18370);
+  assert.equal(r.saldo_projetado_centavos, 38915);
+  assert.equal(r.repasse_centavos, 0);
+  assert.ok(r.sinalizadores.includes('SALDO_COBRE_DIREITO'));
+});
+
+test('saldo parcial: repasse = direito − saldo projetado', () => {
+  const r = calcularRepasse({ ...base, saldo: { valor_centavos: 30000, lido_em: '2026-10-14T18:00' } });
+  assert.equal(r.saldo_projetado_centavos, 11630);
+  assert.equal(r.repasse_centavos, 31730 - 11630);
+  assert.equal(r.regra_aplicada, 'direito_menos_saldo_projetado');
+});
+
+test('projeção conservadora nunca deixa saldo negativo', () => {
+  const r = calcularRepasse({ ...base, saldo: { valor_centavos: 5000, lido_em: '2026-10-14T18:00' } });
+  assert.equal(r.saldo_projetado_centavos, 0);
+  assert.equal(r.repasse_centavos, 31730);
+});
+
+test('modo "nenhum" usa o saldo como lido', () => {
+  const r = calcularRepasse({ ...base, saldo: { valor_centavos: 30000, lido_em: '2026-10-14T18:00' } }, { projecao_modo: 'nenhum' });
+  assert.equal(r.repasse_centavos, 1730);
+});
+
+test('saldo velho é ignorado e sinalizado', () => {
+  const r = calcularRepasse({ ...base, saldo: { valor_centavos: 90000, lido_em: '2026-08-01T10:00' } });
+  assert.equal(r.repasse_centavos, 31730);
+  assert.ok(r.sinalizadores.includes('SALDO_ANTIGO'));
+});
+
+test('ocorrências: cada tipo segue sua regra (abono não desconta)', () => {
+  const { descontados, efetivos } = calcularDiasEfetivos({
+    diasBase: 19, regras, ocorrencias: [{ tipo: 'falta', dias: 2 }, { tipo: 'abono', dias: 3 }, { tipo: 'ferias', dias: 5 }],
+  });
+  assert.equal(descontados, 7);
+  assert.equal(efetivos, 12);
+});
+
+test('tipo de ocorrência sem regra falha em vez de passar em silêncio', () => {
+  assert.throws(() => calcularDiasEfetivos({ diasBase: 19, regras, ocorrencias: [{ tipo: 'misterio', dias: 1 }] }));
+});
+
+test('suspenso, sem benefício, sem cartão e dias zerados não geram repasse', () => {
+  assert.equal(calcularRepasse({ ...base, situacao: 'suspenso' }).repasse_centavos, 0);
+  assert.deepEqual(calcularRepasse({ ...base, beneficio: null }).sinalizadores, ['SEM_BENEFICIO']);
+  const sc = calcularRepasse({ ...base, cartao: null });
+  assert.equal(sc.repasse_centavos, 0);
+  assert.ok(sc.sinalizadores.includes('SEM_CARTAO'));
+  assert.ok(calcularRepasse({ ...base, ocorrencias: [{ tipo: 'licenca_medica', dias: 30 }] }).sinalizadores.includes('DIAS_ZERADOS'));
+});
+
+test('mínimo, múltiplo e teto', () => {
+  const s = { saldo: { valor_centavos: 30000, lido_em: '2026-10-14T18:00' } };
+  assert.equal(calcularRepasse({ ...base, ...s }, { recarga_multiplo_centavos: 500 }).repasse_centavos, 20500);
+  assert.equal(calcularRepasse({ ...base, ...s, diasBase: 7 }, { recarga_minima_centavos: 5000 }).repasse_centavos, 5000);
+  assert.ok(calcularRepasse({ ...base, ...s }, { teto_cartao_centavos: 20000 }).sinalizadores.includes('ACIMA_DO_TETO'));
+});
+
+test('lê os formatos sujos de saldo da planilha legada', () => {
+  assert.deepEqual(parseValorBR('R$ 572,85 - 14/10'), { centavos: 57285, data: '14/10' });
+  assert.deepEqual(parseValorBR(' R$ 543,00 - 14/10'), { centavos: 54300, data: '14/10' });
+  assert.deepEqual(parseValorBR('R$ 845,9 - 14/10'), { centavos: 84590, data: '14/10' });
+  assert.deepEqual(parseValorBR('R$ 640,00 -14/10'), { centavos: 64000, data: '14/10' });
+  assert.deepEqual(parseValorBR('R$ 1.030,65'), { centavos: 103065, data: null });
+  assert.deepEqual(parseValorBR('\n R$ 117,53'), { centavos: 11753, data: null });
+  assert.equal(parseValorBR('abc'), null);
+});
+
+test('importação de saldo: aceita linhas boas e rejeita com motivo', () => {
+  const r = parseSaldoCanonico([
+    'numero_cartao;valor;data_hora_leitura',
+    '604007259613;572,85;2026-10-14T18:00',
+    '60400;10,00;2026-10-14T18:00',
+    '604007259614;xx;2026-10-14T18:00',
+    '604007259615;10,00;14/10/2026',
+    '604007259613;572,85;2026-10-14T18:00',
+  ].join('\n'));
+  assert.equal(r.ok.length, 1);
+  assert.deepEqual(r.rejeitadas.map((x) => x.motivo), [
+    'número de cartão inválido', 'valor inválido', 'data/hora inválida (use AAAA-MM-DDTHH:MM)', 'cartão repetido na mesma leitura',
+  ]);
+});
