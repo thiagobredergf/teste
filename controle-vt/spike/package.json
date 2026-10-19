@@ -1,0 +1,8 @@
+{
+  "name": "controle-vt-spike",
+  "private": true,
+  "description": "Prova de viabilidade: SQLite + PDF + cifra em um único HTML, aberto direto do disco",
+  "scripts": { "build": "node build.mjs", "test": "node build.mjs && node run.mjs" },
+  "dependencies": { "sql.js": "1.12.0", "pdfjs-dist": "3.11.174" },
+  "devDependencies": { "playwright-core": "1.49.0" }
+}

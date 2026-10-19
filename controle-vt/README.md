@@ -11,12 +11,14 @@ Projeto independente. Documentação em `docs/`:
 
 - `diagnostico-e-proposta.md` — problema, evidências e proposta
 - `decisoes.md` — respostas do RH, implicações e perguntas abertas
+- `arquitetura.md` — ferramenta local de arquivo único (decisão, prova de viabilidade, regras)
 
 ## Estrutura
 
 | Pasta | Conteúdo |
 |---|---|
-| `db/001_schema.sql` | Esquema PostgreSQL: cadastro permanente, eventos, competência, ocorrências do ponto, saldos, cálculo, fechamento imutável, auditoria |
+| `db/001_schema.sql` | Esquema PostgreSQL (referência de modelo; a versão final será SQLite): cadastro permanente, eventos, competência, ocorrências do ponto, saldos, cálculo, fechamento imutável, auditoria |
+| `spike/` | Prova de viabilidade (SQLite + PDF + cifra em HTML único): `cd spike && npm i && npm test` |
 | `core/` | Motor de cálculo e importação de saldo, em JavaScript puro, sem dependências |
 
 ## Rodando
