@@ -39,3 +39,24 @@ test('ponto decimal x milhar', () => {
   assert.equal(parseValorBR('1.030').centavos, 103000);
   assert.equal(parseValorBR('1.030,65').centavos, 103065);
 });
+
+test('vírgula como separador: valor entre aspas funciona; sem aspas é rejeitado com explicação', () => {
+  const txt = 'MATRICULA,VALOR,DIAS,DESCONTO\n28465,"16,70",5,"113,56"\n990010243,16,70,3,\n';
+  const { ok, rejeitadas } = aplicarMapa(lerTexto(txt, { tipo: 'delimitado', separador: ',', cabecalho: true }), mapa);
+  assert.deepEqual(ok, [{ matricula: '28465', valor_diario_centavos: 1670, dias_semana: 5, desconto_centavos: 11356 }]);
+  assert.equal(rejeitadas.length, 1);
+  assert.match(rejeitadas[0].motivo, /esperadas 4 colunas, encontradas 5.*aspas/);
+});
+
+test('vírgula como separador com ponto decimal', () => {
+  const txt = 'MATRICULA,VALOR,DIAS,DESCONTO\n28465,16.70,5,113.56\n';
+  const { ok } = aplicarMapa(lerTexto(txt, { tipo: 'delimitado', separador: ',', cabecalho: true }), mapa);
+  assert.equal(ok[0].desconto_centavos, 11356);
+});
+
+test('conversores de cartão e data/hora', () => {
+  const m = { cartao: { coluna: 'C', tipo: 'cartao', obrigatorio: true }, lido_em: { coluna: 'D', tipo: 'datahora', obrigatorio: true } };
+  const { ok, rejeitadas } = aplicarMapa(lerTexto('C;D\n604007259613;14/10/2026 18:30\n604007259614;2026-10-14\n60400;14/10/2026\n604007259615;31/02/2026', { tipo: 'delimitado', separador: ';', cabecalho: true }), m);
+  assert.deepEqual(ok, [{ cartao: '604007259613', lido_em: '2026-10-14T18:30' }, { cartao: '604007259614', lido_em: '2026-10-14T00:00' }]);
+  assert.equal(rejeitadas.length, 2);
+});

@@ -3,7 +3,7 @@
 //
 // nova:     [{ matricula, nome, valor_diario_centavos, dias_semana, cartao, desconto_centavos, unidade }]
 // cadastro: [{ matricula, situacao: 'ativo'|'suspenso'|'cancelado', ...mesmos campos }]
-const CAMPOS = ['valor_diario_centavos', 'dias_semana', 'cartao', 'desconto_centavos', 'unidade'];
+const CAMPOS = ['valor_diario_centavos', 'dias_semana', 'saldo_inicial_centavos', 'cartao', 'desconto_centavos', 'unidade'];
 const chave = (m) => String(m ?? '').trim();
 
 export function compararRelacao(nova, cadastro) {

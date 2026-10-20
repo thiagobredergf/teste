@@ -5,7 +5,7 @@ export const PARAMETROS_PADRAO = {
   saldo_max_idade_dias: 45,
   recarga_minima_centavos: 0,
   recarga_multiplo_centavos: 1,
-  saldo_alto_multiplo: 3,         // política administrativa do RH: alerta se saldo projetado > N × direito (null = sem alerta)
+  saldo_alto_multiplo: 3,         // política administrativa do RH: alerta se saldo projetado > N × saldo inicial (null = sem alerta)
 };
 
 // dias efetivos = dias base da competência − dias de ocorrências que descontam VT (mínimo 0)
@@ -32,7 +32,7 @@ const arredondarParaCima = (valor, multiplo) => (multiplo > 1 ? Math.ceil(valor 
 
 /**
  * Calcula o repasse de um servidor em uma competência.
- * entrada: { situacao, cartao: {status}|null, beneficio: {valor_diario_centavos, dias_semana}|null,
+ * entrada: { situacao, cartao: {status}|null, beneficio: {valor_diario_centavos, dias_semana, saldo_inicial_centavos}|null,
  *            diasBase, ocorrencias, regras, saldo: {valor_centavos, lido_em}|null, dataCredito, feriados }
  */
 export function calcularRepasse(entrada, parametros = {}) {
@@ -93,7 +93,12 @@ export function calcularRepasse(entrada, parametros = {}) {
   }
   // O repasse complementar nunca leva o cartão além do direito, então o limite de N× não altera o valor:
   // ele só dispara o alerta de acúmulo (candidato a bloqueio/investigação pelo RH).
-  if (p.saldo_alto_multiplo != null && saldoProjetado > p.saldo_alto_multiplo * direito) sinal.push('SALDO_ALTO');
+  // A base é o "saldo inicial" que vem na relação do RH (pode ser reajustado; nunca se deduz do histórico de recargas).
+  if (p.saldo_alto_multiplo != null && base.saldo_projetado_centavos !== null) {
+    const inicial = beneficio.saldo_inicial_centavos;
+    if (!inicial) sinal.push('SEM_SALDO_INICIAL');
+    else if (saldoProjetado > p.saldo_alto_multiplo * inicial) sinal.push('SALDO_ALTO');
+  }
   base.repasse_centavos = repasse;
   return pronto(regra);
 }

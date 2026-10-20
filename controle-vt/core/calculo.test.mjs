@@ -9,7 +9,7 @@ const regras = {
   falta: { desconta_vt: true }, licenca_medica: { desconta_vt: true }, ferias: { desconta_vt: true }, abono: { desconta_vt: false },
 };
 const base = {
-  situacao: 'ativo', cartao: { status: 'ativo' }, beneficio: { valor_diario_centavos: 1670, dias_semana: 5 },
+  situacao: 'ativo', cartao: { status: 'ativo' }, beneficio: { valor_diario_centavos: 1670, dias_semana: 5, saldo_inicial_centavos: 30000 },
   diasBase: 19, ocorrencias: [], regras, saldo: null, dataCredito: '2026-10-30', feriados: [],
 };
 
@@ -110,14 +110,20 @@ test('importação de saldo: aceita linhas boas e rejeita com motivo', () => {
   ]);
 });
 
-test('saldo alto: alerta acima de 3× o direito, sem alterar o repasse', () => {
-  // direito 317,30 → limite 951,90
+test('saldo alto: alerta acima de 3× o saldo inicial da relação do RH, sem alterar o repasse', () => {
+  // saldo inicial 300,00 → limite 900,00 (e o direito é 317,30: a base NÃO é o direito)
   const lido = '2026-10-14T18:00';
   const acima = calcularRepasse({ ...base, saldo: { valor_centavos: 120000, lido_em: lido } });
-  assert.ok(acima.sinalizadores.includes('SALDO_ALTO'));
+  assert.ok(acima.sinalizadores.includes('SALDO_ALTO'));   // projetado 1.016,30 > 900,00
   assert.equal(acima.repasse_centavos, 0);
   const dentro = calcularRepasse({ ...base, saldo: { valor_centavos: 90000, lido_em: lido } });
-  assert.ok(!dentro.sinalizadores.includes('SALDO_ALTO')); // projetado 716,30 < 951,90
+  assert.ok(!dentro.sinalizadores.includes('SALDO_ALTO')); // projetado 716,30 ≤ 900,00
   const semPolitica = calcularRepasse({ ...base, saldo: { valor_centavos: 120000, lido_em: lido } }, { saldo_alto_multiplo: null });
   assert.ok(!semPolitica.sinalizadores.includes('SALDO_ALTO'));
+});
+
+test('sem saldo inicial na relação, o alerta não é avaliado e isso é sinalizado', () => {
+  const r = calcularRepasse({ ...base, beneficio: { valor_diario_centavos: 1670, dias_semana: 5 }, saldo: { valor_centavos: 120000, lido_em: '2026-10-14T18:00' } });
+  assert.ok(r.sinalizadores.includes('SEM_SALDO_INICIAL'));
+  assert.ok(!r.sinalizadores.includes('SALDO_ALTO'));
 });

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compararRelacao } from './relacao.mjs';
 
-const c = (matricula, extra = {}) => ({ matricula, nome: 'N' + matricula, situacao: 'ativo', valor_diario_centavos: 1670, dias_semana: 5, cartao: '60400' + matricula, desconto_centavos: 11356, ...extra });
+const c = (matricula, extra = {}) => ({ matricula, nome: 'N' + matricula, situacao: 'ativo', valor_diario_centavos: 1670, dias_semana: 5, cartao: '60400' + matricula, desconto_centavos: 11356, saldo_inicial_centavos: 30000, ...extra });
 const r = (matricula, extra = {}) => { const { situacao, ...resto } = c(matricula); return { ...resto, ...extra }; };
 
 test('entrada, saída, reativação e alteração em uma única comparação', () => {
@@ -34,4 +34,9 @@ test('movimento mensal em % sobre os ativos', () => {
   const cadastro = Array.from({ length: 10 }, (_, i) => c(String(i + 1)));
   const nova = [...cadastro.slice(1).map((x) => r(x.matricula)), r('99')];
   assert.equal(compararRelacao(nova, cadastro).resumo.movimento_pct, 20);
+});
+
+test('reajuste do saldo inicial na relação do RH aparece como alteração', () => {
+  const d = compararRelacao([r('1', { saldo_inicial_centavos: 33000 })], [c('1')]);
+  assert.deepEqual(d.alteracoes.map((a) => [a.campo, a.de, a.para]), [['saldo_inicial_centavos', 30000, 33000]]);
 });

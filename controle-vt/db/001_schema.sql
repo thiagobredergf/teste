@@ -47,6 +47,7 @@ create table beneficio (
   servidor_id                 uuid not null references servidor(id),
   valor_diario_centavos       integer not null check (valor_diario_centavos > 0),
   dias_semana                 smallint not null check (dias_semana between 1 and 7),
+  saldo_inicial_centavos      integer check (saldo_inicial_centavos >= 0),        -- vem na relação do RH; base do limite de saldo; nunca deduzido do histórico
   desconto_referencia_centavos integer check (desconto_referencia_centavos >= 0), -- informado pela folha (6%); política aguarda o jurídico
   vigente_de                  date not null,
   vigente_ate                 date,
@@ -132,6 +133,15 @@ create table ocorrencia_ponto (
 );
 create index ocorrencia_competencia on ocorrencia_ponto (competencia_id, servidor_id);
 
+-- perfis de importação: formato do arquivo e mapa de colunas, definidos uma vez pelo operador
+create table importacao_perfil (
+  id      uuid primary key default gen_random_uuid(),
+  nome    text not null unique,
+  tipo    text not null check (tipo in ('saldo', 'relacao_rh', 'ponto')),
+  formato jsonb not null,
+  mapa    jsonb not null
+);
+
 -- ---------------------------------------------------------------- saldo
 create table importacao (
   id                 uuid primary key default gen_random_uuid(),
@@ -178,8 +188,8 @@ insert into parametro (chave, valor, descricao) values
   ('saldo_max_idade_dias', '45',             'saldo mais antigo que isso (contado até o crédito) é ignorado e sinalizado'),
   ('recarga_minima_centavos', '0',           'repasse positivo abaixo disso é elevado ao mínimo (0 = sem mínimo)'),
   ('recarga_multiplo_centavos', '1',         'arredonda o repasse para cima a múltiplos deste valor'),
-  ('saldo_alto_multiplo',  '3',              'política administrativa do RH (sem norma, não rígida): alerta se saldo projetado > N × direito (null = sem alerta)'),
-  ('saldo_alto_desbloqueio_multiplo', '1',    'HIPÓTESE A CONFIRMAR: suspensão por saldo alto é revista quando o saldo projetado cai a N × direito ou menos'),
+  ('saldo_alto_multiplo',  '3',              'política administrativa do RH (sem norma, não rígida): alerta se saldo projetado > N × saldo inicial da relação (null = sem alerta)'),
+  ('saldo_alto_desbloqueio_multiplo', '1',    'regra do RH: suspensão por saldo alto é revista quando o saldo projetado cai a N × saldo inicial ou menos (N = 1: limite mínimo)'),
   ('politica_desconto_folha', '"pendente_juridico"', 'direito_cheio | proporcional | pendente_juridico');
 
 -- ---------------------------------------------------------------- cálculo e fechamento

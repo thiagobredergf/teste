@@ -18,6 +18,9 @@ Registro das respostas do RH e do que cada uma implica no sistema.
 | 12 | Natureza do limite de 3× | Não é norma: política administrativa, **não rígida**, sujeita a futura regulamentação | Parâmetro ajustável + alerta que o operador pode **aceitar com justificativa** (`alerta_aceito`). Os parâmetros usados ficam gravados em cada fechamento (`fechamento.parametros_usados`), então regulamentar depois não reescreve meses fechados. |
 | 13 | Saída da relação | Em geral a pessoa **não sai da relação**, salvo desligamento ou desistência de descontar; o saldo permanece no cartão (o benefício é calculado antes da folha, não há como retirar depois) | Separar **adesão** (estar na relação) de **elegibilidade à recarga** (suspensão por saldo alto, licença, bloqueio a pedido). O saldo residual de quem saiu é só informativo, sem rotina de recolhimento. |
 | 14 | Layout dos relatórios | Relatório do RH em PDF e TXT, colunas não conhecidas | Leitor de TXT configurável (delimitado ou posicional) com mapa de colunas guardado como perfil (`core/mapeamento.mjs`). O PDF depende de amostra. |
+| 15 | Retorno da suspensão por saldo alto | Quando o saldo atinge o limite mínimo, que é a recarga inicial (não o valor do 1º lançamento, que pode sofrer reajuste) | Regra confirmada (`saldo_alto_desbloqueio_multiplo = 1`) sobre o **saldo inicial** da relação. O saldo inicial nunca é deduzido do histórico de recargas. |
+| 16 | Saldo inicial | Vem na relação do RH, por servidor | Campo `beneficio.saldo_inicial_centavos`. É a base do limite de 3× e do retorno. Reajuste aparece como alteração na comparação mensal. **Corrige** a base que o motor usava (direito mensal). |
+| 17 | Formato de entrada | TXT por vírgula, até haver amostras | Ver `layouts-txt.md`. Vírgula decimal sem aspas é rejeitada com aviso. |
 
 ### Suspensões: o que a planilha chama de "exclusão"
 
@@ -40,7 +43,9 @@ atual, ou "saldo inicial" não significa o direito mensal. Precisa ser esclareci
 - **C.** Feriados municipais da competência (entram no cálculo de consumo estimado).
 - **D.** A concessionária tem recarga mínima ou múltiplo obrigatório? Há teto de saldo no cartão?
 - **E.** Dá para pedir a concessionária uma segunda leitura de saldo perto do crédito (por exemplo, 3 dias antes)? Isso elimina a estimativa de consumo.
-- **F.** (parcialmente respondida: limite é administrativo e flexível) "Saldo inicial" é o direito mensal, a primeira recarga na adesão ou outro valor? Por ora o motor usa o direito mensal.
-- **F2.** Quando um servidor suspenso por saldo alto volta a ser recarregado? Hipótese em uso: quando o saldo projetado cai a 1× o direito ou menos (`saldo_alto_desbloqueio_multiplo`). Confirmar com o RH.
+- ~~F.~~ Respondida: o saldo inicial vem na relação do RH.
+- ~~F2.~~ Respondida: retorno quando o saldo atinge o saldo inicial.
 - ~~G.~~ Respondida: o saldo fica no cartão e não é recolhido.
-- **H.** O relatório do RH que traz o desconto vem em PDF ou TXT, com quais colunas (matrícula, valor diário, dias por semana, desconto, unidade)?
+- ~~H.~~ Parcial: vem em PDF e TXT, por vírgula. Colunas ainda desconhecidas (ver `layouts-txt.md`).
+- **I.** O número do cartão vem na relação do RH? O saldo da Global Mob vem por cartão, sem matrícula; se a relação não traz o cartão, o vínculo cartão ↔ servidor precisa ser mantido na ferramenta (novo cartão, troca por perda).
+- **J.** Como o valor em dinheiro aparece nos TXT (ex.: `16,70` entre aspas, `16.70`, `1670` em centavos)?

@@ -11,6 +11,7 @@ Projeto independente. Documentação em `docs/`:
 
 - `diagnostico-e-proposta.md` — problema, evidências e proposta
 - `decisoes.md` — respostas do RH, implicações e perguntas abertas
+- `layouts-txt.md` — layout provisório dos TXT de entrada
 - `arquitetura.md` — ferramenta local de arquivo único (decisão, prova de viabilidade, regras)
 
 ## Estrutura
