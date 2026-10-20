@@ -79,11 +79,10 @@ test('suspenso, sem benefício, sem cartão e dias zerados não geram repasse', 
   assert.ok(calcularRepasse({ ...base, ocorrencias: [{ tipo: 'licenca_medica', dias: 30 }] }).sinalizadores.includes('DIAS_ZERADOS'));
 });
 
-test('mínimo, múltiplo e teto', () => {
+test('mínimo e múltiplo da recarga', () => {
   const s = { saldo: { valor_centavos: 30000, lido_em: '2026-10-14T18:00' } };
   assert.equal(calcularRepasse({ ...base, ...s }, { recarga_multiplo_centavos: 500 }).repasse_centavos, 20500);
   assert.equal(calcularRepasse({ ...base, ...s, diasBase: 7 }, { recarga_minima_centavos: 5000 }).repasse_centavos, 5000);
-  assert.ok(calcularRepasse({ ...base, ...s }, { teto_cartao_centavos: 20000 }).sinalizadores.includes('ACIMA_DO_TETO'));
 });
 
 test('lê os formatos sujos de saldo da planilha legada', () => {
@@ -109,4 +108,16 @@ test('importação de saldo: aceita linhas boas e rejeita com motivo', () => {
   assert.deepEqual(r.rejeitadas.map((x) => x.motivo), [
     'número de cartão inválido', 'valor inválido', 'data/hora inválida (use AAAA-MM-DDTHH:MM)', 'cartão repetido na mesma leitura',
   ]);
+});
+
+test('saldo alto: alerta acima de 3× o direito, sem alterar o repasse', () => {
+  // direito 317,30 → limite 951,90
+  const lido = '2026-10-14T18:00';
+  const acima = calcularRepasse({ ...base, saldo: { valor_centavos: 120000, lido_em: lido } });
+  assert.ok(acima.sinalizadores.includes('SALDO_ALTO'));
+  assert.equal(acima.repasse_centavos, 0);
+  const dentro = calcularRepasse({ ...base, saldo: { valor_centavos: 90000, lido_em: lido } });
+  assert.ok(!dentro.sinalizadores.includes('SALDO_ALTO')); // projetado 716,30 < 951,90
+  const semPolitica = calcularRepasse({ ...base, saldo: { valor_centavos: 120000, lido_em: lido } }, { saldo_alto_multiplo: null });
+  assert.ok(!semPolitica.sinalizadores.includes('SALDO_ALTO'));
 });

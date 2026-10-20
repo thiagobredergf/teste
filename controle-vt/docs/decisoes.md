@@ -12,6 +12,16 @@ Registro das respostas do RH e do que cada uma implica no sistema.
 | 6 | Instalação | TI resiste a executáveis | Página HTML única no navegador (ver `arquitetura.md`). |
 | 7 | Arquivos de entrada | RH e Global Mob em PDF ou TXT | Leitura local; prévia com totais de controle antes de gravar. |
 | 8 | Dados pessoais | CPF pode vir mascarado ou ser digitado; licença só como situação e prazo | Campo CPF opcional e editável; licença sem detalhe clínico. |
+| 9 | Origem do desconto e da relação | Um funcionário do RH registra a adesão; o relatório do RH traz o valor descontado; outro funcionário do VT importa a relação e calcula o saldo do mês | A relação mensal é a fonte de quem tem o benefício e de quanto é descontado. O sistema **recebe** o desconto, não o calcula. |
+| 10 | Limite de saldo | Sem norma; política administrativa de até 3× o saldo inicial | Parâmetro `saldo_alto_multiplo = 3`. Gera alerta `SALDO_ALTO`; **não altera o repasse** (o repasse já nunca leva o cartão além do direito). Ver observação abaixo. |
+| 11 | Movimento mensal | Cerca de 10% entram e saem a cada mês | A ferramenta compara a relação do mês com o cadastro e mostra só as mudanças (`core/relacao.mjs`): entradas, saídas, alterações, duplicadas. |
+
+### Observação sobre o limite de 3×
+
+Conferi a política contra a planilha de novembro (131 servidores com saldo e direito válidos). A marca
+"SALDO ALTO" da planilha **não segue 3× o direito mensal**: 23 dos 94 marcados estão abaixo de 3× (o menor em 1,6×)
+e 19 sem marca estão acima. Duas explicações possíveis: a marca é de meses anteriores e não acompanha o saldo
+atual, ou "saldo inicial" não significa o direito mensal. Precisa ser esclarecido (pergunta F).
 
 ## Perguntas ainda abertas
 
@@ -20,3 +30,6 @@ Registro das respostas do RH e do que cada uma implica no sistema.
 - **C.** Feriados municipais da competência (entram no cálculo de consumo estimado).
 - **D.** A concessionária tem recarga mínima ou múltiplo obrigatório? Há teto de saldo no cartão?
 - **E.** Dá para pedir a concessionária uma segunda leitura de saldo perto do crédito (por exemplo, 3 dias antes)? Isso elimina a estimativa de consumo.
+- **F.** "Até 3× o saldo inicial": saldo inicial é o direito mensal do servidor, a primeira recarga na adesão, ou outro valor? O que o RH faz quando passa disso (bloqueio da recarga, suspensão, contato com o servidor)?
+- **G.** Quando alguém sai da relação com saldo no cartão, o saldo fica retido no cartão. Há procedimento de recolhimento ou reaproveitamento? (A planilha registra casos de "saldo reativado".)
+- **H.** O relatório do RH que traz o desconto vem em PDF ou TXT, com quais colunas (matrícula, valor diário, dias por semana, desconto, unidade)?

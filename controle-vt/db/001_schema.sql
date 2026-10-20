@@ -175,7 +175,7 @@ insert into parametro (chave, valor, descricao) values
   ('saldo_max_idade_dias', '45',             'saldo mais antigo que isso (contado até o crédito) é ignorado e sinalizado'),
   ('recarga_minima_centavos', '0',           'repasse positivo abaixo disso é elevado ao mínimo (0 = sem mínimo)'),
   ('recarga_multiplo_centavos', '1',         'arredonda o repasse para cima a múltiplos deste valor'),
-  ('teto_cartao_centavos', 'null',           'se saldo projetado + repasse passar disso, sinaliza (null = sem teto)'),
+  ('saldo_alto_multiplo',  '3',              'política administrativa do RH: alerta se saldo projetado > N × direito (null = sem alerta)'),
   ('politica_desconto_folha', '"pendente_juridico"', 'direito_cheio | proporcional | pendente_juridico');
 
 -- ---------------------------------------------------------------- cálculo e fechamento

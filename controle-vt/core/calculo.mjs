@@ -5,7 +5,7 @@ export const PARAMETROS_PADRAO = {
   saldo_max_idade_dias: 45,
   recarga_minima_centavos: 0,
   recarga_multiplo_centavos: 1,
-  teto_cartao_centavos: null,
+  saldo_alto_multiplo: 3,         // política administrativa do RH: alerta se saldo projetado > N × direito (null = sem alerta)
 };
 
 // dias efetivos = dias base da competência − dias de ocorrências que descontam VT (mínimo 0)
@@ -91,7 +91,9 @@ export function calcularRepasse(entrada, parametros = {}) {
     if (repasse < p.recarga_minima_centavos) repasse = p.recarga_minima_centavos;
     repasse = arredondarParaCima(repasse, p.recarga_multiplo_centavos);
   }
-  if (p.teto_cartao_centavos != null && saldoProjetado + repasse > p.teto_cartao_centavos) sinal.push('ACIMA_DO_TETO');
+  // O repasse complementar nunca leva o cartão além do direito, então o limite de N× não altera o valor:
+  // ele só dispara o alerta de acúmulo (candidato a bloqueio/investigação pelo RH).
+  if (p.saldo_alto_multiplo != null && saldoProjetado > p.saldo_alto_multiplo * direito) sinal.push('SALDO_ALTO');
   base.repasse_centavos = repasse;
   return pronto(regra);
 }
