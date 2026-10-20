@@ -1,0 +1,12 @@
+{
+  "name": "controle-vt-app",
+  "private": true,
+  "type": "module",
+  "description": "Protótipo: página HTML única, offline, com SQLite e leitura de PDF dentro do navegador",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node build.mjs && node e2e/e2e.mjs"
+  },
+  "dependencies": { "sql.js": "1.12.0", "pdfjs-dist": "3.11.174" },
+  "devDependencies": { "esbuild": "0.24.0", "playwright-core": "1.49.0" }
+}

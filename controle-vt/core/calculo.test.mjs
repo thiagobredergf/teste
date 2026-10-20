@@ -141,3 +141,23 @@ test('desconto em folha: só sinaliza, não altera o repasse (política aguarda 
   const sem = calcularRepasse({ ...base, beneficio: { valor_diario_centavos: 1670, dias_semana: 5, saldo_inicial_centavos: 30000 } });
   assert.ok(sem.sinalizadores.includes('SEM_DESCONTO_INFORMADO'));
 });
+
+test('RECARGAS da Global Mob: ignorar (padrão) ou somar ao saldo, sempre sinalizando', () => {
+  const saldo = { valor_centavos: 10000, recargas_centavos: 20000, lido_em: '2026-10-14T18:00' };
+  const ign = calcularRepasse({ ...base, saldo });
+  assert.ok(ign.sinalizadores.includes('RECARGA_PENDENTE_NA_GLOBALMOB'));
+  assert.equal(ign.recargas_centavos, 20000);
+  assert.equal(ign.saldo_projetado_centavos, 0);          // 100,00 − consumo estimado 183,70, limitado ao saldo
+  assert.equal(ign.repasse_centavos, 31730);
+  const som = calcularRepasse({ ...base, saldo }, { recargas_modo: 'somar' });
+  assert.equal(som.saldo_projetado_centavos, 30000 - 18370);
+  assert.equal(som.repasse_centavos, 31730 - 11630);
+});
+
+test('saldo negativo no cartão: a recarga cobre o débito além do direito, e isso é sinalizado', () => {
+  const r = calcularRepasse({ ...base, saldo: { valor_centavos: -430, lido_em: '2026-10-14T18:00' } });
+  assert.equal(r.consumo_estimado_centavos, 0);
+  assert.equal(r.saldo_projetado_centavos, -430);
+  assert.equal(r.repasse_centavos, 31730 + 430);
+  assert.ok(r.sinalizadores.includes('SALDO_NEGATIVO'));
+});

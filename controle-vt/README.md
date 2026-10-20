@@ -20,6 +20,7 @@ Projeto independente. Documentação em `docs/`:
 | Pasta | Conteúdo |
 |---|---|
 | `db/001_schema.sql` | Esquema PostgreSQL (referência de modelo; a versão final será SQLite): cadastro permanente, eventos, competência, ocorrências do ponto, saldos, cálculo, fechamento imutável, auditoria |
+| `app/` | **Protótipo**: página HTML única, offline. Veja `app/LEIA-ME.md` (roteiro de teste) |
 | `spike/` | Prova de viabilidade (SQLite + PDF + cifra em HTML único): `cd spike && npm i && npm test` |
 | `core/` | Motor de cálculo e importação de saldo, em JavaScript puro, sem dependências |
 
@@ -40,5 +41,5 @@ createdb vt && psql vt -f db/001_schema.sql   # PostgreSQL 15+ (precisa de pgcry
 
 ## Estado
 
-Pronto: esquema, motor de cálculo, importação de saldo (formato canônico), testes.
-Falta: adaptador do TXT/PDF da concessionária (aguarda amostra), importação de ponto e cadastro, telas, exportações (recarga, folha, cadastro RH), perfis de acesso (RLS) conforme a hospedagem.
+Pronto: motor de cálculo, leitura do PDF da Global Mob, cruzamento por CPF, comparação da relação do RH, calendário e regras editáveis, protótipo offline (`app/`) com 22 verificações de ponta a ponta.
+Falta: layouts reais de exportação (recarga, folha, cadastro RH), leitura do PDF do RH, formulário com QR Code, teste com a relação real do RH.

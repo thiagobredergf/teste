@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Controle de Vale-Transporte</title>
+<style>/*ESTILOS*/</style>
+</head>
+<body>
+<header class="topo">
+  <h1>Controle de Vale-Transporte <small>protótipo</small></h1>
+  <div id="estado"></div>
+</header>
+<nav id="abas" class="abas"></nav>
+<main id="conteudo" class="conteudo"><p>Carregando…</p></main>
+<noscript>Esta ferramenta precisa de JavaScript.</noscript>
+<script>/*SQLJS*/</script>
+<script>/*PDFJS*/</script>
+<script type="text/plain" id="pdfworker">/*PDFWORKER*/</script>
+<script>window.__WASM_B64="/*WASM*/";</script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([document.getElementById('pdfworker').textContent], { type: 'text/javascript' }));
+</script>
+<script>/*APP*/</script>
+</body>
+</html>

@@ -2,7 +2,7 @@
 // O operador não revisa ~570 linhas: revisa só as mudanças (cerca de 10% ao mês).
 //
 // nova:     [{ matricula, nome, valor_diario_centavos, dias_semana, cartao, desconto_centavos, unidade }]
-// cadastro: [{ matricula, situacao: 'ativo'|'suspenso'|'cancelado', ...mesmos campos }]
+// cadastro: [{ matricula, situacao: 'ativo'|'suspenso'|'cancelado'  (suspenso continua na relação do RH), ...mesmos campos }]
 const CAMPOS = ['valor_diario_centavos', 'dias_semana', 'saldo_inicial_centavos', 'cartao', 'desconto_centavos', 'unidade'];
 const chave = (m) => String(m ?? '').trim();
 
@@ -22,19 +22,19 @@ export function compararRelacao(nova, cadastro) {
   for (const [mat, r] of novaMap) {
     const c = cadMap.get(mat);
     if (!c) entradas.push({ matricula: mat, nome: r.nome, evento_sugerido: 'inclusao' });
-    else if (c.situacao !== 'ativo') entradas.push({ matricula: mat, nome: r.nome, evento_sugerido: 'reativacao', situacao_anterior: c.situacao });
+    else if (c.situacao === 'cancelado') entradas.push({ matricula: mat, nome: r.nome, evento_sugerido: 'reativacao', situacao_anterior: c.situacao }); // suspenso continua na relação: não é entrada
     else {
       const difs = CAMPOS.filter((k) => r[k] !== undefined && (r[k] ?? null) !== (c[k] ?? null));
       if (difs.length) for (const campo of difs) alteracoes.push({ matricula: mat, nome: r.nome ?? c.nome, campo, de: c[campo] ?? null, para: r[campo] });
       else inalterados++;
     }
   }
-  // Quem estava ativo e sumiu da relação: o motivo (cancelamento, licença, saldo alto…) é o operador quem classifica.
+  // Quem não estava cancelado e sumiu da relação (ativo ou suspenso): o motivo é o operador quem classifica.
   const saidas = cadastro
-    .filter((c) => c.situacao === 'ativo' && !novaMap.has(chave(c.matricula)) && !duplicadasSet.has(chave(c.matricula)))
+    .filter((c) => c.situacao !== 'cancelado' && !novaMap.has(chave(c.matricula)) && !duplicadasSet.has(chave(c.matricula)))
     .map((c) => ({ matricula: chave(c.matricula), nome: c.nome, evento_sugerido: 'a_classificar' }));
 
-  const base = cadastro.filter((c) => c.situacao === 'ativo').length;
+  const base = cadastro.filter((c) => c.situacao !== 'cancelado').length;
   return {
     entradas, saidas, alteracoes, duplicadas, semMatricula, inalterados,
     resumo: { na_relacao: nova.length, ativos_no_cadastro: base, entradas: entradas.length, saidas: saidas.length,

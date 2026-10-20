@@ -4,7 +4,7 @@ import { normalizarCpf } from './identificadores.mjs';
 // presente nas duas fontes. O status MIGRADO/AGUARDANDO é interno da Global Mob: aqui só importa se o cartão está ATIVO.
 //
 // servidores: [{ matricula, cpf, cartao }]   cartao = chave canônica do cadastro (ou null)
-// cartoesGM:  [{ cpf, cartao, status, saldo_centavos, recargas_centavos }]   (saída de extrairSaldoGlobalMob)
+// cartoesGM:  [{ cpf, cartao, status, saldo_centavos, recargas_centavos, lido_em? }]   (saída de extrairSaldoGlobalMob)
 export function cruzarSaldos(servidores, cartoesGM) {
   const porCartao = new Map(cartoesGM.map((c) => [c.cartao, c]));
   const porCpf = new Map();
@@ -34,7 +34,7 @@ export function cruzarSaldos(servidores, cartoesGM) {
     }
     return {
       matricula: s.matricula, cartao_usado: usado?.cartao ?? null, saldo_centavos: usado?.saldo_centavos ?? null,
-      recargas_centavos: usado?.recargas_centavos ?? null, cartao_sugerido: sugerido, flags,
+      recargas_centavos: usado?.recargas_centavos ?? null, lido_em: usado?.lido_em ?? null, cartao_sugerido: sugerido, flags,
     };
   });
 

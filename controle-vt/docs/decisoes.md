@@ -27,6 +27,9 @@ Registro das respostas do RH e do que cada uma implica no sistema.
 | 21 | Desconto | Coluna "Desconto" vem do relatório do RH (6% do salário); o RH ainda verifica se vem calculado | Posição: **pedir o valor já calculado**, sem salário. A ferramenta não guarda salário e não duplica a regra da folha. Casos em que a recarga é menor que o desconto são sinalizados para decisão do operador (`desconto_decisao`); a política aguarda o jurídico. |
 | 22 | Calendário letivo | Único para todos os cargos; varia a quantidade de dias trabalhados | Calendário único (`ano_letivo`, `feriado`). Dias por semana: padrão por cargo (`cargo_regra`), exceção por servidor, docente sem padrão. |
 | 23 | Coluna sem título da planilha (D) | É o saldo do cartão já registrado no RH, com a data da atualização do crédito | Substituída pelo histórico de saldos (`saldo_cartao`), que nunca sobrescreve. A **data é automática**: a do momento da edição; na importação do PDF, a proposta é a do nome do arquivo. |
+| 24 | Regra dos dias por semana | Pode ser editável: criar a regra, cadastrar os cargos e o usuário do VT edita os dias | Aceito, em três níveis: **padrão por cargo** (editável), **dias do servidor** (vêm da relação do RH ou são informados) e **tabela de dias do mês** (editável). Toda edição vai para o histórico e a tabela é validada (valor maior que o mês, ordem invertida). |
+| 25 | Desconto | O relatório do RH trará o valor já calculado | Confirmado. A ferramenta não guarda salário. |
+| 26 | Protótipo (MVP) | Para o usuário do VT testar e contestar | Construído (`app/`): arquivo único offline, com contestação registrada por servidor. Ver `app/LEIA-ME.md`. |
 
 ### Regra dos dias por semana (em aberto)
 
@@ -67,4 +70,5 @@ atual, ou "saldo inicial" não significa o direito mensal. Precisa ser esclareci
 - ~~L.~~ Respondida: o CPF vem completo.
 - ~~M.~~ Respondida: é informação interna da Global Mob.
 - **N.** Qual é a regra do RH para os dias de quem trabalha 4, 3 ou 2 dias por semana? Envie as tabelas "Dias Letivos" de outros meses (de preferência um mês de 30 dias e um com mais feriados) para testar se `4×N + 1` se sustenta.
-- **O.** O relatório do RH traz o desconto já calculado ou o salário?
+- ~~O.~~ Respondida: o desconto vem calculado.
+- **P.** (do protótipo) Qual o layout do arquivo de recarga aceito pela Global Mob e do arquivo de desconto aceito pela folha? Hoje as exportações são CSV provisórios.

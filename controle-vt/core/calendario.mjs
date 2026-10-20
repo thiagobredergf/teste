@@ -25,3 +25,18 @@ export function tabelaDiasPorSemana(base5, regra = { tipo: 'proporcional' }) {
 export function compararTabelas(calculada, informada) {
   return Object.keys(informada).filter((n) => calculada[n] !== informada[n]).map((n) => ({ dias_semana: Number(n), calculado: calculada[n], informado: informada[n] }));
 }
+
+// A tabela é editável pelo operador; a validação pega digitação errada antes de ela virar repasse.
+export function validarTabelaDias(tabela, base5, diasNoMes) {
+  const msgs = [];
+  const ns = [1, 2, 3, 4, 5];
+  for (const n of ns) {
+    const v = tabela[n];
+    if (!Number.isInteger(v) || v < 0) msgs.push({ nivel: 'erro', texto: `${n} dia(s)/semana: informe um número inteiro maior ou igual a zero` });
+    else if (v > diasNoMes) msgs.push({ nivel: 'erro', texto: `${n} dia(s)/semana: ${v} dias é mais do que o mês tem (${diasNoMes})` });
+  }
+  if (msgs.some((m) => m.nivel === 'erro')) return msgs;
+  for (const n of [1, 2, 3, 4]) if (tabela[n] > tabela[n + 1]) msgs.push({ nivel: 'erro', texto: `${n} dia(s)/semana (${tabela[n]}) não pode ter mais dias que ${n + 1} dia(s)/semana (${tabela[n + 1]})` });
+  if (tabela[5] !== base5) msgs.push({ nivel: 'aviso', texto: `5 dias/semana = ${tabela[5]}, mas o calendário (seg-sex menos feriados) dá ${base5}` });
+  return msgs;
+}

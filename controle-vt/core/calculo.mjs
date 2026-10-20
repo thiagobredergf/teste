@@ -5,6 +5,7 @@ export const PARAMETROS_PADRAO = {
   saldo_max_idade_dias: 45,
   recarga_minima_centavos: 0,
   recarga_multiplo_centavos: 1,
+  recargas_modo: 'ignorar',       // coluna RECARGAS da Global Mob: 'ignorar' | 'somar' (se for crédito lançado e ainda não disponível). Significado a confirmar.
   saldo_alto_multiplo: 3,         // política administrativa do RH: alerta se saldo projetado > N × saldo inicial (null = sem alerta)
 };
 
@@ -25,7 +26,7 @@ export function estimarConsumo({ saldoCentavos, lidoEm, dataCredito, valorDiario
   if (modo === 'nenhum') return 0;
   const diasUteis = diasUteisEntre(lidoEm.slice(0, 10), dataCredito, feriados);
   const consumo = Math.round((diasUteis * valorDiarioCentavos * diasSemana) / 5);
-  return Math.min(consumo, saldoCentavos);
+  return Math.max(0, Math.min(consumo, saldoCentavos)); // saldo negativo: nada a consumir; o débito entra no repasse
 }
 
 const arredondarParaCima = (valor, multiplo) => (multiplo > 1 ? Math.ceil(valor / multiplo) * multiplo : valor);
@@ -33,14 +34,14 @@ const arredondarParaCima = (valor, multiplo) => (multiplo > 1 ? Math.ceil(valor 
 /**
  * Calcula o repasse de um servidor em uma competência.
  * entrada: { situacao, cartao: {status}|null, beneficio: {valor_diario_centavos, dias_semana, saldo_inicial_centavos, desconto_centavos}|null,
- *            diasBase, ocorrencias, regras, saldo: {valor_centavos, lido_em}|null, dataCredito, feriados }
+ *            diasBase, ocorrencias, regras, saldo: {valor_centavos, recargas_centavos, lido_em}|null, dataCredito, feriados }
  */
 export function calcularRepasse(entrada, parametros = {}) {
   const p = { ...PARAMETROS_PADRAO, ...parametros };
   const { situacao, cartao, beneficio, diasBase, ocorrencias, regras, saldo, dataCredito, feriados } = entrada;
   const sinal = [];
   const base = {
-    valor_diario_centavos: null, dias_base: diasBase ?? null, dias_descontados: null, dias_efetivos: null,
+    valor_diario_centavos: null, recargas_centavos: null, dias_base: diasBase ?? null, dias_descontados: null, dias_efetivos: null,
     direito_centavos: 0, saldo_lido_centavos: null, saldo_lido_em: null, consumo_estimado_centavos: null,
     saldo_projetado_centavos: null, repasse_centavos: 0, desconto_centavos: null,
   };
@@ -68,18 +69,22 @@ export function calcularRepasse(entrada, parametros = {}) {
   } else {
     base.saldo_lido_centavos = saldo.valor_centavos;
     base.saldo_lido_em = saldo.lido_em;
+    base.recargas_centavos = saldo.recargas_centavos ?? 0;
+    if (base.recargas_centavos > 0) sinal.push('RECARGA_PENDENTE_NA_GLOBALMOB');
+    if (saldo.valor_centavos < 0) sinal.push('SALDO_NEGATIVO'); // a recarga cobre o débito do cartão além do direito do mês
+    const saldoBase = saldo.valor_centavos + (p.recargas_modo === 'somar' ? base.recargas_centavos : 0);
     const idade = diasEntre(saldo.lido_em.slice(0, 10), dataCredito);
     if (idade > p.saldo_max_idade_dias) {
       sinal.push('SALDO_ANTIGO');
       regra = 'direito_cheio_saldo_antigo';
     } else {
       const consumo = estimarConsumo({
-        saldoCentavos: saldo.valor_centavos, lidoEm: saldo.lido_em, dataCredito,
+        saldoCentavos: saldoBase, lidoEm: saldo.lido_em, dataCredito,
         valorDiarioCentavos: beneficio.valor_diario_centavos, diasSemana: beneficio.dias_semana,
         modo: p.projecao_modo, feriados,
       });
       base.consumo_estimado_centavos = consumo;
-      saldoProjetado = saldo.valor_centavos - consumo;
+      saldoProjetado = saldoBase - consumo;
       base.saldo_projetado_centavos = saldoProjetado;
       regra = p.projecao_modo === 'nenhum' ? 'direito_menos_saldo_lido' : 'direito_menos_saldo_projetado';
     }
