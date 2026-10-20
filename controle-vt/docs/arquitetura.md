@@ -49,12 +49,14 @@ Abrindo `spike.html` por `file://` no Chromium, sem rede:
 
 1. O RH registra as adesões e gera o **relatório de beneficiários** (com o valor descontado). O operador do VT recebe o arquivo.
 2. **Recepção:** o operador carrega a relação do RH e o saldo da Global Mob.
-3. **Comparação:** a ferramenta compara a relação com o cadastro e mostra só as mudanças (cerca de 10% ao mês):
-   entradas (inclusão ou reativação), saídas a classificar, alterações de valor/dias/cartão/desconto, matrículas duplicadas.
-   O operador confirma cada mudança; as confirmadas viram eventos no histórico.
+3. **Comparação:** a ferramenta compara a relação com o cadastro e mostra só as mudanças: entradas (inclusão ou
+   reativação), saídas a classificar (desligamento, desistência), alterações de valor/dias/cartão/desconto, matrículas
+   duplicadas. O operador confirma cada mudança; as confirmadas viram eventos no histórico. Quem está na relação mas
+   suspenso (saldo alto, licença, bloqueio a pedido) **não aparece como saída**: é revisado na etapa de suspensões.
 4. **Ponto e calendário:** lança ocorrências (faltas, licenças, férias) e confere a tabela de dias do mês.
-5. **Cálculo:** direito − saldo projetado = repasse, com alertas (sem cartão, saldo antigo, saldo alto).
-6. **Fechamento:** congela o mês e gera os relatórios de saída.
+5. **Suspensões:** a ferramenta lista licenças com prazo vencido ou sem prazo e suspensões por saldo alto que podem ser reativadas.
+6. **Cálculo:** direito − saldo projetado = repasse, com alertas (sem cartão, saldo antigo, saldo alto).
+7. **Fechamento:** congela o mês e gera os relatórios de saída.
 
 O desconto em folha vem do relatório do RH e é apenas carregado; o sistema não o calcula.
 

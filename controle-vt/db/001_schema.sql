@@ -61,7 +61,10 @@ create table evento (
   tipo        text not null check (tipo in
               ('inclusao', 'suspensao', 'reativacao', 'cancelamento', 'bloqueio_cartao', 'desbloqueio_cartao', 'observacao')),
   data_efeito date not null,
-  motivo      text not null,            -- ex.: saldo alto, licença médica, pedido do servidor
+  motivo_tipo text not null check (motivo_tipo in
+              ('adesao', 'saldo_alto', 'licenca_medica', 'licenca_premio', 'bloqueio_solicitado', 'desligamento', 'desistencia', 'retorno', 'outro')),
+  ate         date,                     -- fim previsto da suspensão (ex.: prazo da licença); null = sem prazo
+  motivo      text,                     -- detalhe livre; nunca diagnóstico de saúde
   origem      text,                     -- e-mail, formulário, processo nº…
   criado_por  uuid references usuario(id),
   criado_em   timestamptz not null default now()
@@ -175,7 +178,8 @@ insert into parametro (chave, valor, descricao) values
   ('saldo_max_idade_dias', '45',             'saldo mais antigo que isso (contado até o crédito) é ignorado e sinalizado'),
   ('recarga_minima_centavos', '0',           'repasse positivo abaixo disso é elevado ao mínimo (0 = sem mínimo)'),
   ('recarga_multiplo_centavos', '1',         'arredonda o repasse para cima a múltiplos deste valor'),
-  ('saldo_alto_multiplo',  '3',              'política administrativa do RH: alerta se saldo projetado > N × direito (null = sem alerta)'),
+  ('saldo_alto_multiplo',  '3',              'política administrativa do RH (sem norma, não rígida): alerta se saldo projetado > N × direito (null = sem alerta)'),
+  ('saldo_alto_desbloqueio_multiplo', '1',    'HIPÓTESE A CONFIRMAR: suspensão por saldo alto é revista quando o saldo projetado cai a N × direito ou menos'),
   ('politica_desconto_folha', '"pendente_juridico"', 'direito_cheio | proporcional | pendente_juridico');
 
 -- ---------------------------------------------------------------- cálculo e fechamento
@@ -207,7 +211,20 @@ create table fechamento (
   n_servidores    integer not null,
   total_direito   bigint not null,
   total_repasse   bigint not null,
-  hash_conteudo   text not null          -- hash do conjunto de cálculos no momento do fechamento
+  hash_conteudo   text not null,         -- hash do conjunto de cálculos no momento do fechamento
+  parametros_usados jsonb not null       -- parâmetros vigentes no cálculo: mudar a regra depois não reescreve o passado
+);
+
+-- o limite de saldo não é rígido: o operador pode aceitar um alerta, com justificativa registrada
+create table alerta_aceito (
+  id             uuid primary key default gen_random_uuid(),
+  competencia_id uuid not null references competencia(id),
+  servidor_id    uuid not null references servidor(id),
+  sinalizador    text not null,
+  justificativa  text not null check (length(trim(justificativa)) > 0),
+  criado_por     uuid references usuario(id),
+  criado_em      timestamptz not null default now(),
+  unique (competencia_id, servidor_id, sinalizador)
 );
 
 -- cálculo de competência fechada é imutável
@@ -257,4 +274,5 @@ create trigger audit_evento      after insert or update or delete on evento     
 create trigger audit_ocorrencia  after insert or update or delete on ocorrencia_ponto for each row execute function auditar();
 create trigger audit_parametro   after insert or update or delete on parametro        for each row execute function auditar();
 create trigger audit_competencia after insert or update or delete on competencia      for each row execute function auditar();
+create trigger audit_alerta      after insert or update or delete on alerta_aceito    for each row execute function auditar();
 create trigger audit_fechamento  after insert or update or delete on fechamento       for each row execute function auditar();

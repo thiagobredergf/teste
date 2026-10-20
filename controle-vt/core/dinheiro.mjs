@@ -4,6 +4,8 @@
 export function parseValorBR(texto) {
   if (typeof texto === 'number') return { centavos: Math.round(texto * 100), data: null };
   if (typeof texto !== 'string') return null;
+  const ponto = texto.trim().match(/^R?\$?\s*(\d+)\.(\d{1,2})$/); // "16.70" (ponto decimal); "1.030" continua sendo milhar
+  if (ponto) return { centavos: Number(ponto[1]) * 100 + Number(ponto[2].padEnd(2, '0')), data: null };
   const m = texto.replace(/\s+/g, ' ').trim().match(/^R?\$?\s*(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d{1,2}))?\s*(?:-\s*(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?))?$/);
   if (!m) return null;
   const inteiro = Number(m[1].replace(/\./g, ''));

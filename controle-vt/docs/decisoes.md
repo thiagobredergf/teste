@@ -15,6 +15,16 @@ Registro das respostas do RH e do que cada uma implica no sistema.
 | 9 | Origem do desconto e da relação | Um funcionário do RH registra a adesão; o relatório do RH traz o valor descontado; outro funcionário do VT importa a relação e calcula o saldo do mês | A relação mensal é a fonte de quem tem o benefício e de quanto é descontado. O sistema **recebe** o desconto, não o calcula. |
 | 10 | Limite de saldo | Sem norma; política administrativa de até 3× o saldo inicial | Parâmetro `saldo_alto_multiplo = 3`. Gera alerta `SALDO_ALTO`; **não altera o repasse** (o repasse já nunca leva o cartão além do direito). Ver observação abaixo. |
 | 11 | Movimento mensal | Cerca de 10% entram e saem a cada mês | A ferramenta compara a relação do mês com o cadastro e mostra só as mudanças (`core/relacao.mjs`): entradas, saídas, alterações, duplicadas. |
+| 12 | Natureza do limite de 3× | Não é norma: política administrativa, **não rígida**, sujeita a futura regulamentação | Parâmetro ajustável + alerta que o operador pode **aceitar com justificativa** (`alerta_aceito`). Os parâmetros usados ficam gravados em cada fechamento (`fechamento.parametros_usados`), então regulamentar depois não reescreve meses fechados. |
+| 13 | Saída da relação | Em geral a pessoa **não sai da relação**, salvo desligamento ou desistência de descontar; o saldo permanece no cartão (o benefício é calculado antes da folha, não há como retirar depois) | Separar **adesão** (estar na relação) de **elegibilidade à recarga** (suspensão por saldo alto, licença, bloqueio a pedido). O saldo residual de quem saiu é só informativo, sem rotina de recolhimento. |
+| 14 | Layout dos relatórios | Relatório do RH em PDF e TXT, colunas não conhecidas | Leitor de TXT configurável (delimitado ou posicional) com mapa de colunas guardado como perfil (`core/mapeamento.mjs`). O PDF depende de amostra. |
+
+### Suspensões: o que a planilha chama de "exclusão"
+
+Das 38 linhas da aba EXCLUSÃO de novembro: **23 saldo alto, 8 licenças (7 médicas, 1 prêmio), 7 bloqueios a pedido do servidor**.
+Ou seja, 31 de 38 são suspensões **derivadas de dado** (saldo e prazo de licença), não saídas da relação. A ferramenta pode
+detectá-las e, principalmente, avisar quando revisar: licença com prazo vencido, licença sem prazo informado e
+saldo alto que voltou ao normal (`core/suspensoes.mjs`).
 
 ### Observação sobre o limite de 3×
 
@@ -30,6 +40,7 @@ atual, ou "saldo inicial" não significa o direito mensal. Precisa ser esclareci
 - **C.** Feriados municipais da competência (entram no cálculo de consumo estimado).
 - **D.** A concessionária tem recarga mínima ou múltiplo obrigatório? Há teto de saldo no cartão?
 - **E.** Dá para pedir a concessionária uma segunda leitura de saldo perto do crédito (por exemplo, 3 dias antes)? Isso elimina a estimativa de consumo.
-- **F.** "Até 3× o saldo inicial": saldo inicial é o direito mensal do servidor, a primeira recarga na adesão, ou outro valor? O que o RH faz quando passa disso (bloqueio da recarga, suspensão, contato com o servidor)?
-- **G.** Quando alguém sai da relação com saldo no cartão, o saldo fica retido no cartão. Há procedimento de recolhimento ou reaproveitamento? (A planilha registra casos de "saldo reativado".)
+- **F.** (parcialmente respondida: limite é administrativo e flexível) "Saldo inicial" é o direito mensal, a primeira recarga na adesão ou outro valor? Por ora o motor usa o direito mensal.
+- **F2.** Quando um servidor suspenso por saldo alto volta a ser recarregado? Hipótese em uso: quando o saldo projetado cai a 1× o direito ou menos (`saldo_alto_desbloqueio_multiplo`). Confirmar com o RH.
+- ~~G.~~ Respondida: o saldo fica no cartão e não é recolhido.
 - **H.** O relatório do RH que traz o desconto vem em PDF ou TXT, com quais colunas (matrícula, valor diário, dias por semana, desconto, unidade)?
