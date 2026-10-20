@@ -9,7 +9,7 @@ const regras = {
   falta: { desconta_vt: true }, licenca_medica: { desconta_vt: true }, ferias: { desconta_vt: true }, abono: { desconta_vt: false },
 };
 const base = {
-  situacao: 'ativo', cartao: { status: 'ativo' }, beneficio: { valor_diario_centavos: 1670, dias_semana: 5, saldo_inicial_centavos: 30000 },
+  situacao: 'ativo', cartao: { status: 'ativo' }, beneficio: { valor_diario_centavos: 1670, dias_semana: 5, saldo_inicial_centavos: 30000, desconto_centavos: 11356 },
   diasBase: 19, ocorrencias: [], regras, saldo: null, dataCredito: '2026-10-30', feriados: [],
 };
 
@@ -126,4 +126,18 @@ test('sem saldo inicial na relação, o alerta não é avaliado e isso é sinali
   const r = calcularRepasse({ ...base, beneficio: { valor_diario_centavos: 1670, dias_semana: 5 }, saldo: { valor_centavos: 120000, lido_em: '2026-10-14T18:00' } });
   assert.ok(r.sinalizadores.includes('SEM_SALDO_INICIAL'));
   assert.ok(!r.sinalizadores.includes('SALDO_ALTO'));
+});
+
+test('desconto em folha: só sinaliza, não altera o repasse (política aguarda o jurídico)', () => {
+  const lido = '2026-10-14T18:00';
+  const semSaldo = calcularRepasse(base);
+  assert.deepEqual(semSaldo.sinalizadores, ['SEM_SALDO']);       // repasse 317,30 ≥ desconto 113,56
+  assert.equal(semSaldo.desconto_centavos, 11356);
+  const saldoAlto = calcularRepasse({ ...base, saldo: { valor_centavos: 57285, lido_em: lido } });
+  assert.equal(saldoAlto.repasse_centavos, 0);
+  assert.ok(saldoAlto.sinalizadores.includes('DESCONTO_ACIMA_DA_RECARGA'));
+  const acima = calcularRepasse({ ...base, beneficio: { ...base.beneficio, desconto_centavos: 40000 } });
+  assert.ok(acima.sinalizadores.includes('DESCONTO_ACIMA_DO_DIREITO'));
+  const sem = calcularRepasse({ ...base, beneficio: { valor_diario_centavos: 1670, dias_semana: 5, saldo_inicial_centavos: 30000 } });
+  assert.ok(sem.sinalizadores.includes('SEM_DESCONTO_INFORMADO'));
 });

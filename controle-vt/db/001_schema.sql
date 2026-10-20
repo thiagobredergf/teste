@@ -99,6 +99,23 @@ create table competencia (
   unique (ano, mes)
 );
 
+-- ano letivo e feriados: um único calendário para todos os cargos
+create table ano_letivo (
+  ano    smallint primary key,
+  inicio date not null,
+  fim    date not null check (fim > inicio)
+);
+create table feriado (
+  data      date primary key,
+  descricao text not null
+);
+
+-- dias por semana padrão de cada cargo; null = sem padrão (ex.: docente), precisa ser informado por servidor
+create table cargo_regra (
+  cargo       text primary key,
+  dias_semana smallint check (dias_semana between 1 and 7)
+);
+
 -- substitui a aba "Dias Letivos": dias base da competência por nº de dias/semana
 create table calendario_dias (
   competencia_id uuid not null references competencia(id) on delete cascade,
@@ -210,6 +227,8 @@ create table calculo (
   consumo_estimado_centavos  integer,
   saldo_projetado_centavos   integer,
   repasse_centavos           integer not null check (repasse_centavos >= 0),
+  desconto_centavos          integer,                 -- vem pronto no relatório do RH (6% do vencimento)
+  desconto_decisao           text check (desconto_decisao in ('descontar', 'nao_descontar')), -- decisão do operador onde a recarga é menor que o desconto; null = pendente
   regra_aplicada             text not null,
   sinalizadores              text[] not null default '{}',
   unique (competencia_id, servidor_id)

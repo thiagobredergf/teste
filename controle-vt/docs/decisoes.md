@@ -22,6 +22,19 @@ Registro das respostas do RH e do que cada uma implica no sistema.
 | 16 | Saldo inicial | Vem na relação do RH, por servidor | Campo `beneficio.saldo_inicial_centavos`. É a base do limite de 3× e do retorno. Reajuste aparece como alteração na comparação mensal. **Corrige** a base que o motor usava (direito mensal). |
 | 18 | Entrada do saldo | PDF real da Global Mob (texto, 78 páginas) | Lido por `core/pdfsaldo.mjs`, conferido pelo TOTAL impresso. Ver `amostra-globalmob.md`. |
 | 17 | Formato de entrada | TXT por vírgula, até haver amostras | Ver `layouts-txt.md`. Vírgula decimal sem aspas é rejeitada com aviso. |
+| 19 | Status MIGRADO/AGUARDANDO | Informação interna da Global Mob, irrelevante ao analista do VT | Tratado como técnico: só o cartão **ATIVO** é usado. Se o cartão do cadastro não estiver ativo, a ferramenta sugere o ativo do mesmo CPF. Pessoa com dois cartões ativos vai para conferência. |
+| 20 | CPF na relação do RH | Vem completo | CPF é a **chave do cruzamento** RH × Global Mob (`core/cruzamento.mjs`). Cartão de outra pessoa nunca tem o saldo usado. |
+| 21 | Desconto | Coluna "Desconto" vem do relatório do RH (6% do salário); o RH ainda verifica se vem calculado | Posição: **pedir o valor já calculado**, sem salário. A ferramenta não guarda salário e não duplica a regra da folha. Casos em que a recarga é menor que o desconto são sinalizados para decisão do operador (`desconto_decisao`); a política aguarda o jurídico. |
+| 22 | Calendário letivo | Único para todos os cargos; varia a quantidade de dias trabalhados | Calendário único (`ano_letivo`, `feriado`). Dias por semana: padrão por cargo (`cargo_regra`), exceção por servidor, docente sem padrão. |
+| 23 | Coluna sem título da planilha (D) | É o saldo do cartão já registrado no RH, com a data da atualização do crédito | Substituída pelo histórico de saldos (`saldo_cartao`), que nunca sobrescreve. A **data é automática**: a do momento da edição; na importação do PDF, a proposta é a do nome do arquivo. |
+
+### Regra dos dias por semana (em aberto)
+
+Com 5 dias por semana, novembro/2026 tem **19 dias = segunda a sexta (21) menos Finados (2/11) e Consciência Negra (20/11)**, e o
+sistema calcula isso (`core/calendario.mjs`). Para 4, 3 e 2 dias por semana a planilha usa **17, 13 e 9**, que **não são
+proporcionais** (a proporção daria 15, 11 e 8). Os três valores coincidem com `4×N + 1`, mas é um único mês: pode ser coincidência.
+Enquanto o RH não informar a regra, a tabela do mês é digitada pelo operador, como hoje, e a ferramenta mostra onde ela diverge
+de uma regra calculada.
 
 ### Suspensões: o que a planilha chama de "exclusão"
 
@@ -51,5 +64,7 @@ atual, ou "saldo inicial" não significa o direito mensal. Precisa ser esclareci
 - **I.** O número do cartão vem na relação do RH? O saldo da Global Mob vem por cartão, sem matrícula; se a relação não traz o cartão, o vínculo cartão ↔ servidor precisa ser mantido na ferramenta (novo cartão, troca por perda).
 - **J.** Como o valor em dinheiro aparece nos TXT (ex.: `16,70` entre aspas, `16.70`, `1670` em centavos)?
 - **K.** No relatório da Global Mob, o que é a coluna RECARGAS? Crédito já lançado e ainda não disponível no cartão? Se for, o saldo disponível é SALDO + RECARGAS.
-- **L.** A relação do RH traz o **CPF completo**? É a única chave que une RH e Global Mob com segurança (cartão e nome falham em boa parte dos casos).
-- **M.** O que significa cartão MIGRADO e AGUARDANDO? Quem troca o cartão no cadastro do VT quando a pessoa migra?
+- ~~L.~~ Respondida: o CPF vem completo.
+- ~~M.~~ Respondida: é informação interna da Global Mob.
+- **N.** Qual é a regra do RH para os dias de quem trabalha 4, 3 ou 2 dias por semana? Envie as tabelas "Dias Letivos" de outros meses (de preferência um mês de 30 dias e um com mais feriados) para testar se `4×N + 1` se sustenta.
+- **O.** O relatório do RH traz o desconto já calculado ou o salário?

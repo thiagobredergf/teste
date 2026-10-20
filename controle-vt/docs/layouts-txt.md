@@ -28,9 +28,9 @@ Sem cuidado, `28465,16,70,5` vira cinco colunas em vez de três. A ferramenta ac
 | valor_diario | dinheiro | pode ser reajustado |
 | dias_semana | inteiro | |
 | saldo_inicial | dinheiro | vem na relação; base do limite de saldo e do retorno de suspensão |
-| desconto | dinheiro | já calculado pelo RH; a ferramenta só carrega |
+| desconto | dinheiro | **já calculado** pelo RH (6% do vencimento). Não enviar o salário: a ferramenta não precisa dele |
 | cartao | texto (8–20 dígitos) | opcional, se o RH tiver |
-| cpf | texto | opcional; pode vir mascarado |
+| cpf | texto (11 dígitos) | **obrigatório**: é a chave que une a relação ao relatório da Global Mob |
 
 ## Saldo (Global Mob)
 

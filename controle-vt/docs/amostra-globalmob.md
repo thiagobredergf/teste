@@ -22,6 +22,11 @@ Análise do PDF de 78 páginas recebido do RH. Este documento tem só contagens:
 
 A conferência com o total impresso é obrigatória: se a soma não bater, a importação é bloqueada (ver `arquitetura.md`, regra 1).
 
+## Data da leitura
+
+O texto do PDF **não traz data**. Há duas pistas: o nome do arquivo (`SALDO_CARTAO_20-10-2026.pdf`) e os metadados (criado em
+20/10/2026 10:25). A importação propõe a data do nome do arquivo e o operador confirma (`core/historico_saldo.mjs`).
+
 ## O que o PDF revelou
 
 1. **Saldo negativo existe** (um cartão com −R$ 4,30). O esquema rejeitava; corrigido.

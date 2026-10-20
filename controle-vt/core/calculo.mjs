@@ -32,7 +32,7 @@ const arredondarParaCima = (valor, multiplo) => (multiplo > 1 ? Math.ceil(valor 
 
 /**
  * Calcula o repasse de um servidor em uma competência.
- * entrada: { situacao, cartao: {status}|null, beneficio: {valor_diario_centavos, dias_semana, saldo_inicial_centavos}|null,
+ * entrada: { situacao, cartao: {status}|null, beneficio: {valor_diario_centavos, dias_semana, saldo_inicial_centavos, desconto_centavos}|null,
  *            diasBase, ocorrencias, regras, saldo: {valor_centavos, lido_em}|null, dataCredito, feriados }
  */
 export function calcularRepasse(entrada, parametros = {}) {
@@ -42,7 +42,7 @@ export function calcularRepasse(entrada, parametros = {}) {
   const base = {
     valor_diario_centavos: null, dias_base: diasBase ?? null, dias_descontados: null, dias_efetivos: null,
     direito_centavos: 0, saldo_lido_centavos: null, saldo_lido_em: null, consumo_estimado_centavos: null,
-    saldo_projetado_centavos: null, repasse_centavos: 0,
+    saldo_projetado_centavos: null, repasse_centavos: 0, desconto_centavos: null,
   };
   const pronto = (regra) => ({ ...base, regra_aplicada: regra, sinalizadores: sinal });
 
@@ -54,7 +54,7 @@ export function calcularRepasse(entrada, parametros = {}) {
   const { descontados, efetivos } = calcularDiasEfetivos({ diasBase, ocorrencias, regras });
   const direito = efetivos * beneficio.valor_diario_centavos;
   Object.assign(base, {
-    valor_diario_centavos: beneficio.valor_diario_centavos, dias_descontados: descontados, dias_efetivos: efetivos,
+    desconto_centavos: beneficio.desconto_centavos ?? null, valor_diario_centavos: beneficio.valor_diario_centavos, dias_descontados: descontados, dias_efetivos: efetivos,
     direito_centavos: direito,
   });
   if (efetivos === 0) { sinal.push('DIAS_ZERADOS'); return pronto('sem_dias_efetivos'); }
@@ -100,5 +100,11 @@ export function calcularRepasse(entrada, parametros = {}) {
     else if (saldoProjetado > p.saldo_alto_multiplo * inicial) sinal.push('SALDO_ALTO');
   }
   base.repasse_centavos = repasse;
+
+  // Desconto em folha: vem pronto no relatório do RH (6% do vencimento); aqui só se sinalizam os casos que exigem decisão.
+  // A política (descontar quando a recarga é menor que o desconto) aguarda o jurídico: não se altera o valor.
+  if (base.desconto_centavos == null) sinal.push('SEM_DESCONTO_INFORMADO');
+  else if (base.desconto_centavos > direito) sinal.push('DESCONTO_ACIMA_DO_DIREITO');
+  else if (repasse < base.desconto_centavos) sinal.push('DESCONTO_ACIMA_DA_RECARGA');
   return pronto(regra);
 }
