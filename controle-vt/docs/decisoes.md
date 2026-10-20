@@ -20,6 +20,7 @@ Registro das respostas do RH e do que cada uma implica no sistema.
 | 14 | Layout dos relatórios | Relatório do RH em PDF e TXT, colunas não conhecidas | Leitor de TXT configurável (delimitado ou posicional) com mapa de colunas guardado como perfil (`core/mapeamento.mjs`). O PDF depende de amostra. |
 | 15 | Retorno da suspensão por saldo alto | Quando o saldo atinge o limite mínimo, que é a recarga inicial (não o valor do 1º lançamento, que pode sofrer reajuste) | Regra confirmada (`saldo_alto_desbloqueio_multiplo = 1`) sobre o **saldo inicial** da relação. O saldo inicial nunca é deduzido do histórico de recargas. |
 | 16 | Saldo inicial | Vem na relação do RH, por servidor | Campo `beneficio.saldo_inicial_centavos`. É a base do limite de 3× e do retorno. Reajuste aparece como alteração na comparação mensal. **Corrige** a base que o motor usava (direito mensal). |
+| 18 | Entrada do saldo | PDF real da Global Mob (texto, 78 páginas) | Lido por `core/pdfsaldo.mjs`, conferido pelo TOTAL impresso. Ver `amostra-globalmob.md`. |
 | 17 | Formato de entrada | TXT por vírgula, até haver amostras | Ver `layouts-txt.md`. Vírgula decimal sem aspas é rejeitada com aviso. |
 
 ### Suspensões: o que a planilha chama de "exclusão"
@@ -49,3 +50,6 @@ atual, ou "saldo inicial" não significa o direito mensal. Precisa ser esclareci
 - ~~H.~~ Parcial: vem em PDF e TXT, por vírgula. Colunas ainda desconhecidas (ver `layouts-txt.md`).
 - **I.** O número do cartão vem na relação do RH? O saldo da Global Mob vem por cartão, sem matrícula; se a relação não traz o cartão, o vínculo cartão ↔ servidor precisa ser mantido na ferramenta (novo cartão, troca por perda).
 - **J.** Como o valor em dinheiro aparece nos TXT (ex.: `16,70` entre aspas, `16.70`, `1670` em centavos)?
+- **K.** No relatório da Global Mob, o que é a coluna RECARGAS? Crédito já lançado e ainda não disponível no cartão? Se for, o saldo disponível é SALDO + RECARGAS.
+- **L.** A relação do RH traz o **CPF completo**? É a única chave que une RH e Global Mob com segurança (cartão e nome falham em boa parte dos casos).
+- **M.** O que significa cartão MIGRADO e AGUARDANDO? Quem troca o cartão no cadastro do VT quando a pessoa migra?

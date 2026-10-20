@@ -34,7 +34,7 @@ create table servidor (
 create table cartao (
   id          uuid primary key default gen_random_uuid(),
   servidor_id uuid not null references servidor(id),
-  numero      text not null unique check (numero ~ '^[0-9]{8,20}$'),
+  numero      text not null unique check (numero ~ '^[1-9][0-9]{7,19}$'),   -- chave canônica: só dígitos, sem zeros à esquerda
   status      text not null default 'ativo' check (status in ('ativo', 'bloqueado', 'cancelado')),
   criado_em   timestamptz not null default now()
 );
@@ -63,7 +63,7 @@ create table evento (
               ('inclusao', 'suspensao', 'reativacao', 'cancelamento', 'bloqueio_cartao', 'desbloqueio_cartao', 'observacao')),
   data_efeito date not null,
   motivo_tipo text not null check (motivo_tipo in
-              ('adesao', 'saldo_alto', 'licenca_medica', 'licenca_premio', 'bloqueio_solicitado', 'desligamento', 'desistencia', 'retorno', 'outro')),
+              ('adesao', 'saldo_alto', 'licenca_medica', 'licenca_premio', 'licenca_maternidade', 'bloqueio_solicitado', 'desligamento', 'desistencia', 'retorno', 'outro')),
   ate         date,                     -- fim previsto da suspensão (ex.: prazo da licença); null = sem prazo
   motivo      text,                     -- detalhe livre; nunca diagnóstico de saúde
   origem      text,                     -- e-mail, formulário, processo nº…
@@ -168,7 +168,9 @@ create table importacao_rejeicao (
 create table saldo_cartao (
   id             uuid primary key default gen_random_uuid(),
   cartao_id      uuid not null references cartao(id),
-  valor_centavos integer not null check (valor_centavos >= 0),
+  valor_centavos integer not null,          -- pode ser negativo: o cartão da Global Mob admite saldo negativo (ex.: -R$ 4,30)
+  recargas_centavos integer,                -- coluna RECARGAS do relatório; significado a confirmar com a Global Mob
+  status_cartao  text,                      -- ATIVO | MIGRADO | AGUARDANDO (como vem no relatório)
   lido_em        timestamptz not null,      -- data/hora da leitura na concessionária
   fonte          text not null check (fonte in ('txt', 'pdf', 'manual', 'legado')),
   importacao_id  uuid references importacao(id),
