@@ -106,7 +106,7 @@ export function corpoRelatorio(d, op = opcoes) {
   ${lista(recargas, [{ t: 'Cartão' }, { t: 'Matrícula' }, { t: 'Nome' }, { t: 'Unidade' }, { t: 'Recarga', n: 1 }], (l) => `<tr><td>${esc(formatarCartao(l.cartao))}</td><td>${esc(l.matricula)}</td><td>${esc(l.nome)}</td><td>${esc(l.unidade)}</td><td class="n">${brl(l.repasse_centavos)}</td></tr>`, 'Nenhuma recarga a creditar.')}
   <table><tfoot><tr><td>Total a creditar</td><td class="n">${brl(recargas.reduce((a, l) => a + l.repasse_centavos, 0))}</td></tr></tfoot></table>` : ''}
 
-  <div class="ass"><div>Elaborado por</div><div>Conferido por</div><div>Autorizado por</div></div>
+  <div class="ass"><div>Elaborado por<br>${esc(estado.operador)}</div><div>Conferido por</div><div>Autorizado por</div></div>
   <p class="rodape">CPF omitido neste relatório. Valores calculados pelo Controle de VT a partir da relação do RH, do saldo da Global Mob e das ocorrências do ponto lançadas.</p>
 </div>`;
 }

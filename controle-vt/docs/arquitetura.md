@@ -43,7 +43,7 @@ Abrindo `spike.html` por `file://` no Chromium, sem rede:
 4. **O mês é uma lista de mudanças** sobre um cadastro quase fixo: eventos, ocorrências do ponto e
    calendário. Comparação com o mês anterior destaca variações.
 5. **Histórico e fechamento** continuam: quem mudou o quê, mês fechado imutável, cópia de segurança datada.
-6. Sem perfis de acesso. Registra-se apenas o nome de quem lançou.
+6. Sem perfis de acesso. Cada operador informa o nome ao abrir o arquivo; ele é carimbado em eventos, ocorrências, contestações e no histórico (gatilhos no banco). Arquivos antigos são migrados ao abrir.
 
 ## Fluxo mensal (como o trabalho acontece)
 

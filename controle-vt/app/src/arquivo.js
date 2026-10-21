@@ -69,8 +69,15 @@ export async function escolherArquivo() {
   });
 }
 
+let fila = Promise.resolve();
 // Grava no arquivo vinculado; sem vínculo (ou sem a API), baixa o arquivo.
-export async function salvar(bytesBanco, { comoNovo = false } = {}) {
+export function salvar(bytesBanco, opcoes) { // uma gravação por vez: duas simultâneas no mesmo arquivo se atropelariam
+  const r = fila.then(() => gravar(bytesBanco, opcoes));
+  fila = r.catch(() => {});
+  return r;
+}
+
+async function gravar(bytesBanco, { comoNovo = false } = {}) {
   const dados = paraArquivo(await empacotar(bytesBanco, senhaAtual));
   if (apiDeArquivos()) {
     try {

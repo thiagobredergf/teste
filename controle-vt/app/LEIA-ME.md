@@ -10,6 +10,13 @@ Na versão do link, cada **Salvar** baixa um arquivo novo (com data e hora) depo
 
 > **Protótipo para teste.** Os números devem ser conferidos contra a planilha antes de qualquer uso real.
 
+## Várias pessoas, uma senha
+
+- A senha protege o **arquivo de dados**, não uma conta: não existem usuários. Quem tem o arquivo e a senha abre.
+- Ao abrir ou criar, cada pessoa informa o **próprio nome**. Ele fica registrado em tudo o que fizer (histórico, contestações, relatório).
+- Existe **um arquivo mestre**. Quem usa por último salva a versão mais recente; a próxima pessoa abre essa. **Nunca duas pessoas editando cópias ao mesmo tempo:** o aplicativo não consegue juntar duas cópias e uma delas se perde.
+- Escolha uma senha longa (uma frase), de pelo menos 8 caracteres. **Não há como recuperar a senha:** se for perdida, os dados são perdidos. Guarde-a com uma segunda pessoa de confiança, e não a envie junto com o arquivo.
+
 ## Roteiro de teste (novembro/2026, em paralelo com a planilha)
 
 1. **Arquivo → Novo arquivo de dados.** Defina uma senha e anote-a: não há como recuperá-la.
@@ -40,14 +47,28 @@ Na versão do link, cada **Salvar** baixa um arquivo novo (com data e hora) depo
 - Não foi testado no Edge real, nem com a gravação direta no arquivo (só na versão em arquivo, e não foi exercitada). Na versão do link não existe gravação direta: cada salvamento é um download.
 - Foi testado com dados **fictícios** e com o PDF real de saldo; ainda não com a relação real do RH.
 
+## Como colocar no ar (endereço comum, sem conta no Claude)
+
+O aplicativo é um arquivo estático e não contém dados. Em um endereço comum ele funciona melhor do que no link do Claude:
+grava direto no arquivo escolhido (Edge/Chrome) e imprime o relatório.
+
+**GitHub Pages** (o repositório é público, então é gratuito):
+
+1. No GitHub: repositório → **Settings → Pages**.
+2. **Source:** *Deploy from a branch*. **Branch:** `claude/practical-fermi-nqbcrf` (ou `main`, depois de unir o trabalho), pasta **`/docs`**. Salve.
+3. Em 1 a 2 minutos o endereço fica em `https://thiagobredergf.github.io/teste/`.
+
+Outra opção: entregar `entrega/controle-vt.html` à TI para hospedar no servidor da prefeitura.
+
 ## Para desenvolvedores
 
 ```bash
 cd app && npm install
-npm run build     # gera dist/controle-vt.html
+npm run build     # gera dist/controle-vt.html e dist/artefato.html
+npm run publicar  # build + copia para entrega/ e docs/ (GitHub Pages)
 npm test          # build + teste de ponta a ponta no navegador (dados fictícios)
 ARTEFATO=1 node e2e/e2e.mjs   # o mesmo teste sobre a versão publicável, sob política de segurança estrita
 ```
 
-`dist/artefato.html` é a versão publicada como link (sem `<html>`/`<body>`, como a plataforma exige). `entrega/controle-vt.html` é uma **cópia gerada** do build, mantida no repositório para quem não compila.
-Depois de mudar o código, refaça o build e copie `dist/controle-vt.html` para `entrega/`.
+`dist/artefato.html` é a versão publicada como link (sem `<html>`/`<body>`, como a plataforma exige). `entrega/controle-vt.html` e `docs/index.html` são **cópias geradas** do build, mantidas no repositório para quem não compila.
+Depois de mudar o código, rode `npm run publicar`.

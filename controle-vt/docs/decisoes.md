@@ -32,6 +32,8 @@ Registro das respostas do RH e do que cada uma implica no sistema.
 | 26 | Protótipo (MVP) | Para o usuário do VT testar e contestar | Construído (`app/`): arquivo único offline, com contestação registrada por servidor. Ver `app/LEIA-ME.md`. |
 | 27 | Link para o analista testar | O analista deve testar no ambiente de trabalho | Versão publicada como artefato (`app/dist/artefato.html`). O formato do arquivo de dados passou a ser `.json` (cifrado) e o banco, JavaScript puro, para funcionar sob as restrições da plataforma. Ver `arquitetura.md`. |
 | 28 | Dashboard e relatório | Não esquecer | Painel com filtros, pizzas, barras por unidade, linha por mês e comparação com o mês anterior. Relatório de recarga imprimível, sem CPF, com relação de recargas e linhas de assinatura. |
+| 29 | Acesso ao aplicativo | Pela internet comum, não pelo Claude | Hospedagem estática em endereço comum (GitHub Pages a partir de `docs/`, ou servidor da prefeitura). O link do Claude fica só como plano B. |
+| 30 | Uma senha para vários operadores | Pergunta do RH | Permitido: a senha protege o arquivo. Cada operador informa o nome ao abrir; o histórico registra quem fez o quê. Há um arquivo mestre e as pessoas se revezam; a ferramenta não junta cópias. |
 
 ### Regra dos dias por semana (em aberto)
 

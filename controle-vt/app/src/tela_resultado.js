@@ -89,8 +89,8 @@ function desenharTabela(raiz) {
 }
 
 function contestar(raiz, matricula) {
-  const antigas = banco.q('select texto, criado_em from contestacao where ym = ? and matricula = ? order by id', [estado.ym, matricula]);
-  dialogo(`Contestação — matrícula ${matricula}`, `${antigas.map((a) => `<p class="mudo">${esc(a.criado_em)}: ${esc(a.texto)}</p>`).join('')}<label>O que está errado ou foi questionado?<textarea name="texto" rows="4" required></textarea></label>`, (f) => {
+  const antigas = banco.q('select texto, criado_em, quem from contestacao where ym = ? and matricula = ? order by id', [estado.ym, matricula]);
+  dialogo(`Contestação — matrícula ${matricula}`, `${antigas.map((a) => `<p class="mudo">${esc(a.criado_em)}${a.quem ? ` (${esc(a.quem)})` : ''}: ${esc(a.texto)}</p>`).join('')}<label>O que está errado ou foi questionado?<textarea name="texto" rows="4" required></textarea></label>`, (f) => {
     const texto = f.texto.value.trim(); if (!texto) return false;
     banco.x('insert into contestacao (ym, matricula, texto) values (?,?,?)', [estado.ym, matricula, texto]);
     banco.auditar('contestação', `${estado.ym} ${matricula}`); estado.persistir(); render(raiz);
@@ -149,8 +149,8 @@ function exportarFolha() {
       l.sinalizadores.filter((f) => f.startsWith('DESCONTO_')).map((f) => SINAIS[f][0]).join(' | ')]));
 }
 function exportarContestacoes() {
-  baixarCsv(`contestacoes-${estado.ym}.csv`, ['Matrícula', 'Nome', 'Registrada em', 'Contestação'],
-    banco.q('select c.matricula, s.nome, c.criado_em, c.texto from contestacao c left join servidor s on s.matricula = c.matricula where c.ym = ? order by c.id', [estado.ym]).map((c) => [c.matricula, c.nome, c.criado_em, c.texto]));
+  baixarCsv(`contestacoes-${estado.ym}.csv`, ['Matrícula', 'Nome', 'Registrada em', 'Registrada por', 'Contestação'],
+    banco.q('select c.matricula, s.nome, c.criado_em, c.quem, c.texto from contestacao c left join servidor s on s.matricula = c.matricula where c.ym = ? order by c.id', [estado.ym]).map((c) => [c.matricula, c.nome, c.criado_em, c.quem, c.texto]));
 }
 
 async function fechar(raiz) {

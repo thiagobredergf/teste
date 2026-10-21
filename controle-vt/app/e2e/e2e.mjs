@@ -30,7 +30,7 @@ const ok = (m) => console.log('  ✓', m);
 const CLAUDE_SIM = () => { window.claude = { use: async (n) => (n === 'downloads' ? { save: async (r) => { (window.__salvos ||= []).push({ filename: r.filename, tamanho: r.data.length ?? r.data.size ?? r.data.byteLength }); return { status: 'saved' }; } } : null) }; };
 
 // 1. novo arquivo com senha
-await page.fill('#senha-nova', 'senha-teste'); await page.fill('#senha-rep', 'senha-teste'); await page.click('#criar');
+await page.fill('#operador', 'Operadora Um'); await page.fill('#senha-nova', 'senha-teste'); await page.fill('#senha-rep', 'senha-teste'); await page.click('#criar');
 await page.waitForSelector('#novo-mes'); ok('arquivo novo criado com senha');
 
 // 2. competência novembro/2026
@@ -120,7 +120,7 @@ const p2 = await ctx.newPage(); p2.on('pageerror', (e) => erros.push(String(e)))
 await p2.addInitScript(VISUALIZADOR); await p2.addInitScript(CLAUDE_SIM);
 let baixouDireto = 0; p2.on('download', () => baixouDireto++);
 await p2.goto('file://' + process.cwd() + '/' + PAGINA);
-await p2.fill('#senha-abrir', 'errada');
+await p2.fill('#operador', 'Operador Dois'); await p2.fill('#senha-abrir', 'errada');
 let [fc] = await Promise.all([p2.waitForEvent('filechooser'), p2.click('#abrir')]); await fc.setFiles('dist/e2e/dados.json');
 await p2.waitForSelector('.toast.erro'); assert.match(await p2.locator('.toast.erro').innerText(), /senha incorreta/); ok('senha errada rejeitada');
 await p2.fill('#senha-abrir', 'senha-teste');
@@ -132,6 +132,9 @@ assert.equal((await p2.locator('#corpo tr', { hasText: '1001' }).first().locator
 
 // 8. fechar competência: congela e bloqueia ocorrências
 await p2.click('#fechar'); await p2.click('dialog button.primario'); await p2.waitForSelector('text=fechada');
+await p2.click('button[data-aba="inicio"]');
+const hist = await p2.locator('table.tabela').innerText();
+assert.match(hist, /Operadora Um[\s\S]*arquivo criado/); assert.match(hist, /Operador Dois\s+competência fechada/); ok('histórico registra quem fez cada coisa (dois operadores, mesma senha)');
 await p2.click('button[data-aba="ocorrencias"]'); assert.match(await p2.locator('.aviso').innerText(), /fechada/); ok('competência fechada: sem novos lançamentos');
 let barrou = false; try { await p2.evaluate(() => window.__vt.banco.x("insert into ocorrencia (ym, matricula, tipo, dias) values ('2026-11','1001','falta',1)")); } catch { barrou = true; }
 assert.ok(barrou); ok('banco recusa ocorrência em competência fechada (gatilho)');
@@ -139,7 +142,7 @@ assert.ok(barrou); ok('banco recusa ocorrência em competência fechada (gatilho
 // 9. relatório (sem CPF) e exportações pelo visualizador
 await p2.click('button[data-aba="relatorio"]'); await p2.waitForSelector('.rel');
 const rel = await p2.locator('.rel').innerText();
-assert.match(rel, /Relatório de recarga de vale-transporte/); assert.match(rel, /FECHADA/); assert.match(rel, /Relação de recargas/i); assert.match(rel, /Servidores a revisar/i);
+assert.match(rel, /Elaborado por\s+Operador Dois/); assert.match(rel, /Relatório de recarga de vale-transporte/); assert.match(rel, /FECHADA/); assert.match(rel, /Relação de recargas/i); assert.match(rel, /Servidores a revisar/i);
 assert.ok(!/\d{11}/.test(rel), 'o relatório não pode conter CPF'); ok('relatório completo, competência fechada, sem CPF');
 await p2.click('#baixar'); await p2.waitForFunction(() => window.__salvos?.some((x) => x.filename === 'relatorio-vt-2026-11.html')); ok('relatório baixado pela permissão de downloads');
 await p2.click('button[data-aba="resultado"]'); await p2.waitForSelector('#exp-completa'); await p2.click('#exp-completa');

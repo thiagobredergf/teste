@@ -5,7 +5,8 @@
   "description": "Protótipo: página HTML única, offline, com SQLite e leitura de PDF dentro do navegador",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node build.mjs && node e2e/e2e.mjs"
+    "publicar": "node build.mjs && node publicar.mjs",
+    "test": "node build.mjs && node e2e/migracao.mjs && node e2e/e2e.mjs && ARTEFATO=1 node e2e/e2e.mjs && node e2e/e2e-web.mjs"
   },
   "dependencies": { "sql.js": "1.12.0", "pdfjs-dist": "3.11.174" },
   "devDependencies": { "esbuild": "0.24.0", "playwright-core": "1.49.0" }
