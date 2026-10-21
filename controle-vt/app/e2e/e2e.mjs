@@ -29,6 +29,13 @@ const ok = (m) => console.log('  ✓', m);
 // permissão `downloads` do visualizador de artefatos, simulada: registra o que a página tenta entregar
 const CLAUDE_SIM = () => { window.claude = { use: async (n) => (n === 'downloads' ? { save: async (r) => { (window.__salvos ||= []).push({ filename: r.filename, tamanho: r.data.length ?? r.data.size ?? r.data.byteLength }); return { status: 'saved' }; } } : null) }; };
 
+// 0. trava de privacidade: o navegador impede qualquer conexão de rede a partir da página
+const rede = await page.evaluate(async () => { try { await fetch('https://example.com/'); return 'saiu'; } catch { return 'bloqueada'; } });
+assert.equal(rede, 'bloqueada'); ok('rede bloqueada pelo navegador: a página não consegue enviar dados para fora');
+const imagem = await page.evaluate(() => new Promise((res) => { const i = new Image(); i.onload = () => res('carregou'); i.onerror = () => res('bloqueada'); i.src = 'https://example.com/x.png'; }));
+assert.equal(imagem, 'bloqueada'); ok('nem por imagem (técnica comum de envio disfarçado)');
+erros.length = 0; // os avisos de console gerados por estas duas tentativas propositais são esperados
+
 // 1. novo arquivo com senha
 await page.fill('#operador', 'Operadora Um'); await page.fill('#senha-nova', 'senha-teste'); await page.fill('#senha-rep', 'senha-teste'); await page.click('#criar');
 await page.waitForSelector('#novo-mes'); ok('arquivo novo criado com senha');

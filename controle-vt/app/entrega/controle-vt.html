@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Trava de privacidade imposta pelo navegador: esta página NÃO pode abrir nenhuma conexão de rede (connect-src 'none'),
+     nem carregar imagens, fontes, scripts ou quadros de fora, nem enviar formulários. Os dados nunca saem do computador. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; worker-src blob:; form-action 'none'; base-uri 'none'">
 <title>Controle de Vale-Transporte</title>
 <style>:root { --fundo:#f6f7f9; --papel:#fff; --texto:#1f2937; --mudo:#5b6472; --borda:#d9dde3; --azul:#1d4ed8; --verde:#15803d; --ambar:#b45309; --verm:#b91c1c; --sel:#eef2ff;
   --sobre-azul:#fff; --toast-ok:#166534; --toast-erro:#991b1b; --sobre-toast:#fff; color-scheme: light; }

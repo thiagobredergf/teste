@@ -1,0 +1,19 @@
+# Dados reais NUNCA entram no repositório (relatórios do RH/Global Mob, arquivos de dados do Controle de VT).
+# O repositório é público: um arquivo enviado por engano fica no histórico para sempre.
+controle-vt-*.json
+controle-vt-copia-*.json
+*.vtdb
+SALDO_CARTAO*
+saldo_cartao*
+relacao*.txt
+relatorio-vt-*.html
+recarga-*.csv
+desconto-folha-*.csv
+contestacoes-*.csv
+controle-vt-*-completo.csv
+*.xlsx
+*.xls
+
+# Dependências e builds
+node_modules/
+dist/

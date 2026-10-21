@@ -52,7 +52,9 @@ Na versão do link, cada **Salvar** baixa um arquivo novo (com data e hora) depo
 O aplicativo é um arquivo estático e não contém dados. Em um endereço comum ele funciona melhor do que no link do Claude:
 grava direto no arquivo escolhido (Edge/Chrome) e imprime o relatório.
 
-**GitHub Pages** (o repositório é público, então é gratuito):
+> **Antes de ativar:** a página é pública e vazia (os dados nunca vão para ela), mas leia `docs/privacidade.md` para decidir se o repositório deve ficar público e onde hospedar.
+
+**GitHub Pages** (só funciona de graça com repositório público):
 
 1. No GitHub: repositório → **Settings → Pages**.
 2. **Source:** *Deploy from a branch*. **Branch:** `claude/practical-fermi-nqbcrf` (ou `main`, depois de unir o trabalho), pasta **`/docs`**. Salve.

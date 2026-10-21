@@ -5,7 +5,7 @@ import { chromium } from 'playwright-core';
 import assert from 'node:assert/strict';
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH ?? '/opt/pw-browsers/chromium', args: ['--no-sandbox'] });
-const ctx = await browser.newContext();
+const ctx = await browser.newContext({ bypassCSP: true }); // este roteiro testa a lógica de gravar arquivos; a política de segurança já é verificada em e2e.mjs
 const ok = (m) => console.log('  ✓', m);
 const SIM = (discoInicial) => {
   window.__disco = discoInicial ? Uint8Array.from(atob(discoInicial), (c) => c.charCodeAt(0)) : null; window.__gravacoes = 0; window.__pickers = 0;
@@ -28,7 +28,8 @@ await a.waitForFunction(() => window.__gravacoes >= 2); await a.waitForSelector(
 assert.equal(await a.evaluate(() => window.__pickers), 1, 'não pode pedir o local de novo'); ok('depois do primeiro salvamento, cada alteração regrava sozinha no mesmo arquivo');
 const gravacoes = await a.evaluate(() => window.__gravacoes);
 await a.evaluate(() => { for (let i = 0; i < 5; i++) window.__vt.estado.persistir(true); }); // várias gravações ao mesmo tempo
-await a.waitForFunction((n) => window.__gravacoes === n + 5, gravacoes); ok('gravações simultâneas entram em fila (5 pedidas, 5 feitas, uma por vez)');
+for (let i = 0; i < 100 && (await a.evaluate(() => window.__gravacoes)) !== gravacoes + 5; i++) await a.waitForTimeout(100); // consulta repetida: waitForFunction com argumento usa eval, que a política de segurança da página proíbe
+assert.equal(await a.evaluate(() => window.__gravacoes), gravacoes + 5); ok('gravações simultâneas entram em fila (5 pedidas, 5 feitas, uma por vez)');
 
 // reabre em outra "sessão", com o conteúdo que ficou no disco simulado
 const disco = await a.evaluate(() => { let t = ''; for (let i = 0; i < window.__disco.length; i += 0x8000) t += String.fromCharCode(...window.__disco.subarray(i, i + 0x8000)); return btoa(t); });
