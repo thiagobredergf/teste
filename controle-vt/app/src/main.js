@@ -8,17 +8,28 @@ import * as relacao from './tela_relacao.js';
 import * as saldo from './tela_saldo.js';
 import * as ocorrencias from './tela_ocorrencias.js';
 import * as resultado from './tela_resultado.js';
+import * as relatorio from './tela_relatorio.js';
 import * as painel from './tela_painel.js';
 
-const ABAS = [['inicio', 'Arquivo'], ['competencia', 'Competência e regras'], ['relacao', 'Relação do RH'], ['saldo', 'Saldo Global Mob'], ['ocorrencias', 'Ocorrências do ponto'], ['resultado', 'Resultado'], ['painel', 'Painel']];
-const TELAS = { inicio, competencia, relacao, saldo, ocorrencias, resultado, painel };
+const ABAS = [['inicio', 'Arquivo'], ['competencia', 'Competência e regras'], ['relacao', 'Relação do RH'], ['saldo', 'Saldo Global Mob'], ['ocorrencias', 'Ocorrências do ponto'], ['resultado', 'Resultado'], ['relatorio', 'Relatório'], ['painel', 'Painel']];
+// Indicador no topo; com alterações pendentes, mostra o botão Salvar (na versão publicada cada salvamento é um download).
+function mostrarEstado() {
+  const el = $('#estado');
+  if (!el) return;
+  if (!banco.temBanco()) { el.innerHTML = ''; return; }
+  el.innerHTML = banco.foiAlterado() ? '<span class="selo atencao">alterações não salvas</span> <button id="salvar-topo" class="primario pequeno">Salvar</button>' : '<span class="selo ok">salvo</span>';
+  const b = $('#salvar-topo');
+  if (b) b.onclick = () => estado.persistir(true);
+}
+
+const TELAS = { inicio, competencia, relacao, saldo, ocorrencias, resultado, relatorio, painel };
 
 function desenhar() {
   const com = banco.temBanco();
   if (com && !estado.ym) estado.ym = banco.competencias()[0]?.ym ?? null; // abre sempre na competência mais recente
   $('#abas').innerHTML = ABAS.map(([k, r]) => `<button class="aba ${estado.aba === k ? 'ativa' : ''}" data-aba="${k}" ${!com && k !== 'inicio' ? 'disabled' : ''}>${r}</button>`).join('');
   $$('.aba').forEach((b) => { b.onclick = () => estado.irPara(b.dataset.aba); });
-  $('#estado').innerHTML = com ? (banco.foiAlterado() ? '<span class="selo atencao">alterações não salvas</span>' : '<span class="selo ok">salvo</span>') : '';
+  mostrarEstado();
   try { TELAS[estado.aba].render($('#conteudo')); } catch (e) { $('#conteudo').innerHTML = `<p class="erro">Erro ao montar a tela: ${e.message}</p>`; console.error(e); }
 }
 
@@ -32,8 +43,7 @@ estado.persistir = async (forcar = false, comoNovo = false) => {
       if (r) { banco.marcarSalvo(); if (forcar) aviso(r === 'arquivo' ? 'Arquivo salvo.' : 'Arquivo baixado. Guarde-o no lugar de costume.'); }
     }
   } catch (e) { aviso(`Não foi possível salvar: ${e.message}`, 'erro'); }
-  const el = $('#estado');
-  if (el && banco.temBanco()) el.innerHTML = banco.foiAlterado() ? '<span class="selo atencao">alterações não salvas</span>' : '<span class="selo ok">salvo</span>';
+  mostrarEstado();
 };
 
 window.addEventListener('beforeunload', (e) => { if (banco.temBanco() && banco.foiAlterado()) { e.preventDefault(); e.returnValue = ''; } });

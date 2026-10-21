@@ -1,6 +1,6 @@
 import * as banco from './db.js';
 import { estado } from './estado.js';
-import { $, $$, esc, brl, aviso, selo, SINAIS, baixarCsv, reais, dialogo } from './ui.js';
+import { $, $$, esc, brl, aviso, selo, SINAIS, baixarCsv, reais, dialogo, confirmar } from './ui.js';
 import { calcularMes, totais } from './calc.js';
 import { revisarSuspensoes } from '../../core/suspensoes.mjs';
 import { formatarCartao } from '../../core/identificadores.mjs';
@@ -153,15 +153,15 @@ function exportarContestacoes() {
     banco.q('select c.matricula, s.nome, c.criado_em, c.texto from contestacao c left join servidor s on s.matricula = c.matricula where c.ym = ? order by c.id', [estado.ym]).map((c) => [c.matricula, c.nome, c.criado_em, c.texto]));
 }
 
-function fechar(raiz) {
+async function fechar(raiz) {
   const t = totais(cache.linhas);
   const pend = banco.q('select count(*) n from contestacao where ym = ?', [estado.ym])[0].n;
-  const msg = `Fechar a competência ${estado.ym}?\n\n${t.recarregar} recargas, ${brl(t.repasse)} de repasse.${t.revisar ? `\n\nATENÇÃO: ${t.revisar} servidor(es) ainda estão "a revisar" e ficarão sem recarga.` : ''}${pend ? `\n${pend} contestação(ões) registrada(s).` : ''}\n\nDepois de fechada, não pode ser alterada.`;
-  if (!confirm(msg)) return;
+  const msg = `${estado.ym}: ${t.recarregar} recargas, ${brl(t.repasse)} de repasse.${t.revisar ? `\n\nATENÇÃO: ${t.revisar} servidor(es) ainda estão "a revisar" e ficarão sem recarga.` : ''}${pend ? `\n${pend} contestação(ões) registrada(s).` : ''}\n\nDepois de fechada, a competência não pode ser alterada.`;
+  if (!(await confirmar('Fechar a competência', msg, 'Fechar competência'))) return;
   banco.transacao(() => {
     banco.x('insert or replace into fechamento (ym, resumo, linhas) values (?,?,?)', [estado.ym, JSON.stringify({ ...t, parametros: cache.comp.parametros, tabela_dias: cache.comp.tabela_dias, data_credito: cache.comp.data_credito, data_leitura: cache.comp.data_leitura }), JSON.stringify(cache.linhas)]);
     banco.x("update competencia set status = 'fechada' where ym = ?", [estado.ym]);
     banco.auditar('competência fechada', `${estado.ym}: ${t.recarregar} recargas, ${brl(t.repasse)}`);
   });
-  estado.persistir(true); aviso('Competência fechada.'); render(raiz);
+  await estado.persistir(true); aviso('Competência fechada.'); render(raiz);
 }

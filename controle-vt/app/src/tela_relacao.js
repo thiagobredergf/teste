@@ -64,7 +64,7 @@ function renderMapa(raiz) {
     <table class="tabela compacta"><thead><tr><th>Campo</th><th>Coluna do arquivo</th></tr></thead><tbody>
       ${CAMPOS.map(([campo, rotulo, , obrig]) => `<tr><td>${rotulo}${obrig ? ' <b title="obrigatório">*</b>' : ''}</td><td><select class="map" data-campo="${campo}"><option value="">— não vem no arquivo —</option>${sessao.colunas.map((c) => `<option ${sessao.mapa[campo] === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></td></tr>`).join('')}
     </tbody></table>
-    <label><input type="checkbox" id="guardar" checked> Guardar este mapeamento para as próximas importações</label>
+    <label class="inline"><input type="checkbox" id="guardar" checked> Guardar este mapeamento para as próximas importações</label>
     <div class="acoes"><button id="voltar">Outro arquivo</button><button id="comparar" class="primario">Ler e comparar com o cadastro</button></div>`;
   $('#voltar').onclick = () => { sessao = null; render(raiz); };
   $('#comparar').onclick = () => {

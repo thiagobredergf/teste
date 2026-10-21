@@ -24,12 +24,35 @@ export function aviso(texto, tipo = 'ok') {
   setTimeout(() => el.remove(), tipo === 'erro' ? 8000 : 3500);
 }
 
+// Entrega de arquivos. No visualizador de artefatos a página não pode iniciar downloads: usa a permissão `downloads`
+// (o visualizador pede confirmação). Fora dele, baixa direto.
+let permissaoDownloads;
+async function downloads() {
+  if (permissaoDownloads !== undefined) return permissaoDownloads;
+  try { permissaoDownloads = window.claude?.use ? await window.claude.use('downloads') : null; } catch { permissaoDownloads = null; }
+  return permissaoDownloads;
+}
+export const emVisualizador = () => typeof window.claude?.use === 'function';
+
+export async function entregar(nome, dados) {
+  const dl = await downloads();
+  if (dl) {
+    try { await dl.save({ filename: nome, data: dados }); return 'salvo'; }
+    catch (e) { if (e.code !== 'declined') aviso(`Não foi possível salvar "${nome}": ${e.message}`, 'erro'); return null; }
+  }
+  if (emVisualizador()) { // no visualizador, um download direto é ignorado sem aviso: melhor dizer claramente
+    aviso('Este ambiente não permite baixar arquivos. Use a versão em arquivo (controle-vt.html) para salvar e exportar.', 'erro');
+    return null;
+  }
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(dados instanceof Blob ? dados : new Blob([dados])), download: nome });
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  return 'salvo';
+}
+
 // CSV no padrão do Excel em português: ";" como separador, UTF-8 com BOM.
 export function baixarCsv(nome, cabecalho, linhas) {
   const cel = (v) => { const t = String(v ?? ''); return /[;"\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
-  const txt = '﻿' + [cabecalho, ...linhas].map((l) => l.map(cel).join(';')).join('\r\n');
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([txt], { type: 'text/csv;charset=utf-8' })), download: nome });
-  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  return entregar(nome, '\ufeff' + [cabecalho, ...linhas].map((l) => l.map(cel).join(';')).join('\r\n'));
 }
 export const reais = (c) => (c == null ? '' : (c / 100).toFixed(2).replace('.', ','));
 
@@ -46,6 +69,36 @@ export const ultimoDiaUtilAnterior = (ano, mes) => { // último dia útil do mê
   while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
 };
+
+function caixa(corpo, aoFechar) {
+  const d = document.createElement('dialog');
+  d.innerHTML = `<form method="dialog">${corpo}</form>`;
+  d.onclose = () => { d.remove(); aoFechar(); };
+  document.body.appendChild(d); d.showModal();
+  return d;
+}
+
+// Substitui confirm(): o visualizador de artefatos nunca mostra confirm/prompt/alert.
+export function confirmar(titulo, texto, rotuloOk = 'Confirmar') {
+  return new Promise((resolve) => {
+    let r = false;
+    const d = caixa(`<h3>${esc(titulo)}</h3><p style="white-space:pre-line">${esc(texto)}</p>
+      <div class="acoes"><button type="button" class="cancelar">Cancelar</button><button class="primario">${esc(rotuloOk)}</button></div>`, () => resolve(r));
+    d.querySelector('.cancelar').onclick = () => d.close();
+    d.querySelector('form').onsubmit = (e) => { e.preventDefault(); r = true; d.close(); };
+  });
+}
+
+// Substitui prompt(). Devolve o texto digitado ou null se cancelado.
+export function pedirTexto(titulo, rotulo, { tipo = 'text', dica = '' } = {}) {
+  return new Promise((resolve) => {
+    let r = null;
+    const d = caixa(`<h3>${esc(titulo)}</h3><label>${esc(rotulo)}<input name="v" type="${tipo}" autocomplete="off"></label>${dica ? `<p class="mudo">${esc(dica)}</p>` : ''}
+      <div class="acoes"><button type="button" class="cancelar">Cancelar</button><button class="primario">Confirmar</button></div>`, () => resolve(r));
+    d.querySelector('.cancelar').onclick = () => d.close();
+    d.querySelector('form').onsubmit = (e) => { e.preventDefault(); r = d.querySelector('input').value; d.close(); };
+  });
+}
 
 // Diálogo modal simples. `corpoHtml` contém os campos; `aoConfirmar(form)` recebe o <form> e devolve false para manter aberto.
 export function dialogo(titulo, corpoHtml, aoConfirmar) {

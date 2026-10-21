@@ -1,7 +1,7 @@
 import * as banco from './db.js';
 import * as arq from './arquivo.js';
 import { estado } from './estado.js';
-import { $, esc, aviso } from './ui.js';
+import { $, esc, aviso, confirmar, pedirTexto, emVisualizador } from './ui.js';
 
 export function render(raiz) {
   if (!banco.temBanco()) {
@@ -18,10 +18,10 @@ export function render(raiz) {
           <label>Senha do arquivo <input type="password" id="senha-abrir" autocomplete="current-password"></label>
           <button id="abrir" class="primario">Escolher arquivo…</button></section>
       </div>`;
-    $('#criar').onclick = () => {
+    $('#criar').onclick = async () => {
       const s = $('#senha-nova').value;
       if (s !== $('#senha-rep').value) return aviso('As senhas não são iguais.', 'erro');
-      if (!s && !confirm('Criar o arquivo SEM senha? Qualquer pessoa com acesso ao arquivo poderá ler os dados.')) return;
+      if (!s && !(await confirmar('Criar sem senha?', 'Qualquer pessoa com acesso ao arquivo poderá ler os dados.', 'Criar sem senha'))) return;
       banco.novoBanco(); arq.definirSenha(s); estado.irPara('competencia');
     };
     $('#abrir').onclick = async () => {
@@ -43,7 +43,7 @@ export function render(raiz) {
       <div class="cartao num"><b>${n("select count(*) n from competencia where status='fechada'")}</b><span>fechadas</span></div>
     </div>
     <p>${arq.senhaDefinida() ? 'Arquivo protegido por senha.' : '<b>Atenção:</b> este arquivo não tem senha.'}
-       ${arq.apiDeArquivos() ? '' : 'Este navegador não permite gravar direto no arquivo: ao salvar, o arquivo será baixado.'}</p>
+       ${arq.apiDeArquivos() ? '' : `Ao salvar, o arquivo é baixado${emVisualizador() ? ' (o visualizador pede a sua confirmação)' : ''}. Cada salvamento gera um arquivo novo com data e hora: guarde o mais recente e apague os antigos.`}</p>
     <div class="acoes">
       <button id="salvar" class="primario">Salvar</button>
       <button id="salvar-como">Salvar como…</button>
@@ -57,8 +57,8 @@ export function render(raiz) {
   $('#salvar').onclick = () => estado.persistir(true);
   $('#salvar-como').onclick = () => estado.persistir(true, true);
   $('#copia').onclick = async () => { await arq.copiaDeSeguranca(banco.exportarBanco()); aviso('Cópia de segurança gerada.'); };
-  $('#mudar-senha').onclick = () => {
-    const s = prompt('Nova senha (deixe em branco para remover a senha):');
+  $('#mudar-senha').onclick = async () => {
+    const s = await pedirTexto('Trocar a senha', 'Nova senha (em branco remove a senha)', { tipo: 'password' });
     if (s === null) return;
     arq.definirSenha(s); banco.auditar('senha', 'senha do arquivo alterada'); estado.persistir(true);
   };

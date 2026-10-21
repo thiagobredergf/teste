@@ -30,6 +30,8 @@ Registro das respostas do RH e do que cada uma implica no sistema.
 | 24 | Regra dos dias por semana | Pode ser editável: criar a regra, cadastrar os cargos e o usuário do VT edita os dias | Aceito, em três níveis: **padrão por cargo** (editável), **dias do servidor** (vêm da relação do RH ou são informados) e **tabela de dias do mês** (editável). Toda edição vai para o histórico e a tabela é validada (valor maior que o mês, ordem invertida). |
 | 25 | Desconto | O relatório do RH trará o valor já calculado | Confirmado. A ferramenta não guarda salário. |
 | 26 | Protótipo (MVP) | Para o usuário do VT testar e contestar | Construído (`app/`): arquivo único offline, com contestação registrada por servidor. Ver `app/LEIA-ME.md`. |
+| 27 | Link para o analista testar | O analista deve testar no ambiente de trabalho | Versão publicada como artefato (`app/dist/artefato.html`). O formato do arquivo de dados passou a ser `.json` (cifrado) e o banco, JavaScript puro, para funcionar sob as restrições da plataforma. Ver `arquitetura.md`. |
+| 28 | Dashboard e relatório | Não esquecer | Painel com filtros, pizzas, barras por unidade, linha por mês e comparação com o mês anterior. Relatório de recarga imprimível, sem CPF, com relação de recargas e linhas de assinatura. |
 
 ### Regra dos dias por semana (em aberto)
 
@@ -71,4 +73,4 @@ atual, ou "saldo inicial" não significa o direito mensal. Precisa ser esclareci
 - ~~M.~~ Respondida: é informação interna da Global Mob.
 - **N.** Qual é a regra do RH para os dias de quem trabalha 4, 3 ou 2 dias por semana? Envie as tabelas "Dias Letivos" de outros meses (de preferência um mês de 30 dias e um com mais feriados) para testar se `4×N + 1` se sustenta.
 - ~~O.~~ Respondida: o desconto vem calculado.
-- **P.** (do protótipo) Qual o layout do arquivo de recarga aceito pela Global Mob e do arquivo de desconto aceito pela folha? Hoje as exportações são CSV provisórios.
+- **P.** Como o analista envia hoje a recarga para a Global Mob (portal digitado, planilha, arquivo)? O PDF de saldo é a saída da Global Mob, não o layout de entrada da recarga. E qual o layout do arquivo de desconto aceito pela folha? Hoje as exportações são CSV provisórios.

@@ -1,7 +1,12 @@
 # Controle de Vale-Transporte — protótipo
 
-Um único arquivo, `entrega/controle-vt.html`. Abra no **Edge ou Chrome** (duplo clique). Não instala nada e não usa internet.
-Os dados ficam em um arquivo `.vtdb` no seu computador, protegido por senha.
+Duas formas de usar, o mesmo aplicativo:
+
+- **Link** (versão publicada): abre no navegador. Os dados que você digita ou carrega **ficam só no seu computador**; a página não tem permissão para enviá-los a lugar nenhum.
+- **Arquivo `entrega/controle-vt.html`**: abra direto no **Edge ou Chrome** (duplo clique). Não instala nada e não usa internet.
+
+Os dados ficam em um arquivo `.json` no seu computador, protegido por senha (o conteúdo é cifrado).
+Na versão do link, cada **Salvar** baixa um arquivo novo (com data e hora) depois de pedir a sua confirmação: guarde o mais recente e apague os antigos.
 
 > **Protótipo para teste.** Os números devem ser conferidos contra a planilha antes de qualquer uso real.
 
@@ -16,7 +21,8 @@ Os dados ficam em um arquivo `.vtdb` no seu computador, protegido por senha.
 5. **Ocorrências do ponto.** Lance faltas, licenças e férias do mês.
 6. **Resultado.** Compare a coluna **Recarga R$** com o que a planilha daria. Onde discordar, clique em **✎** e registre a contestação.
    Ao terminar, **Exportar contestações** e envie.
-7. Teste também: salvar, fechar o navegador, abrir o arquivo de novo; **Cópia de segurança datada**; alterar a situação de alguém (**⚙**).
+7. **Relatório** (para conferir e autorizar o repasse) e **Painel** (gráficos, filtros por unidade e cargo, e a comparação com o mês anterior depois do primeiro fechamento).
+8. Teste também: salvar, fechar o navegador, abrir o arquivo de novo; **Cópia de segurança datada**; alterar a situação de alguém (**⚙**).
 
 ## O que observar
 
@@ -30,8 +36,8 @@ Os dados ficam em um arquivo `.vtdb` no seu computador, protegido por senha.
 - As exportações de **recarga** e de **desconto para a folha** são provisórias: o layout da Global Mob e da folha ainda não é conhecido.
 - Não lê o PDF/TXT da **relação do RH** (só TXT; o PDF do RH aguarda amostra). O TXT precisa ter linha de cabeçalho.
 - Formulário com QR Code: não incluído.
-- Painel básico (pizzas e linha por mês fechado). Sem filtros por unidade nos gráficos.
-- Não foi testado no Edge real, nem com a API de gravação direta no arquivo (nos testes, o arquivo é baixado ao salvar).
+- O relatório é baixado em HTML; para PDF, abra o arquivo e use Ctrl+P → "Salvar como PDF" (o link não consegue abrir a impressão).
+- Não foi testado no Edge real, nem com a gravação direta no arquivo (só na versão em arquivo, e não foi exercitada). Na versão do link não existe gravação direta: cada salvamento é um download.
 - Foi testado com dados **fictícios** e com o PDF real de saldo; ainda não com a relação real do RH.
 
 ## Para desenvolvedores
@@ -40,7 +46,8 @@ Os dados ficam em um arquivo `.vtdb` no seu computador, protegido por senha.
 cd app && npm install
 npm run build     # gera dist/controle-vt.html
 npm test          # build + teste de ponta a ponta no navegador (dados fictícios)
+ARTEFATO=1 node e2e/e2e.mjs   # o mesmo teste sobre a versão publicável, sob política de segurança estrita
 ```
 
-`entrega/controle-vt.html` é uma **cópia gerada** do build, mantida no repositório para quem não compila.
+`dist/artefato.html` é a versão publicada como link (sem `<html>`/`<body>`, como a plataforma exige). `entrega/controle-vt.html` é uma **cópia gerada** do build, mantida no repositório para quem não compila.
 Depois de mudar o código, refaça o build e copie `dist/controle-vt.html` para `entrega/`.

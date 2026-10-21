@@ -4,6 +4,15 @@ import assert from 'node:assert/strict';
 import { relacaoTxt, pdfSaldo } from './fixtures.mjs';
 
 mkdirSync('dist/e2e', { recursive: true });
+// ARTEFATO=1: roda o mesmo teste sobre o fragmento publicável, embrulhado como a plataforma faz e sob uma política de segurança estrita
+// (sem eval, sem WebAssembly, sem rede; scripts só inline; workers só por blob:).
+let PAGINA = 'dist/controle-vt.html';
+if (process.env.ARTEFATO) {
+  const csp = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; worker-src blob:; connect-src 'none'; base-uri 'none'; form-action 'none'";
+  writeFileSync('dist/e2e/artefato-embrulhado.html', `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>:root{color-scheme:light}body{margin:0}</style></head><body>${readFileSync('dist/artefato.html', 'utf8')}</body></html>`);
+  PAGINA = 'dist/e2e/artefato-embrulhado.html';
+  console.log('Modo ARTEFATO: política de segurança estrita ativa');
+}
 const pdf = pdfSaldo();
 writeFileSync('dist/e2e/relacao.txt', relacaoTxt(), 'latin1');           // ANSI de propósito: o app deve detectar a codificação
 writeFileSync('dist/e2e/SALDO_CARTAO_20-10-2026.pdf', pdf.bytes);
@@ -12,10 +21,13 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PAT
 const ctx = await browser.newContext({ acceptDownloads: true });
 const page = await ctx.newPage();
 const erros = []; page.on('pageerror', (e) => erros.push(String(e))); page.on('console', (m) => m.type() === 'error' && erros.push(m.text()));
-page.on('dialog', (d) => d.accept());
-await page.addInitScript(() => { window.showSaveFilePicker = undefined; window.showOpenFilePicker = undefined; }); // força o caminho de baixar/abrir arquivo comum
-await page.goto('file://' + process.cwd() + '/dist/controle-vt.html');
+// como no visualizador de artefatos: confirm/prompt/alert não funcionam e a API de arquivos não existe
+const VISUALIZADOR = () => { window.confirm = () => false; window.prompt = () => null; window.alert = () => {}; window.showSaveFilePicker = undefined; window.showOpenFilePicker = undefined; };
+await page.addInitScript(VISUALIZADOR); // força o caminho de baixar/abrir arquivo comum
+await page.goto('file://' + process.cwd() + '/' + PAGINA);
 const ok = (m) => console.log('  ✓', m);
+// permissão `downloads` do visualizador de artefatos, simulada: registra o que a página tenta entregar
+const CLAUDE_SIM = () => { window.claude = { use: async (n) => (n === 'downloads' ? { save: async (r) => { (window.__salvos ||= []).push({ filename: r.filename, tamanho: r.data.length ?? r.data.size ?? r.data.byteLength }); return { status: 'saved' }; } } : null) }; };
 
 // 1. novo arquivo com senha
 await page.fill('#senha-nova', 'senha-teste'); await page.fill('#senha-rep', 'senha-teste'); await page.click('#criar');
@@ -90,7 +102,7 @@ await page.fill('dialog textarea', 'Servidora diz que teve só 1 falta.'); await
 await page.waitForSelector('.contestar:has-text("✎ 1")'); ok('contestação registrada');
 // adotar o cartão sugerido (cruzamento por CPF) e recalcular
 await page.click('button[data-aba="saldo"]'); await page.setInputFiles('#pdf', 'dist/e2e/SALDO_CARTAO_20-10-2026.pdf'); await page.click('#ler');
-await page.waitForSelector('#adotar-todos'); await page.click('#adotar-todos'); await page.waitForSelector('.toast:has-text("cartões adotados")');
+await page.waitForSelector('#adotar-todos'); await page.click('#adotar-todos'); await page.click('dialog button.primario'); await page.waitForSelector('.toast:has-text("cartões adotados")');
 await page.click('button[data-aba="resultado"]'); await page.waitForSelector('#corpo tr');
 const r5b = await dado('1005');
 assert.match(r5b[16], /Recarregar/); assert.equal(r5b[14].replace(/\s/g, ' '), brl(19 * 1670)); ok('1005: depois de adotar o cartão sugerido → recarga normal');
@@ -100,27 +112,48 @@ await page.click('button[data-aba="painel"]'); await page.waitForSelector('.pizz
 // 7. salvar (download cifrado), reabrir em outra página
 await page.click('button[data-aba="inicio"]');
 const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#salvar')]);
-await dl.saveAs('dist/e2e/dados.vtdb');
-const bytes = readFileSync('dist/e2e/dados.vtdb');
-assert.equal(bytes.slice(0, 4).toString(), 'VTDB'); assert.equal(bytes[5], 1); assert.ok(!bytes.includes(Buffer.from('ANA PAULA')), 'o arquivo não pode conter nomes em claro'); ok('arquivo salvo cifrado (sem nomes em claro)');
-const p2 = await ctx.newPage(); p2.on('pageerror', (e) => erros.push(String(e))); p2.on('dialog', (d) => d.accept());
-await p2.addInitScript(() => { window.showOpenFilePicker = undefined; });
-await p2.goto('file://' + process.cwd() + '/dist/controle-vt.html');
+await dl.saveAs('dist/e2e/dados.json');
+const bytes = readFileSync('dist/e2e/dados.json');
+const json = JSON.parse(bytes.toString()); assert.equal(json.app, 'controle-vt'); const bin = Buffer.from(json.dados, 'base64');
+assert.equal(bin.slice(0, 4).toString(), 'VTDB'); assert.equal(bin[5], 1); assert.ok(!bin.includes(Buffer.from('ANA PAULA')) && !bytes.includes(Buffer.from('ANA PAULA')), 'o arquivo não pode conter nomes em claro'); assert.match(dl.suggestedFilename(), /^controle-vt-\d{8}-\d{4}\.json$/); ok('arquivo salvo como .json cifrado (sem nomes em claro)');
+const p2 = await ctx.newPage(); p2.on('pageerror', (e) => erros.push(String(e))); 
+await p2.addInitScript(VISUALIZADOR); await p2.addInitScript(CLAUDE_SIM);
+let baixouDireto = 0; p2.on('download', () => baixouDireto++);
+await p2.goto('file://' + process.cwd() + '/' + PAGINA);
 await p2.fill('#senha-abrir', 'errada');
-let [fc] = await Promise.all([p2.waitForEvent('filechooser'), p2.click('#abrir')]); await fc.setFiles('dist/e2e/dados.vtdb');
+let [fc] = await Promise.all([p2.waitForEvent('filechooser'), p2.click('#abrir')]); await fc.setFiles('dist/e2e/dados.json');
 await p2.waitForSelector('.toast.erro'); assert.match(await p2.locator('.toast.erro').innerText(), /senha incorreta/); ok('senha errada rejeitada');
 await p2.fill('#senha-abrir', 'senha-teste');
-[fc] = await Promise.all([p2.waitForEvent('filechooser'), p2.click('#abrir')]); await fc.setFiles('dist/e2e/dados.vtdb');
+[fc] = await Promise.all([p2.waitForEvent('filechooser'), p2.click('#abrir')]); await fc.setFiles('dist/e2e/dados.json');
 await p2.waitForSelector('text=servidores ativos');
 assert.match(await p2.locator('.cartoes').innerText(), /8\s*servidores ativos/); ok('arquivo reaberto com a senha: 8 servidores');
 await p2.click('button[data-aba="resultado"]'); await p2.waitForSelector('#corpo tr');
 assert.equal((await p2.locator('#corpo tr', { hasText: '1001' }).first().locator('td').allInnerTexts())[14].replace(/\s/g, ' '), brl(17 * 1670)); ok('resultado idêntico depois de reabrir');
 
 // 8. fechar competência: congela e bloqueia ocorrências
-await p2.click('#fechar'); await p2.waitForSelector('text=fechada');
+await p2.click('#fechar'); await p2.click('dialog button.primario'); await p2.waitForSelector('text=fechada');
 await p2.click('button[data-aba="ocorrencias"]'); assert.match(await p2.locator('.aviso').innerText(), /fechada/); ok('competência fechada: sem novos lançamentos');
 let barrou = false; try { await p2.evaluate(() => window.__vt.banco.x("insert into ocorrencia (ym, matricula, tipo, dias) values ('2026-11','1001','falta',1)")); } catch { barrou = true; }
 assert.ok(barrou); ok('banco recusa ocorrência em competência fechada (gatilho)');
+
+// 9. relatório (sem CPF) e exportações pelo visualizador
+await p2.click('button[data-aba="relatorio"]'); await p2.waitForSelector('.rel');
+const rel = await p2.locator('.rel').innerText();
+assert.match(rel, /Relatório de recarga de vale-transporte/); assert.match(rel, /FECHADA/); assert.match(rel, /Relação de recargas/i); assert.match(rel, /Servidores a revisar/i);
+assert.ok(!/\d{11}/.test(rel), 'o relatório não pode conter CPF'); ok('relatório completo, competência fechada, sem CPF');
+await p2.click('#baixar'); await p2.waitForFunction(() => window.__salvos?.some((x) => x.filename === 'relatorio-vt-2026-11.html')); ok('relatório baixado pela permissão de downloads');
+await p2.click('button[data-aba="resultado"]'); await p2.waitForSelector('#exp-completa'); await p2.click('#exp-completa');
+await p2.waitForFunction(() => window.__salvos?.some((x) => /^controle-vt-2026-11-completo\.csv$/.test(x.filename))); ok('CSV exportado pela permissão de downloads');
+await p2.click('button[data-aba="inicio"]'); await p2.click('#salvar'); await p2.waitForFunction(() => window.__salvos?.some((x) => /^controle-vt-\d{8}-\d{4}\.json$/.test(x.filename))); ok('arquivo de dados salvo (.json) pela permissão de downloads');
+assert.equal(baixouDireto, 0, 'nenhum download pode ser iniciado direto pela página'); ok('nenhum download direto (como exige o visualizador)');
+
+// 10. segundo mês: comparação com o mês anterior no painel
+await p2.click('button[data-aba="competencia"]'); await p2.fill('#novo-mes', '12'); await p2.fill('#novo-ano', '2026'); await p2.click('#nova'); await p2.waitForSelector('#feriados');
+await p2.click('button[data-aba="ocorrencias"]'); await p2.fill('#o-mat', '1001'); await p2.selectOption('#o-tipo', 'falta'); await p2.fill('#o-dias', '8'); await p2.click('#o-add'); await p2.waitForSelector('.anular');
+await p2.click('button[data-aba="painel"]'); await p2.waitForSelector('text=Comparado a 2026-11');
+await p2.fill('#p-limiar', '0'); await p2.locator('#p-limiar').dispatchEvent('change'); await p2.waitForSelector('tr:has-text("1001")');
+assert.match(await p2.locator('tr:has-text("1001")').first().innerText(), /subiu|caiu/); ok('painel: variação em relação ao mês anterior aponta o servidor com falta');
+await p2.selectOption('#p-unidade', 'EM TESTE'); await p2.waitForSelector('svg[aria-label="Repasse por unidade"]'); ok('painel: gráfico por unidade e filtros');
 
 assert.deepEqual(erros, [], 'erros de console: ' + erros.join(' | '));
 console.log('\nTudo certo: fluxo completo passou, sem erros de console.');

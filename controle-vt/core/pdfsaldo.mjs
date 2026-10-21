@@ -65,7 +65,7 @@ export function extrairSaldoGlobalMob(paginas, colunas = COLUNAS_GLOBAL_MOB) {
 
 // Itens de texto de um PDF carregado com pdf.js (navegador ou Node). `pdfjsLib` é injetado para o núcleo não depender dele.
 export async function lerPaginasPdfjs(pdfjsLib, dados) {
-  const doc = await pdfjsLib.getDocument({ data: dados }).promise;
+  const doc = await pdfjsLib.getDocument({ data: dados, isEvalSupported: false }).promise // sem eval: compatível com políticas de segurança estritas;
   const paginas = [];
   for (let n = 1; n <= doc.numPages; n++) {
     const tc = await (await doc.getPage(n)).getTextContent();

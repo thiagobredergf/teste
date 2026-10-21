@@ -1,6 +1,6 @@
 import * as banco from './db.js';
 import { estado } from './estado.js';
-import { $, $$, esc, aviso, brl, selo } from './ui.js';
+import { $, $$, esc, aviso, brl, selo, confirmar } from './ui.js';
 import { extrairSaldoGlobalMob, lerPaginasPdfjs } from '../../core/pdfsaldo.mjs';
 import { cruzarSaldos } from '../../core/cruzamento.mjs';
 import { dataLeituraSugerida } from '../../core/historico_saldo.mjs';
@@ -32,6 +32,7 @@ export function render(raiz) {
 async function lerPdf(raiz) {
   const f = $('#pdf').files[0]; if (!f) return aviso('Escolha o PDF.', 'erro');
   $('#ler').disabled = true; $('#ler').textContent = 'Lendo…';
+  await new Promise((r) => setTimeout(r, 40)); // deixa o navegador mostrar "Lendo…" antes do trabalho pesado
   try {
     const dados = new Uint8Array(await f.arrayBuffer());
     const paginas = await lerPaginasPdfjs(window.pdfjsLib, dados);
@@ -73,9 +74,9 @@ function corpo() {
 
 function ligarCorpo(raiz) {
   const todos = $('#adotar-todos');
-  if (todos) todos.onclick = () => {
+  if (todos) todos.onclick = async () => {
     const lista = sessao.cruz.servidores.filter((s) => s.cartao_sugerido);
-    if (!confirm(`Adotar o cartão sugerido para ${lista.length} servidor(es)? Cada troca fica registrada no histórico.`)) return;
+    if (!(await confirmar('Adotar cartões sugeridos', `Adotar o cartão sugerido para ${lista.length} servidor(es)? Cada troca fica registrada no histórico.`, 'Adotar'))) return;
     banco.transacao(() => {
       for (const s of lista) {
         banco.x('update servidor set cartao = ? where matricula = ?', [s.cartao_sugerido, s.matricula]);

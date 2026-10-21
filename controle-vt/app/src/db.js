@@ -49,8 +49,7 @@ let alterado = false;
 
 export async function iniciarMotor() {
   if (SQL) return;
-  const bin = Uint8Array.from(atob(window.__WASM_B64), (c) => c.charCodeAt(0));
-  SQL = await window.initSqlJs({ wasmBinary: bin });
+  SQL = await window.initSqlJs(); // build em JavaScript puro (asm.js): não depende de WebAssembly, que políticas de segurança podem bloquear
 }
 
 export function novoBanco() {

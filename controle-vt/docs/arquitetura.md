@@ -71,3 +71,20 @@ O desconto em folha vem do relatório do RH e é apenas carregado; o sistema nã
 `core/` (cálculo e importação de saldo) é JavaScript puro e roda como está dentro da página.
 O esquema `db/001_schema.sql` (PostgreSQL) serve de referência de modelo; a versão em SQLite será
 escrita junto com o aplicativo.
+
+## Publicação como link (artefato) e restrições da plataforma
+
+A mesma página roda como link em um visualizador com regras próprias. O que mudou por causa delas:
+
+| Restrição do visualizador | Como o aplicativo lida |
+|---|---|
+| Downloads iniciados pela página são ignorados; só a permissão `downloads` salva, com confirmação do usuário | Toda saída de arquivo passa por uma função única (`entregar`). Se o ambiente não permitir, avisa e indica a versão em arquivo |
+| Só extensões como `json`, `csv`, `html`, `pdf`, `xlsx` podem ser baixadas | Arquivo de dados em `.json` (conteúdo cifrado em base64). Arquivos `.vtdb` antigos ainda abrem |
+| `confirm()`, `prompt()` e `alert()` não funcionam | Diálogos feitos na própria página |
+| `window.print()` não abre a impressão | Relatório baixado em HTML; PDF por Ctrl+P no arquivo baixado |
+| Política de segurança estrita (sem `eval`, sem rede, workers só por `blob:`) | SQLite em JavaScript puro (sem WebAssembly); código do leitor de PDF executado na própria página, sem worker; `isEvalSupported: false` |
+| API de arquivos do navegador não funciona em iframe | Detecta e usa abrir/baixar comum |
+
+Verificado com o teste de ponta a ponta sobre o fragmento embrulhado sob uma política estrita simulada (`ARTEFATO=1`).
+O teste simulado achou uma falha real: o leitor de PDF dependia de um `blob:` bloqueado pela política.
+**Não verificado:** o comportamento no visualizador real; a política simulada é uma aproximação.

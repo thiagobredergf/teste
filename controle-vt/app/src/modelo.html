@@ -16,11 +16,7 @@
 <noscript>Esta ferramenta precisa de JavaScript.</noscript>
 <script>/*SQLJS*/</script>
 <script>/*PDFJS*/</script>
-<script type="text/plain" id="pdfworker">/*PDFWORKER*/</script>
-<script>window.__WASM_B64="/*WASM*/";</script>
-<script>
-pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([document.getElementById('pdfworker').textContent], { type: 'text/javascript' }));
-</script>
+<script>/*PDFWORKER*/</script><!-- código do "worker" executado na própria página: o pdf.js o usa sem criar worker nem carregar script, então funciona mesmo sob políticas de segurança estritas -->
 <script>/*APP*/</script>
 </body>
 </html>
