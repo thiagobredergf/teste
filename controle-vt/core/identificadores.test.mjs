@@ -4,9 +4,9 @@ import { normalizarCartao, formatarCartao, normalizarCpf, mascararCpf } from './
 import { parseValorBR } from './dinheiro.mjs';
 
 test('o mesmo cartão em formatos diferentes tem uma chave só', () => {
-  assert.equal(normalizarCartao('06.04.007259 61-3'), '604007259613'); // PDF da Global Mob
-  assert.equal(normalizarCartao(604007259613), '604007259613');        // planilha (Excel perdeu o zero)
-  assert.equal(formatarCartao('604007259613'), '06.04.007259 61-3');
+  assert.equal(normalizarCartao('06.99.900000 01-3'), '699900000013'); // PDF da Global Mob
+  assert.equal(normalizarCartao(699900000013), '699900000013');        // planilha (Excel perdeu o zero)
+  assert.equal(formatarCartao('699900000013'), '06.99.900000 01-3');
   assert.equal(normalizarCartao('123'), null);
 });
 

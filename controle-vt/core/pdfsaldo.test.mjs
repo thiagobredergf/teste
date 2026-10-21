@@ -17,16 +17,16 @@ const rodape = (n) => [it('Página', 300, 30), it(`${n}/2`, 330, 30), it(' ', 46
 const pagina1 = [
   ...cabecalho,
   ...pessoa(627, ['MARIA DE', 'FULANA SILVA'], '52998224725'),
-  ...cartao(627, '06.04.007259', '61-3', 'ATIVO', 'R$ 572,85', 'R$ 0,00'),
-  ...cartao(590, '06.04.000486', '97-5', 'MIGRADO', 'R$ 0,00', 'R$ 0,00'),
+  ...cartao(627, '06.99.900000', '01-3', 'ATIVO', 'R$ 572,85', 'R$ 0,00'),
+  ...cartao(590, '06.99.900000', '05-5', 'MIGRADO', 'R$ 0,00', 'R$ 0,00'),
   ...pessoa(553, ['JOAO TESTE'], '11144477735'),
-  ...cartao(553, '06.04.007285', '45-2', 'ATIVO', '-R$ 4,30', ['R$', '1.085,50']),
+  ...cartao(553, '06.99.900000', '04-4', 'ATIVO', '-R$ 4,30', ['R$', '1.085,50']),
   ...rodape(1),
 ];
 const pagina2 = (total) => [
-  ...cartao(627, '06.04.000962', '21-1', 'ATIVO', 'R$ 3,40', 'R$ 0,00'),         // continua a pessoa da página anterior
+  ...cartao(627, '06.99.900000', '02-2', 'ATIVO', 'R$ 3,40', 'R$ 0,00'),         // continua a pessoa da página anterior
   ...pessoa(590, ['ANA EXEMPLO'], '12345678909'),
-  ...cartao(590, '06.04.007294', '61-3', 'ATIVO', ['R$', '1.000,00'], 'R$ 0,00'),
+  ...cartao(590, '06.99.900000', '03-3', 'ATIVO', ['R$', '1.000,00'], 'R$ 0,00'),
   it('TOTAL', 358, 540), it(total, 427, 540),
   ...rodape(2),
 ];
@@ -35,11 +35,11 @@ test('extrai pessoas com vários cartões, quebras de linha, saldo negativo e co
   const r = extrairSaldoGlobalMob([pagina1, pagina2('R$ 1.571,95')]);
   assert.equal(r.cartoes.length, 5);
   assert.deepEqual(r.cartoes.map((c) => [c.cartao, c.status, c.saldo_centavos, c.recargas_centavos]), [
-    ['604007259613', 'ATIVO', 57285, 0],
-    ['604000486975', 'MIGRADO', 0, 0],
-    ['604007285452', 'ATIVO', -430, 108550],      // "R$" / "1.085,50" em linhas separadas
-    ['604000962211', 'ATIVO', 340, 0],
-    ['604007294613', 'ATIVO', 100000, 0],
+    ['699900000013', 'ATIVO', 57285, 0],
+    ['699900000055', 'MIGRADO', 0, 0],
+    ['699900000044', 'ATIVO', -430, 108550],      // "R$" / "1.085,50" em linhas separadas
+    ['699900000022', 'ATIVO', 340, 0],
+    ['699900000033', 'ATIVO', 100000, 0],
   ]);
   assert.deepEqual(r.cartoes.map((c) => c.nome), ['MARIA DE FULANA SILVA', 'MARIA DE FULANA SILVA', 'JOAO TESTE', 'JOAO TESTE', 'ANA EXEMPLO']);
   assert.equal(r.cartoes[3].documento, '11144477735'); // cartão da página 2 herdou a pessoa da página 1

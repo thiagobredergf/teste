@@ -98,11 +98,11 @@ test('lê os formatos sujos de saldo da planilha legada', () => {
 test('importação de saldo: aceita linhas boas e rejeita com motivo', () => {
   const r = parseSaldoCanonico([
     'numero_cartao;valor;data_hora_leitura',
-    '604007259613;572,85;2026-10-14T18:00',
+    '699900000013;572,85;2026-10-14T18:00',
     '60400;10,00;2026-10-14T18:00',
     '604007259614;xx;2026-10-14T18:00',
     '604007259615;10,00;14/10/2026',
-    '604007259613;572,85;2026-10-14T18:00',
+    '699900000013;572,85;2026-10-14T18:00',
   ].join('\n'));
   assert.equal(r.ok.length, 1);
   assert.deepEqual(r.rejeitadas.map((x) => x.motivo), [

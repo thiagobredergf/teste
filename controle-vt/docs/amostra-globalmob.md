@@ -37,7 +37,7 @@ O texto do PDF **não traz data**. Há duas pistas: o nome do arquivo (`SALDO_CA
 4. **RECARGAS:** 39 cartões ativos têm valor em RECARGAS (soma R$ 45.944,95), os demais zero. O significado não é conhecido
    (recarga lançada e ainda não creditada no cartão?). **Se for crédito pendente, o saldo disponível é saldo + recargas**, e ignorar
    isso faria recarregar quem já tem crédito a caminho. Pergunta K em `decisoes.md`.
-5. **Chave cartão:** o PDF mostra `06.04.007259 61-3` (13 dígitos); a planilha tem `604007259613` (o Excel perdeu o zero).
+5. **Chave cartão:** o PDF mostra `06.99.900000 01-3` (13 dígitos); a planilha tem `699900000013` (o Excel perdeu o zero).
    A chave canônica é só dígitos, sem zeros à esquerda (`core/identificadores.mjs`).
 
 ## Cruzamento com a planilha de novembro (569 servidores)

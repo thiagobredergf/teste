@@ -19,10 +19,10 @@ test('a tabela de dias da planilha NÃO é proporcional: a divergência fica vis
 
 test('saldo manual recebe data/hora automática e nunca sobrescreve', () => {
   let h = [];
-  h = lancarSaldoManual(h, { cartao: '604007259613', valor_centavos: 57285, agora: new Date('2026-10-14T18:05:09Z') });
-  h = lancarSaldoManual(h, { cartao: '604007259613', valor_centavos: 41000, agora: new Date('2026-10-20T11:00:00Z') });
+  h = lancarSaldoManual(h, { cartao: '699900000013', valor_centavos: 57285, agora: new Date('2026-10-14T18:05:09Z') });
+  h = lancarSaldoManual(h, { cartao: '699900000013', valor_centavos: 41000, agora: new Date('2026-10-20T11:00:00Z') });
   assert.equal(h.length, 2);
-  assert.deepEqual(saldoVigente(h, '604007259613'), { cartao: '604007259613', valor_centavos: 41000, lido_em: '2026-10-20T11:00:00', fonte: 'manual' });
+  assert.deepEqual(saldoVigente(h, '699900000013'), { cartao: '699900000013', valor_centavos: 41000, lido_em: '2026-10-20T11:00:00', fonte: 'manual' });
   assert.equal(saldoVigente(h, '000'), null);
 });
 

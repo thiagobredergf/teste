@@ -56,7 +56,7 @@ test('vírgula como separador com ponto decimal', () => {
 
 test('conversores de cartão e data/hora', () => {
   const m = { cartao: { coluna: 'C', tipo: 'cartao', obrigatorio: true }, lido_em: { coluna: 'D', tipo: 'datahora', obrigatorio: true } };
-  const { ok, rejeitadas } = aplicarMapa(lerTexto('C;D\n604007259613;14/10/2026 18:30\n604007259614;2026-10-14\n60400;14/10/2026\n604007259615;31/02/2026', { tipo: 'delimitado', separador: ';', cabecalho: true }), m);
-  assert.deepEqual(ok, [{ cartao: '604007259613', lido_em: '2026-10-14T18:30' }, { cartao: '604007259614', lido_em: '2026-10-14T00:00' }]);
+  const { ok, rejeitadas } = aplicarMapa(lerTexto('C;D\n699900000013;14/10/2026 18:30\n604007259614;2026-10-14\n60400;14/10/2026\n604007259615;31/02/2026', { tipo: 'delimitado', separador: ';', cabecalho: true }), m);
+  assert.deepEqual(ok, [{ cartao: '699900000013', lido_em: '2026-10-14T18:30' }, { cartao: '604007259614', lido_em: '2026-10-14T00:00' }]);
   assert.equal(rejeitadas.length, 2);
 });

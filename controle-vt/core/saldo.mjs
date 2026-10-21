@@ -2,7 +2,7 @@ import { parseValorBR } from './dinheiro.mjs';
 
 // Contrato canônico de importação de saldo (um registro por linha, separador ";"):
 //   numero_cartao;valor;data_hora_leitura
-//   604007259613;572,85;2026-10-14T18:00
+//   699900000013;572,85;2026-10-14T18:00
 // O layout real do TXT/PDF da concessionária ainda não foi recebido: um adaptador vai converter
 // o arquivo deles para este formato, mantendo validação e rejeição num lugar só.
 export function parseSaldoCanonico(texto) {

@@ -1,6 +1,6 @@
 // Cartão e CPF chegam formatados de formas diferentes em cada fonte:
-//   PDF da Global Mob:  "06.04.007259 61-3"   (13 dígitos, com zero à esquerda)
-//   Planilha do RH:     604007259613          (número; o Excel perdeu o zero à esquerda)
+//   PDF da Global Mob:  "06.99.900000 01-3"   (13 dígitos, com zero à esquerda)
+//   Planilha do RH:     699900000013          (número; o Excel perdeu o zero à esquerda)
 // A chave canônica é só dígitos, sem zeros à esquerda.
 
 export function normalizarCartao(valor) {
@@ -8,7 +8,7 @@ export function normalizarCartao(valor) {
   return d.length >= 8 && d.length <= 20 ? d : null;
 }
 
-// "06.04.007259 61-3" para exibição (13 dígitos)
+// "06.99.900000 01-3" para exibição (13 dígitos)
 export function formatarCartao(canonico) {
   const d = String(canonico).padStart(13, '0');
   return `${d.slice(0, 2)}.${d.slice(2, 4)}.${d.slice(4, 10)} ${d.slice(10, 12)}-${d.slice(12)}`;
